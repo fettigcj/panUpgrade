@@ -17,7 +17,7 @@ from panupgrade.sources import SourceError
 
 
 def args(**over):
-    base = dict(source="panorama:192.0.2.1", key_file=None, creds_file=None, account=None, work_account=None, ask_credentials=None,
+    base = dict(source="panorama:192.0.2.1", creds_file=None, account=None, work_account=None, ask_credentials=None,
                 color="never", ascii=True, settings=None, set=None, target="10.2.2", path_rules=None)
     base.update(over)
     return argparse.Namespace(**base)
@@ -114,6 +114,50 @@ class SignIn(unittest.TestCase):
         self.assertIn("--panorama <address>", out.getvalue())
         with self.assertRaises(SystemExit):
             cli.main(["report", "--panorama", "x", "--source", "fake:y"])
+
+
+class StoredApiKey(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name, "creds.txt")
+
+    def write(self, text):
+        self.path.write_text(text, encoding="utf-8")
+        return str(self.path)
+
+    def test_an_account_can_be_a_password_or_a_ready_made_api_key_in_the_same_file(self):
+        from panupgrade_live import panorama
+        creds = self.write("{'person': 'its-password', 'service': {'api_key': 'SECRET-KEY-VALUE'}}")
+        self.assertEqual(sorted(panorama.load_accounts(creds)), ["person", "service"])
+        self.assertEqual(panorama.stored_kind(creds, "person"), "password")
+        self.assertEqual(panorama.stored_kind(creds, "service"), "API key")
+
+    def test_an_api_key_account_signs_in_without_a_login_call_and_a_password_account_does_a_login(self):
+        from panupgrade_live import panorama
+        creds = self.write("{'person': 'its-password', 'service': {'api_key': ' SECRET-KEY-VALUE '}}")
+        with mock.patch("panupgrade_live.panorama.key_from_login", side_effect=AssertionError("must not log in")):
+            self.assertEqual(panorama.key_from_account("192.0.2.1", creds, "service"), "SECRET-KEY-VALUE")
+        with mock.patch("panupgrade_live.panorama.key_from_login", return_value="FROM-LOGIN") as login:
+            self.assertEqual(panorama.key_from_account("192.0.2.1", creds, "person"), "FROM-LOGIN")
+        login.assert_called_once_with("192.0.2.1", "person", "its-password", None, 60)
+
+    def test_malformed_entries_are_refused_with_a_message_that_shows_no_secret(self):
+        from panupgrade_live import panorama
+        for text in ("{'a': {'api_key': ''}}", "{'a': {'api_key': 'K', 'extra': 'x'}}", "{'a': {'key': 'K'}}", "{'a': 5}", "['a']"):
+            with self.assertRaises(SourceError) as caught:
+                panorama.load_accounts(self.write(text))
+            self.assertIn("api_key", str(caught.exception))
+
+    def test_the_announcement_says_an_account_uses_a_stored_key_and_never_prints_it(self):
+        creds = self.write("{'service': {'api_key': 'SECRET-KEY-VALUE'}}")
+        text = said(cli._announce_connection, args(creds_file=creds))
+        self.assertIn("Reading as: service (the only account in that file, signs in with its stored API key)", text)
+        self.assertNotIn("SECRET-KEY-VALUE", text)
+
+    def test_there_is_no_separate_key_file_option(self):
+        with self.assertRaises(SystemExit), mock.patch("sys.stderr", io.StringIO()):
+            cli.main(["report", "--panorama", "x", "--key-file", "k.txt"])
 
 
 class KitCarriesTheSignInChoice(unittest.TestCase):

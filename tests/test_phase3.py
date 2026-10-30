@@ -642,7 +642,7 @@ class Console(unittest.TestCase):
 
 class KitWriting(unittest.TestCase):
     def args(self, **kw):
-        base = dict(source="panorama:192.0.2.1", target="20.2.9", settings=None, creds_file=None, key_file=None, path_rules=None,
+        base = dict(source="panorama:192.0.2.1", target="20.2.9", settings=None, creds_file=None, path_rules=None,
                     account="reader", work_account="writer", set=["sync_to_peer=upgrade"])
         base.update(kw)
         return type("A", (), base)

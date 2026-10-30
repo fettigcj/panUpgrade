@@ -13,7 +13,7 @@ cd <your working folder>
 
 **Signing in.** You choose how; panUpgrade assumes nothing about your accounts.
 
-- **A credentials file** holds a dict of account to password, such as `{'tool': 'its-password'}`. Point to it with `--creds-file` or `PANUPGRADE_CREDS`. If it holds one account, that account is used. If it holds several, name one with `--account` (or `PANUPGRADE_ACCOUNT`).
+- **A credentials file** holds a dict of account name to either a password, or a ready-made API key written `{'api_key': 'KEY'}`, for example `{'person': 'their-password', 'service': {'api_key': 'KEY'}}`. A password account is logged in with each run; an API key account is used as it is. Point to it with `--creds-file` or `PANUPGRADE_CREDS`. If it holds one account, that account is used. If it holds several, name one with `--account` (or `PANUPGRADE_ACCOUNT`).
 - **A separate account for changes:** `--work-account NAME` (or `PANUPGRADE_WORK_ACCOUNT`). Without it, the same account is used for everything.
 - **Type a login instead:** `--ask-credentials changes` asks for a username and password only for the steps that change firewalls, and reading still uses the file. `--ask-credentials all` asks once and uses that login for everything, with no file needed. A typed login is never stored, printed or logged.
 

@@ -92,7 +92,7 @@ Keep your settings, firewall lists, run journals and kits in a working folder of
 | An administrator's own login for everything | `--ask-credentials all`. Nothing is read from a file. |
 | Two accounts, both in the file | `--account NAME` for reading and `--work-account NAME` for changes. |
 
-A typed login is used for that run only; it is never stored, printed or logged. The credentials file is a dict of account to password, for example `{'tool': 'its-password'}`. Every command tells you which Panorama, credentials file and account it is using before it connects.
+A typed login is used for that run only; it is never stored, printed or logged. The credentials file is a dict of account name to either a password or a ready-made API key, for example `{'person': 'their-password', 'service': {'api_key': 'KEY'}}`. An account kept as an API key signs in with that key and needs no login. Keep the file in your own home folder and out of version control. Every command tells you which Panorama, credentials file and account it is using before it connects.
 
 | Setting | Flag | Environment variable | Default |
 |---|---|---|---|

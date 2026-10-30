@@ -72,17 +72,29 @@ def _tls(verify_tls=None):
 
 
 def load_accounts(path):
-    """The credentials file: a Python-style dict {'account': 'password', ...}. Only the names are ever shown."""
+    """The credentials file: a Python-style dict. An account is either 'name': 'password' or 'name': {'api_key': 'KEY'}.
+    Only the names are ever shown."""
     if not Path(path).is_file():
-        raise SourceError(f"there is no credentials file at {path}. Create one holding {{'account': 'password'}}, keep it in your own "
+        raise SourceError(f"there is no credentials file at {path}. Create one holding {{'account': 'password'}} (or {{'account': {{'api_key': 'KEY'}}}}), keep it in your own "
                           f"home folder, and point to it with --creds-file or PANUPGRADE_CREDS") from None
     try:
         data = ast.literal_eval(Path(path).read_text(encoding="utf-8").strip())
     except (OSError, ValueError, SyntaxError) as exc:
         raise SourceError(f"cannot read credentials file {path}: {type(exc).__name__}") from None
-    if not isinstance(data, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in data.items()):
-        raise SourceError(f"{path} must hold a dict of account name to password")
+    if not isinstance(data, dict) or not all(isinstance(k, str) and _is_secret(v) for k, v in data.items()):
+        raise SourceError(f"{path} must hold a dict of account name to password, or to {{'api_key': 'KEY'}}")
     return data
+
+
+def _is_secret(value):
+    """A password (text), or an API key kept ready-made as {'api_key': 'KEY'}."""
+    return isinstance(value, str) or (isinstance(value, dict) and set(value) == {"api_key"} and isinstance(value["api_key"], str)
+                                      and bool(value["api_key"].strip()))
+
+
+def stored_kind(creds_file, account):
+    """'API key' or 'password': how this account signs in. Never the secret itself."""
+    return "API key" if isinstance(load_accounts(creds_file).get(account), dict) else "password"
 
 
 def key_from_login(address, user, password, verify_tls=None, timeout=60):
@@ -103,21 +115,17 @@ def key_from_login(address, user, password, verify_tls=None, timeout=60):
 
 
 def key_from_account(address, creds_file, account, verify_tls=None, timeout=60):
-    """Log in with a named account from the credentials file and return the API key."""
+    """The API key for a named account in the credentials file: the stored one, or one obtained by logging in with its password."""
     accounts = load_accounts(creds_file)
     if account not in accounts:
         raise SourceError(f"account {account!r} is not in {creds_file} (it has: {', '.join(sorted(accounts))})")
-    return key_from_login(address, account, accounts[account], verify_tls, timeout)
+    secret = accounts[account]
+    return secret["api_key"].strip() if isinstance(secret, dict) else key_from_login(address, account, secret, verify_tls, timeout)
 
 
 class PanoramaApi:
-    def __init__(self, address, key_file=None, verify_tls=None, timeout=60, recorder=None, key=None, limiter=None):
+    def __init__(self, address, key, verify_tls=None, timeout=60, recorder=None, limiter=None):
         self.address, self.timeout, self._recorder, self._limiter = address, timeout, recorder, limiter
-        if key is None:
-            lines = Path(key_file).read_text(encoding="utf-8").splitlines()
-            key = lines[0].strip() if lines else ""
-            if not key:
-                raise SourceError(f"{key_file} is empty")
         self._key = key
         self._ctx = _tls(verify_tls)
 
@@ -211,18 +219,13 @@ def device_tags(entry):
     return [(m.text or "").strip() for m in entry.findall("tag/member") if (m.text or "").strip()]
 
 
-def live_source(address, key_file=None, verify_tls=None, recorder=None, creds_file=None, account=None, limiter=None, key=None):
+def live_source(address, verify_tls=None, recorder=None, creds_file=None, account=None, limiter=None, key=None):
     """An OpSource over Panorama: devices from ``show devices all``, facts through the proxy.
 
-    Sign in with ``key``, or with ``creds_file`` + ``account`` (a named account), or give ``key_file``.
+    Sign in with ``key``, or with ``creds_file`` + ``account`` (a named account in the credentials file).
     """
-    if key:
-        api = PanoramaApi(address, verify_tls=verify_tls, recorder=recorder, limiter=limiter or RateLimiter(), key=key)
-    elif creds_file:
-        api = PanoramaApi(address, verify_tls=verify_tls, recorder=recorder, limiter=limiter or RateLimiter(),
-                          key=key_from_account(address, creds_file, account, verify_tls))
-    else:
-        api = PanoramaApi(address, key_file, verify_tls, recorder=recorder, limiter=limiter or RateLimiter())
+    key = key or key_from_account(address, creds_file, account, verify_tls)
+    api = PanoramaApi(address, key, verify_tls, recorder=recorder, limiter=limiter or RateLimiter())
     info = api.op("show system info")
     pano_version = _text(info, "result/system/sw-version") or None
     try:

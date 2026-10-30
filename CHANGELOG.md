@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- An account in the credentials file may now hold a ready-made API key (`'service': {'api_key': 'KEY'}`) instead of a password. `--key-file` is gone: an API key lives in the same credentials file as everything else, chosen with `--account` like any other.
 - Removed leftovers from earlier designs, since there are no released versions to stay compatible with: the `PANUPGRADE_READ_ACCOUNT` variable, the `plan_credentials_file` and `apply_credentials_file` settings (and the `_file` exemption in the secrets check), and `--source panorama:ADDRESS` (use `--panorama ADDRESS`).
 - `settings` opens a form on a terminal: every setting grouped on one screen with its default, a plain-words explanation of the setting and of its current value, live validation, and a caution for each risky setting. Save writes `settings.toml` (only values that differ from the defaults) and every command run from that folder uses it, saying so. Without a terminal, or with `--set`, it still prints the values.
 - The terminal code shared by the `select` and `settings` forms moved to `tui.py`.

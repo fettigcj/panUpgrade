@@ -55,13 +55,10 @@ class ReadOnlyTransport(unittest.TestCase):
                 to_xml_cmd(bad)
 
     def test_non_read_only_commands_never_leave_the_machine(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            key = Path(tmp) / "k.txt"
-            key.write_text("not-a-real-key\n", encoding="utf-8")
-            api = PanoramaApi("192.0.2.1", key)
-            for command in ("request restart system", "request high-availability state suspend", "debug something", "set cli pager off"):
-                with self.assertRaises(PermissionError):
-                    api.op(command)
+        api = PanoramaApi("192.0.2.1", "not-a-real-key")
+        for command in ("request restart system", "request high-availability state suspend", "debug something", "set cli pager off"):
+            with self.assertRaises(PermissionError):
+                api.op(command)
 
 
 if __name__ == "__main__":

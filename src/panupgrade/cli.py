@@ -59,7 +59,7 @@ def _login(args):
         return args._login
     ask = getattr(args, "ask_credentials", None)
     reading = changes = how = None
-    if ask != "all" and not args.key_file:
+    if ask != "all":
         reading = args.account
         if reading:
             how = _env_origin(reading, "PANUPGRADE_ACCOUNT")
@@ -104,6 +104,15 @@ def _key_for(args, address, role):
     return _KEYS[(address, account)][1]
 
 
+def _with_key(args, account):
+    """', signs in with its stored API key' for an account kept as an API key in the credentials file; nothing for a password."""
+    from panupgrade_live.panorama import stored_kind
+    try:
+        return ", signs in with its stored API key" if stored_kind(args.creds_file or DEFAULT_CREDS, account) == "API key" else ""
+    except SourceError:
+        return ""
+
+
 def _announce_connection(args, writing=False):
     """Say, once per run, what the tool is about to connect to and as whom. Never a password or key, only whose they are."""
     style = _style(args)
@@ -118,7 +127,7 @@ def _announce_connection(args, writing=False):
         elif login["changes"] == login["reading"]:
             text = f"Changes will be made as: {login['changes']} (the same account)"
         else:
-            text = f"Changes will be made as: {login['changes']} ({_env_origin(login['changes'], 'PANUPGRADE_WORK_ACCOUNT')})"
+            text = f"Changes will be made as: {login['changes']} ({_env_origin(login['changes'], 'PANUPGRADE_WORK_ACCOUNT')}{_with_key(args, login['changes'])})"
         print(style.line("warn", text))
         return
     key = ("connection", args.source)
@@ -131,9 +140,6 @@ def _announce_connection(args, writing=False):
     from .site import verify_tls
     address = args.source[len("panorama:"):]
     print(style.line("info", f"Panorama: {address}, " + ("certificate checked" if verify_tls() else "certificate NOT checked (lab use only)")))
-    if args.key_file:
-        print(style.line("info", f"Signing in with the API key in {_tilde(args.key_file)} (--key-file)"))
-        return
     login = _login(args)
     if login["ask"] == "all":
         print(style.line("info", "You will be asked for a username and password (used for reading and for changes; not stored)"))
@@ -141,7 +147,7 @@ def _announce_connection(args, writing=False):
     creds = args.creds_file or DEFAULT_CREDS
     origin = "set with --creds-file" if args.creds_file else ("from PANUPGRADE_CREDS" if os.environ.get("PANUPGRADE_CREDS") else "default location")
     print(style.line("info", f"Credentials file: {_tilde(creds)} ({origin})"))
-    print(style.line("info", f"Reading as: {login['reading']} ({login['how']})"))
+    print(style.line("info", f"Reading as: {login['reading']} ({login['how']}{_with_key(args, login['reading'])})"))
 
 
 def _load_settings(args):
@@ -160,7 +166,7 @@ def _load_settings(args):
 
 
 def _source(args):
-    spec, key_file, record = args.source, args.key_file, args.record
+    spec, record = args.source, args.record
     _announce_connection(args, writing=getattr(args, "_writing", False))
     if spec.startswith("fake:"):
         return FakeFleet.from_file(spec[len("fake:"):])
@@ -173,8 +179,6 @@ def _source(args):
             def recorder(target, command, raw):
                 (Path(record) / f"{target}__{re.sub('[^A-Za-z0-9_.-]+', '_', command)[:90]}.xml").write_bytes(raw)
         address = spec[len("panorama:"):]
-        if key_file:
-            return live_source(address, key_file, recorder=recorder)
         return live_source(address, recorder=recorder, key=_key_for(args, address, "reading"))
     raise SystemExit("sources: fake:<file> or panorama:<address> (read-only)")
 
@@ -549,8 +553,7 @@ def _backend_and_source(args):
             address = args.source[len("panorama:"):]
             settings = _load_settings(args)
             limiter = RateLimiter(settings.api_rate_per_s)           # one politeness budget for every worker, reads and writes
-            read_api = (PanoramaApi(address, args.key_file, limiter=limiter) if args.key_file
-                        else PanoramaApi(address, key=_key_for(args, address, "reading"), limiter=limiter))
+            read_api = PanoramaApi(address, _key_for(args, address, "reading"), limiter=limiter)
             work_api = write_api(address, limiter=limiter, key=_key_for(args, address, "changes"))
             fleet = FakeFleet(data)
             fleet.kind = "op"
@@ -837,7 +840,6 @@ def _selection_args(p):
                            "firewalls (reading still uses the file), 'all' for everything. Never stored or printed")
     conn.add_argument("--insecure-tls", action="store_true",
                       help="do not verify Panorama's TLS certificate (lab with a self-signed certificate only; or set PANUPGRADE_INSECURE_TLS=1)")
-    conn.add_argument("--key-file", help="alternative to --creds-file: a file whose first line is an API key")
     conn.add_argument("--record", help="directory to save each raw device response, to build test fixtures")
     pick = p.add_argument_group("choose which firewalls (filters combine; with none, every firewall)")
     pick.add_argument("--serial", action="append", help="this serial (repeatable)")

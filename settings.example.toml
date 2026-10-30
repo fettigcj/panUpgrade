@@ -1,0 +1,35 @@
+# panupgrade settings. Copy to your own file and pass it with --settings FILE; any line you delete keeps its default.
+# One-off changes can be made on the command line instead:  --set name=value
+# Secrets never go here (credentials are named accounts in the credentials file, passed by path).
+
+# ---- HA behaviour --------------------------------------------------------------------------------------------
+failover_band      = 0.30      # after failing the active member over, the new active node's sessions must be within +/-30% of before
+post_upgrade_band  = 0.50      # after the upgrade, the active node's sessions must be within +/-50% of the pair's baseline
+restore_roles      = "leave"   # once both members are done: leave | restore (fail back to the original active) | pause (stop and ask)
+sync_to_peer       = "prepare" # config sync active -> passive: never | prepare (use `panupgrade prepare` ahead of the window) | upgrade (done inside the run)
+sync_timeout_s     = 600
+ha_config_unsynced = "block"   # a pair whose passive config is not synchronized: block (refuse to plan it; default) | caution (flag the failover moment on the active member, accepted when you prepare the batch)
+sync_content       = "prepare" # HA members must run the same dynamic content and PAN-OS must agree; prepare installs the latest on both (listed in the one approval prompt) | never. A mismatch GATES the config sync.
+
+# ---- Panorama range (advice only; never blocks an upgrade) ---------------------------------------------------
+spread_limit       = 2         # advise when a firewall is more than this many MAJOR versions behind Panorama
+panorama_compare   = "feature" # "Panorama older than the target" judged by: feature (10.2 vs 11.0) | full (every number)
+
+# ---- Failure handling ----------------------------------------------------------------------------------------
+max_failures       = 5         # stop starting new devices after this many have failed
+max_parallel       = 1         # units (an HA pair is one unit) per batch; the runner still goes one at a time for now
+pending_changes    = "block"   # uncommitted candidate config on a firewall: block | warn | ignore
+
+# ---- Downgrades ----------------------------------------------------------------------------------------------
+allow_downgrade                = false   # install a release older than the one running (same feature release)
+allow_cross_feature_downgrade  = false   # also across feature releases (11.0 -> 10.2). Needs allow_downgrade. Last resort.
+
+# ---- Images, disk, time --------------------------------------------------------------------------------------
+image_source       = "firewall"  # who downloads the image: firewall (from the vendor) | panorama
+min_free_disk_mb   = 4096
+download_timeout_s = 3600
+install_timeout_s  = 3600
+reboot_timeout_s   = 1800
+poll_interval_s    = 15          # how often a running job or a rebooting firewall is checked
+backup_dir         = "backups"   # verified config backups are written here before anything changes
+approval_max_age_hours = 168     # an approval is refused after this long (a week); 0 = never expires

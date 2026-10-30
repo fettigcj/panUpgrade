@@ -81,14 +81,25 @@ The sample fleet is invented. Add `--verbose` to list every check, and `--out DI
 
 ## Your own Panorama
 
-Keep your settings, firewall lists, run journals and kits in a working folder of your own, outside the checkout. Tell panUpgrade where your credentials are once:
+Keep your settings, firewall lists, run journals and kits in a working folder of your own, outside the checkout.
 
-| Environment variable | Meaning | Default |
-|---|---|---|
-| `PANUPGRADE_CREDS` | file holding a dict of account to password | `~/.panupgrade/credentials.txt` |
-| `PANUPGRADE_READ_ACCOUNT` | read-only Panorama account | `panupgrade-read` |
-| `PANUPGRADE_WORK_ACCOUNT` | account that makes changes in a real run | `panupgrade-write` |
-| `PANUPGRADE_INSECURE_TLS` | `1` to skip certificate checks (lab only) | off |
+**You decide how panUpgrade signs in.** It assumes nothing about how your Panorama accounts are arranged:
+
+| Your setup | What to do |
+|---|---|
+| One account for everything | Put it in the credentials file. If the file holds only that account, nothing else is needed. |
+| A read-only account for the tool, and an administrator's own login for changes | Put the tool's account in the file and add `--ask-credentials changes`. Reading uses the file; the steps that change firewalls ask for a username and password. |
+| An administrator's own login for everything | `--ask-credentials all`. Nothing is read from a file. |
+| Two accounts, both in the file | `--account NAME` for reading and `--work-account NAME` for changes. |
+
+A typed login is used for that run only; it is never stored, printed or logged. The credentials file is a dict of account to password, for example `{'tool': 'its-password'}`. Every command tells you which Panorama, credentials file and account it is using before it connects.
+
+| Setting | Flag | Environment variable | Default |
+|---|---|---|---|
+| Credentials file | `--creds-file` | `PANUPGRADE_CREDS` | `~/.panupgrade/credentials.txt` |
+| Account to sign in with | `--account` | `PANUPGRADE_ACCOUNT` | the only account in the file |
+| A different account for changes | `--work-account` | `PANUPGRADE_WORK_ACCOUNT` | same as `--account` |
+| Skip certificate checks (lab only) | `--insecure-tls` | `PANUPGRADE_INSECURE_TLS=1` | off |
 
 Then follow [docs/running.md](docs/running.md). Every setting and its default is listed in [settings.example.toml](settings.example.toml).
 

@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Sign-in follows your setup: one account, separate read and change accounts, or a login typed at the prompt (`--ask-credentials changes|all`). No account names are assumed; a file with a single account needs no flag.
 - Licensed under GPL-3.0-or-later.
 - `--panorama ADDRESS` replaces `--source panorama:ADDRESS` (`--source fake:FILE` remains for the invented fleet). Commands now say which Panorama, credentials file (shown under ~ when in the home folder, with a warning when it is not), account and settings file they use.
 - New `report` verb (fleet state, no target) and `help` verb (command overview); options grouped into connect, choose-firewalls and appearance.

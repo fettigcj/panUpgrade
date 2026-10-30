@@ -11,14 +11,15 @@ pip install -e <path to your panUpgrade checkout>
 cd <your working folder>
 ```
 
-**Credentials.** A file holding a dict of account to password. Point to it with `PANUPGRADE_CREDS` (or `--creds-file`).
+**Signing in.** You choose how; panUpgrade assumes nothing about your accounts.
 
-| What | Flag | Environment variable | Default |
-|---|---|---|---|
-| Read-only account | `--account` | `PANUPGRADE_READ_ACCOUNT` | `panupgrade-read` |
-| Account that makes changes | `--work-account` | `PANUPGRADE_WORK_ACCOUNT` | `panupgrade-write` |
+- **A credentials file** holds a dict of account to password, such as `{'tool': 'its-password'}`. Point to it with `--creds-file` or `PANUPGRADE_CREDS`. If it holds one account, that account is used. If it holds several, name one with `--account` (or `PANUPGRADE_ACCOUNT`).
+- **A separate account for changes:** `--work-account NAME` (or `PANUPGRADE_WORK_ACCOUNT`). Without it, the same account is used for everything.
+- **Type a login instead:** `--ask-credentials changes` asks for a username and password only for the steps that change firewalls, and reading still uses the file. `--ask-credentials all` asks once and uses that login for everything, with no file needed. A typed login is never stored, printed or logged.
 
-Passwords are never printed or logged.
+Every command says which Panorama, credentials file and account it is using before it connects, and whether changes will be made as the same account. Passwords and keys are never printed.
+
+The upgrade script that `prepare` writes remembers your choice. If you typed a login for changes, the script asks for it again when you run it.
 
 **TLS.** Panorama's certificate is verified. A lab with a self-signed certificate needs `--insecure-tls` (or `PANUPGRADE_INSECURE_TLS=1`); a warning is printed whenever checking is off.
 

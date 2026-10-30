@@ -39,9 +39,16 @@ def upgrade_argv(args, serials_file, approval_file, journal_file):
                         ("--path-rules", args.path_rules)):
         if value:
             argv += [flag, str(Path(value).resolve())]
-    if not args.creds_file and not args.key_file:      # the script must not depend on the environment variables it is later run under
-        argv += ["--creds-file", str(Path(DEFAULT_CREDS).resolve())]
-    argv += ["--account", args.account, "--work-account", args.work_account]
+    login = getattr(args, "_login", None) or {"reading": args.account, "changes": args.work_account, "ask": getattr(args, "ask_credentials", None)}
+    if not args.key_file and login["ask"] != "all":
+        if not args.creds_file:                  # the script must not depend on the environment variables it is later run under
+            argv += ["--creds-file", str(Path(DEFAULT_CREDS).resolve())]
+        if login["reading"]:
+            argv += ["--account", login["reading"]]
+    if login["ask"]:
+        argv += ["--ask-credentials", login["ask"]]
+    elif login["changes"] and login["changes"] != login["reading"]:
+        argv += ["--work-account", login["changes"]]
     if not verify_tls():
         argv.append("--insecure-tls")
     for item in args.set or []:

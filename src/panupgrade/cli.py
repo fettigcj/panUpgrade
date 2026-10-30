@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import (approval as approval_mod, fleetreport, console, executor, paths, prepare as prepare_mod, report,
                settings as settings_mod, xlsxout)
-from .site import DEFAULT_CREDS, DEFAULT_READ_ACCOUNT, DEFAULT_WORK_ACCOUNT
+from .site import DEFAULT_ACCOUNT, DEFAULT_CREDS, DEFAULT_WORK_ACCOUNT
 from .journal import Journal, JournalError
 from .planner import PlanError, Selection, build_plan
 from .simulator import SimBackend
@@ -36,28 +36,88 @@ def _tilde(path):
         return str(full)
 
 
-def _in_home(path):
-    try:
-        Path(path).expanduser().resolve().relative_to(Path.home().resolve())
-        return True
-    except ValueError:
-        return False
+def _env_origin(value, *env_names):
+    """Where a value came from: the environment variable that holds it, or a flag."""
+    for name in env_names:
+        if os.environ.get(name) and os.environ[name] == value:
+            return f"from {name}"
+    return "set with a flag"
 
 
-def _origin(value, env_name, builtin):
-    """Where a value came from, so the person can see what to change: the environment variable, the built-in default or a flag."""
-    if os.environ.get(env_name) and value == os.environ[env_name]:
-        return f"from {env_name}"
-    return "built-in default" if value == builtin else "set with a flag"
+_KEYS = {}
+
+
+def _login(args):
+    """Settle, once, who reads and who changes. The site decides how it signs in; this only follows what it said.
+
+    reading / changes are account names from the credentials file, or None where a login is typed at the prompt.
+    With no account named: a credentials file holding exactly one account means that one; changes use the reading account.
+    """
+    if getattr(args, "_login", None):
+        return args._login
+    ask = getattr(args, "ask_credentials", None)
+    reading = changes = how = None
+    if ask != "all" and not args.key_file:
+        reading = args.account
+        if reading:
+            how = _env_origin(reading, "PANUPGRADE_ACCOUNT", "PANUPGRADE_READ_ACCOUNT")
+        else:
+            from panupgrade_live.panorama import load_accounts
+            path = args.creds_file or DEFAULT_CREDS
+            names = sorted(load_accounts(path))
+            if len(names) != 1:
+                raise SourceError(f"{path} holds {len(names)} accounts ({', '.join(names)}). Say which one to use with --account NAME "
+                                  f"(or PANUPGRADE_ACCOUNT), or use --ask-credentials to type a login instead")
+            reading, how = names[0], "the only account in that file"
+    if ask not in ("changes", "all"):
+        changes = args.work_account or reading
+    args._login = {"reading": reading, "changes": changes, "ask": ask, "how": how}
+    return args._login
+
+
+def _typed(args, address):
+    """A username and password typed at the prompt: used for one login, never stored or printed."""
+    if address not in _KEYS:
+        if not sys.stdin.isatty():
+            raise SourceError("--ask-credentials needs a terminal to type into")
+        user = input("Panorama username: ").strip()
+        password = getpass.getpass("Password (not shown, not stored): ")
+        from panupgrade_live.panorama import key_from_login
+        _KEYS[address] = (user, key_from_login(address, user, password))
+        print(_style(args).line("info", f"Signed in as {user} (typed at the prompt, not stored)"))
+    return _KEYS[address][1]
+
+
+def _key_for(args, address, role):
+    """The API key for ``role`` ('reading' or 'changes'), by whichever route this site set up."""
+    login = _login(args)
+    if login["ask"] == "all" or (role == "changes" and login["ask"] == "changes"):
+        return _typed(args, address)
+    account = login[role]
+    if not account:
+        raise SourceError("changes need an account: name one with --work-account (or --account), or use --ask-credentials changes")
+    if (address, account) not in _KEYS:
+        from panupgrade_live.panorama import key_from_account
+        _KEYS[(address, account)] = (account, key_from_account(address, args.creds_file or DEFAULT_CREDS, account))
+    return _KEYS[(address, account)][1]
 
 
 def _announce_connection(args, writing=False):
-    """Say, once per run, what the tool is about to connect to and who it will be: credentials are never shown, only whose they are."""
+    """Say, once per run, what the tool is about to connect to and as whom. Never a password or key, only whose they are."""
     style = _style(args)
     if writing and ("writing", args.source) not in _SAID:
         _SAID.add(("writing", args.source))
         _announce_connection(args)
-        print(style.line("warn", f"Changes will be made as: {args.work_account} ({_origin(args.work_account, 'PANUPGRADE_WORK_ACCOUNT', 'panupgrade-write')})"))
+        login = _login(args)
+        if login["ask"] == "changes":
+            text = "Changes will be made with a login you type at the prompt"
+        elif login["ask"] == "all":
+            text = "Changes will be made with the same login you type at the prompt"
+        elif login["changes"] == login["reading"]:
+            text = f"Changes will be made as: {login['changes']} (the same account)"
+        else:
+            text = f"Changes will be made as: {login['changes']} ({_env_origin(login['changes'], 'PANUPGRADE_WORK_ACCOUNT')})"
+        print(style.line("warn", text))
         return
     key = ("connection", args.source)
     if key in _SAID:
@@ -72,12 +132,14 @@ def _announce_connection(args, writing=False):
     if args.key_file:
         print(style.line("info", f"Signing in with the API key in {_tilde(args.key_file)} (--key-file)"))
         return
+    login = _login(args)
+    if login["ask"] == "all":
+        print(style.line("info", "You will be asked for a username and password (used for reading and for changes; not stored)"))
+        return
     creds = args.creds_file or DEFAULT_CREDS
-    print(style.line("info", f"Credentials file: {_tilde(creds)} ({'set with --creds-file' if args.creds_file else ('from PANUPGRADE_CREDS' if os.environ.get('PANUPGRADE_CREDS') else 'default location')})"))
-    if not _in_home(creds):
-        print(style.line("warn", "That file is outside your home folder. Credentials should be personal: one account per person, never a shared file."))
-    print(style.line("info", f"Reading as: {args.account} ({_origin(args.account, 'PANUPGRADE_READ_ACCOUNT', 'panupgrade-read')}; "
-                              f"this account should be read-only)"))
+    origin = "set with --creds-file" if args.creds_file else ("from PANUPGRADE_CREDS" if os.environ.get("PANUPGRADE_CREDS") else "default location")
+    print(style.line("info", f"Credentials file: {_tilde(creds)} ({origin})"))
+    print(style.line("info", f"Reading as: {login['reading']} ({login['how']})"))
 
 
 def _load_settings(args):
@@ -98,7 +160,6 @@ def _source(args):
     if spec.startswith("fake:"):
         return FakeFleet.from_file(spec[len("fake:"):])
     if spec.startswith("panorama:"):
-        creds = args.creds_file or (None if key_file else DEFAULT_CREDS)
         from panupgrade_live.panorama import live_source   # read-only; imported only when asked for
         recorder = None
         if record:
@@ -106,7 +167,10 @@ def _source(args):
 
             def recorder(target, command, raw):
                 (Path(record) / f"{target}__{re.sub('[^A-Za-z0-9_.-]+', '_', command)[:90]}.xml").write_bytes(raw)
-        return live_source(spec[len("panorama:"):], key_file, recorder=recorder, creds_file=creds, account=args.account)
+        address = spec[len("panorama:"):]
+        if key_file:
+            return live_source(address, key_file, recorder=recorder)
+        return live_source(address, recorder=recorder, key=_key_for(args, address, "reading"))
     raise SystemExit("sources: fake:<file> or panorama:<address> (read-only)")
 
 
@@ -386,13 +450,15 @@ def _backend_and_source(args):
             if args.sim_fail:
                 raise SystemExit("--sim-fail is for the simulator only")
             from panupgrade_live.backend import LiveBackend
-            from panupgrade_live.panorama import PanoramaApi, RateLimiter, key_from_account, write_api
             _announce_connection(args, writing=True)
-            address, creds = args.source[len("panorama:"):], args.creds_file or DEFAULT_CREDS
+            from panupgrade_live.panorama import PanoramaApi, RateLimiter, write_api
+            _announce_connection(args, writing=True)
+            address = args.source[len("panorama:"):]
             settings = _load_settings(args)
             limiter = RateLimiter(settings.api_rate_per_s)           # one politeness budget for every worker, reads and writes
-            read_api = PanoramaApi(address, key=key_from_account(address, creds, args.account), limiter=limiter)
-            work_api = write_api(address, creds, args.work_account, limiter=limiter)
+            read_api = (PanoramaApi(address, args.key_file, limiter=limiter) if args.key_file
+                        else PanoramaApi(address, key=_key_for(args, address, "reading"), limiter=limiter))
+            work_api = write_api(address, limiter=limiter, key=_key_for(args, address, "changes"))
             fleet = FakeFleet(data)
             fleet.kind = "op"
             return LiveBackend(read_api, work_api, settings, settings.backup_dir), fleet, label
@@ -634,8 +700,12 @@ def _selection_args(p):
     where.add_argument("--panorama", metavar="ADDRESS", help="the Panorama that manages your firewalls (name or IP address)")
     where.add_argument("--source", help="fake:<fleet.json> to try the tool on an invented fleet, with no firewall involved")
     conn.add_argument("--creds-file", help=f"credentials file, a dict of account -> password (default {DEFAULT_CREDS}, or set PANUPGRADE_CREDS); never printed")
-    conn.add_argument("--account", default=DEFAULT_READ_ACCOUNT,
-                      help=f"which account in the credentials file to read with (default {DEFAULT_READ_ACCOUNT}, or set PANUPGRADE_READ_ACCOUNT); use a read-only one")
+    conn.add_argument("--account", default=DEFAULT_ACCOUNT, metavar="NAME",
+                      help="the account in the credentials file to sign in with (or set PANUPGRADE_ACCOUNT). "
+                           "Optional when the file holds exactly one account")
+    conn.add_argument("--ask-credentials", choices=["changes", "all"],
+                      help="type a username and password instead of reading them from a file: 'changes' for the steps that change "
+                           "firewalls (reading still uses the file), 'all' for everything. Never stored or printed")
     conn.add_argument("--insecure-tls", action="store_true",
                       help="do not verify Panorama's TLS certificate (lab with a self-signed certificate only; or set PANUPGRADE_INSECURE_TLS=1)")
     conn.add_argument("--key-file", help="alternative to --creds-file: a file whose first line is an API key")
@@ -674,7 +744,8 @@ Every command takes the same filters to choose firewalls (default: all of them):
   --name-contains TEXT   --name GLOB   --version-is 10.2.*   --version-older-than V   --version-newer-than V
   --ha-state active      --model M     --device-group G      --tag T      --serial S   --serials-file FILE
 
-Set up once (or pass as flags): PANUPGRADE_CREDS, PANUPGRADE_READ_ACCOUNT, PANUPGRADE_WORK_ACCOUNT.
+Signing in is your choice: a credentials file with one account, a file with a separate account for changes (--work-account),
+or a login you type (--ask-credentials changes|all). Set once with PANUPGRADE_CREDS, PANUPGRADE_ACCOUNT, PANUPGRADE_WORK_ACCOUNT.
 Full guide: docs/running.md
 """
 
@@ -702,8 +773,9 @@ def _run_args(p, journal_required=False):
     p.add_argument("--runs-dir", default="runs", help="where run journals are kept (default runs)")
     p.add_argument("--resume", action="store_true", help="continue the unfinished earlier run of this exact plan (or the file named by --journal)")
     p.add_argument("--fresh", action="store_true", help="start a new run even if an unfinished earlier run of this plan exists")
-    p.add_argument("--work-account", default=DEFAULT_WORK_ACCOUNT,
-                   help=f"account in the credentials file that makes the changes in a live run (default {DEFAULT_WORK_ACCOUNT}, or set PANUPGRADE_WORK_ACCOUNT)")
+    p.add_argument("--work-account", default=DEFAULT_WORK_ACCOUNT, metavar="NAME",
+                   help="a different account in the credentials file for the steps that change firewalls (or set PANUPGRADE_WORK_ACCOUNT). "
+                        "Default: the same account as --account")
     p.add_argument("--dry-run", action="store_true",
                    help="with a live source: read it once and rehearse against a model of it. WITHOUT this flag a live source "
                         "means a REAL run: it changes the firewalls")

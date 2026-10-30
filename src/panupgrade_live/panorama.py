@@ -85,24 +85,29 @@ def load_accounts(path):
     return data
 
 
-def key_from_account(address, creds_file, account, verify_tls=None, timeout=60):
-    """Log in with a named account from the credentials file and return the API key. The password goes in a POST body."""
-    accounts = load_accounts(creds_file)
-    if account not in accounts:
-        raise SourceError(f"account {account!r} is not in {creds_file} (it has: {', '.join(sorted(accounts))})")
-    body = urllib.parse.urlencode({"type": "keygen", "user": account, "password": accounts[account]}).encode()
+def key_from_login(address, user, password, verify_tls=None, timeout=60):
+    """Log in as ``user`` and return the API key. The password goes in a POST body, never in a URL."""
+    body = urllib.parse.urlencode({"type": "keygen", "user": user, "password": password}).encode()
     try:
         with urllib.request.urlopen(urllib.request.Request(f"https://{address}/api/", data=body),
                                     context=_tls(verify_tls), timeout=timeout) as response:
             root = ET.fromstring(response.read())
     except urllib.error.HTTPError as exc:
-        raise SourceError(f"{address}: login as {account} was refused (HTTP {exc.code})") from None
+        raise SourceError(f"{address}: login as {user} was refused (HTTP {exc.code})") from None
     except OSError as exc:
         raise SourceError(f"{address}: cannot reach the API to log in: {exc}") from None
     key = root.findtext(".//key")
     if root.get("status") != "success" or not key:
-        raise SourceError(f"{address}: login as {account} failed")
+        raise SourceError(f"{address}: login as {user} failed")
     return key
+
+
+def key_from_account(address, creds_file, account, verify_tls=None, timeout=60):
+    """Log in with a named account from the credentials file and return the API key."""
+    accounts = load_accounts(creds_file)
+    if account not in accounts:
+        raise SourceError(f"account {account!r} is not in {creds_file} (it has: {', '.join(sorted(accounts))})")
+    return key_from_login(address, account, accounts[account], verify_tls, timeout)
 
 
 class PanoramaApi:
@@ -181,9 +186,10 @@ class WriteApi(PanoramaApi):
         return self._post(xml, target, xml)
 
 
-def write_api(address, creds_file, account, verify_tls=None, recorder=None, limiter=None):
+def write_api(address, creds_file=None, account=None, verify_tls=None, recorder=None, limiter=None, key=None):
+    """The API that may also send the allow-listed write commands, signed in with ``key`` or with a named account."""
     return WriteApi(address, verify_tls=verify_tls, recorder=recorder, limiter=limiter,
-                    key=key_from_account(address, creds_file, account, verify_tls))
+                    key=key or key_from_account(address, creds_file, account, verify_tls))
 
 
 def _text(node, path):
@@ -191,12 +197,14 @@ def _text(node, path):
     return (found.text or "").strip() if found is not None else ""
 
 
-def live_source(address, key_file=None, verify_tls=None, recorder=None, creds_file=None, account=None, limiter=None):
+def live_source(address, key_file=None, verify_tls=None, recorder=None, creds_file=None, account=None, limiter=None, key=None):
     """An OpSource over Panorama: devices from ``show devices all``, facts through the proxy.
 
-    Log in with ``creds_file`` + ``account`` (a named account, e.g. the read-only prep account) or give ``key_file``.
+    Sign in with ``key``, or with ``creds_file`` + ``account`` (a named account), or give ``key_file``.
     """
-    if creds_file:
+    if key:
+        api = PanoramaApi(address, verify_tls=verify_tls, recorder=recorder, limiter=limiter or RateLimiter(), key=key)
+    elif creds_file:
         api = PanoramaApi(address, verify_tls=verify_tls, recorder=recorder, limiter=limiter or RateLimiter(),
                           key=key_from_account(address, creds_file, account, verify_tls))
     else:

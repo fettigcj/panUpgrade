@@ -724,7 +724,7 @@ class SelectCommandAndDryRun(unittest.TestCase):
         self.assertIn("a1 (a1) sim-a 20.2.3 -> 20.2.9", out.lower())
 
     def test_a_live_source_with_unreadable_credentials_stops_cleanly_before_any_network_use(self):
-        code, _, err = self.run_cli("upgrade", "--source", "panorama:192.0.2.1", "--creds-file", str(self.dir / "none.txt"),
+        code, _, err = self.run_cli("upgrade", "--panorama", "192.0.2.1", "--creds-file", str(self.dir / "none.txt"),
                                     "--target", TARGET, "--approval", "a.json", "--journal", str(self.dir / "j"))
         self.assertEqual(code, 2)
         self.assertIn("credentials file", err)

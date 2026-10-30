@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 
 DEFAULT_CREDS = os.environ.get("PANUPGRADE_CREDS") or str(Path.home() / ".panupgrade" / "credentials.txt")
-DEFAULT_ACCOUNT = os.environ.get("PANUPGRADE_ACCOUNT") or os.environ.get("PANUPGRADE_READ_ACCOUNT")       # None: decided from the file
+DEFAULT_ACCOUNT = os.environ.get("PANUPGRADE_ACCOUNT")       # None: decided from the file
 DEFAULT_WORK_ACCOUNT = os.environ.get("PANUPGRADE_WORK_ACCOUNT")                                          # None: same as the account above
 
 

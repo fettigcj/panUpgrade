@@ -3,8 +3,7 @@
 
 """User-tunable settings: one plain TOML file, strict types, safe defaults.
 
-Secrets never appear here. Credentials are *paths* to files (keys ending in
-``_file``); any other key that looks like a secret is rejected.
+Secrets never appear here: a key that looks like one (password, token, api key, ...) is rejected.
 """
 
 import tomllib
@@ -66,9 +65,6 @@ class Settings:
     poll_interval_s: int = 15          # how often a long job or a rebooting firewall is checked
     backup_dir: str = "backups"        # where verified config backups are written
     approval_max_age_hours: int = 168  # an approval older than this (a week) is refused (0 = never expires)
-    # Credential file paths only
-    plan_credentials_file: str = ""
-    apply_credentials_file: str = ""
 
     def loosening_warnings(self):
         """Plain-language cautions for settings that make a run riskier. Never an error."""
@@ -89,8 +85,6 @@ class Settings:
                        "the newer release's configuration may not load on the older one.")
         if self.max_parallel > 1:
             out.append(f"max_parallel={self.max_parallel}: several HA pairs/devices change at once.")
-        if (self.plan_credentials_file and self.plan_credentials_file == self.apply_credentials_file):
-            out.append("The read-only and apply credentials are the same file; a plan run holds change-capable access.")
         return out
 
 
@@ -130,8 +124,8 @@ def from_dict(data):
     kwargs = {}
     for name, value in data.items():
         lowered = name.lower()
-        if any(word in lowered for word in _SECRET_WORDS) and not lowered.endswith("_file"):
-            raise SettingsError(f"{name}: secrets do not belong in settings; give a *_file path instead")
+        if any(word in lowered for word in _SECRET_WORDS):
+            raise SettingsError(f"{name}: secrets do not belong in settings; sign-in is set with --creds-file / --account (see `panupgrade help`)")
         if name not in known:
             raise SettingsError(f"unknown setting {name!r}")
         kwargs[name] = _coerce(name, value, known[name])

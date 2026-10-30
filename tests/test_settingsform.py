@@ -39,10 +39,9 @@ def fresh(**over):
 
 
 class Coverage(unittest.TestCase):
-    def test_every_setting_is_on_the_form_or_deliberately_left_off_it(self):
-        left_off = {"plan_credentials_file", "apply_credentials_file"}
+    def test_every_setting_is_on_the_form(self):
         names = {f.name for f in fields(Settings)}
-        self.assertEqual(set(settingsform.shown_names()) | left_off, names)
+        self.assertEqual(set(settingsform.shown_names()), names)
         self.assertEqual(len(settingsform.shown_names()), len(set(settingsform.shown_names())))
 
     def test_every_shown_setting_is_explained_and_every_choice_has_a_meaning(self):
@@ -242,13 +241,6 @@ class WritingTheFile(unittest.TestCase):
         chosen = settings.from_dict({"backup_dir": "C:\\Users\\someone\\backups"})
         settingsform.write_file(self.path, chosen)
         self.assertEqual(settings.load(self.path).backup_dir, "C:\\Users\\someone\\backups")
-
-    def test_settings_the_form_does_not_show_are_kept(self):
-        chosen = settings.from_dict({"plan_credentials_file": "somewhere/key.txt", "max_parallel": 2})
-        form = settingsform.Form(chosen, self.path, saver=lambda f, c: settingsform.write_file(self.path, c) or "ok")
-        form.zone, form.button = "buttons", settingsform.SAVE_ONLY
-        form.press("enter")
-        self.assertEqual(settings.load(self.path).plan_credentials_file, "somewhere/key.txt")
 
 
 class SettingsVerb(unittest.TestCase):

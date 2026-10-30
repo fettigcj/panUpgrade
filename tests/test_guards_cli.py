@@ -46,17 +46,6 @@ class NoNetworkInPackage(unittest.TestCase):
         self.assertTrue(set(calls) <= {"list_devices", "facts", "panorama_version", "panorama_clock"}, set(calls))
 
 
-class Secrets(unittest.TestCase):
-    def test_credential_files_are_never_opened_or_echoed(self):
-        with tempfile.TemporaryDirectory() as d:
-            cred = Path(d, "key.txt")
-            cred.write_text("SENTINEL-NOT-A-REAL-SECRET", encoding="utf-8")
-            s = settings.from_dict({"plan_credentials_file": str(cred)})
-            plan = build_plan(fleet(pair("A1", "A2")), TARGET, s, rules=TEST_RULES)
-            for text in (report.to_json(plan), report.to_text(plan), report.to_html(plan)):
-                self.assertNotIn("SENTINEL", text)
-
-
 class Hygiene(unittest.TestCase):
     def test_fixture_is_synthetic(self):
         text = (ROOT / "fixtures" / "sample-fleet.json").read_text(encoding="utf-8")
@@ -107,7 +96,7 @@ class Cli(unittest.TestCase):
             self.assertEqual(json.loads(Path(d, "plan.json").read_text(encoding="utf-8"))["target"], TARGET)
 
     def test_a_live_source_with_unreadable_credentials_is_a_clean_error_and_never_reaches_the_network(self):
-        code, _, err = run(["plan", "--source", "panorama:pano.example", "--target", TARGET, "--creds-file", "no-such-file.txt"])
+        code, _, err = run(["plan", "--panorama", "pano.example", "--target", TARGET, "--creds-file", "no-such-file.txt"])
         self.assertEqual(code, 2)
         self.assertIn("credentials file", err)
 

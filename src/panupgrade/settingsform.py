@@ -31,8 +31,6 @@ SECTIONS = [
     ("Images, disk and time", ["image_source", "min_free_disk_mb", "download_timeout_s", "install_timeout_s", "reboot_timeout_s",
                                "poll_interval_s", "backup_dir", "approval_max_age_hours"]),
 ]
-# Settings left out of the form on purpose (older credential-file paths): they are kept as they are and still written back.
-
 # name -> (what it does, {choice or "true"/"false": what that value means})
 INFO = {
     "failover_band": ("After the active member fails over, the new active member's session count must be within this fraction of what "
@@ -136,11 +134,10 @@ def _toml(value):
 
 def write_file(path, settings):
     """Write only the settings that differ from the defaults, grouped and commented."""
-    defaults, shown = Settings(), shown_names()
-    other = [f.name for f in fields(Settings) if f.name not in shown]
+    defaults = Settings()
     lines = ["# panupgrade settings. Only settings that differ from the built-in defaults are listed here; anything missing keeps",
              "# its default. Written by `panupgrade settings`: run it again to change them, or edit this file by hand.", ""]
-    for title, names in SECTIONS + [("Other", other)]:
+    for title, names in SECTIONS:
         picked = [n for n in names if getattr(settings, n) != getattr(defaults, n)]
         if picked:
             lines.append(f"# ---- {title} ----")
@@ -158,7 +155,6 @@ class Form:
         self.text = {n: _fmt(getattr(current, n)) for n in self.names}
         base = baseline or current
         self.saved = {n: _fmt(getattr(base, n)) for n in self.names}          # what is on disk, as far as the form knows
-        self.kept = {f.name: getattr(current, f.name) for f in fields(Settings) if f.name not in self.names}
         self.saver = saver                                                    # saver(form, settings) writes the file, returns a message
         self.zone, self.focus, self.button = ROWS, 0, SAVE_EXIT
         self.offset, self.page = 0, 10
@@ -167,7 +163,7 @@ class Form:
     # ---- state
     def check(self):
         """(Settings or None, {setting: problem}, problem not tied to one setting)."""
-        data, problems = dict(self.kept), {}
+        data, problems = {}, {}
         for name in self.names:
             try:
                 data[name] = _parse(self.kinds[name], self.text[name])

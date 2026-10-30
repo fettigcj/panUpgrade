@@ -62,7 +62,7 @@ def _login(args):
     if ask != "all" and not args.key_file:
         reading = args.account
         if reading:
-            how = _env_origin(reading, "PANUPGRADE_ACCOUNT", "PANUPGRADE_READ_ACCOUNT")
+            how = _env_origin(reading, "PANUPGRADE_ACCOUNT")
         else:
             from panupgrade_live.panorama import load_accounts
             path = args.creds_file or DEFAULT_CREDS
@@ -972,6 +972,8 @@ def main(argv=None):
     st.set_defaults(func=_settings)
 
     args = parser.parse_args(argv)
+    if getattr(args, "source", None) and not args.source.startswith("fake:"):
+        parser.error("--source takes fake:<fleet.json>; use --panorama ADDRESS for a real Panorama")
     if getattr(args, "panorama", None):
         args.source = "panorama:" + args.panorama
     if getattr(args, "insecure_tls", False):

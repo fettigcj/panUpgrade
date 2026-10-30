@@ -73,8 +73,9 @@ class SettingsTests(unittest.TestCase):
         for key in ("password", "api_key", "token", "ssh_secret", "plan_password"):
             with self.assertRaises(settings.SettingsError):
                 settings.from_dict({key: "x"})
-        ok = settings.from_dict({"plan_credentials_file": "C:/somewhere/key.txt"})
-        self.assertEqual(ok.plan_credentials_file, "C:/somewhere/key.txt")
+        for key in ("plan_credentials_file", "api_key_file"):                # no exemption for names ending in _file
+            with self.assertRaises(settings.SettingsError):
+                settings.from_dict({key: "x"})
 
     def test_unknown_and_out_of_range(self):
         for bad in ({"nope": 1}, {"pending_changes": "maybe"}, {"failover_band": 0}, {"max_parallel": 0},
@@ -83,9 +84,8 @@ class SettingsTests(unittest.TestCase):
                 settings.from_dict(bad)
 
     def test_loosening_is_warned_not_forbidden(self):
-        s = settings.from_dict({"pending_changes": "ignore", "max_parallel": 3,
-                                "plan_credentials_file": "a", "apply_credentials_file": "a"})
-        self.assertEqual(len(s.loosening_warnings()), 3)
+        s = settings.from_dict({"pending_changes": "ignore", "max_parallel": 3})
+        self.assertEqual(len(s.loosening_warnings()), 2)
         self.assertEqual(settings.load().loosening_warnings(), [])
 
     def test_toml_file(self):

@@ -101,6 +101,12 @@ class SignIn(unittest.TestCase):
     def test_a_fleet_file_is_described_as_a_simulation(self):
         self.assertIn("no real firewall is contacted", said(cli._announce_connection, args(source="fake:fleet.json")))
 
+    def test_source_takes_only_an_invented_fleet_and_says_where_a_real_panorama_goes(self):
+        err = io.StringIO()
+        with self.assertRaises(SystemExit), mock.patch("sys.stderr", err):
+            cli.main(["report", "--source", "panorama:192.0.2.1"])
+        self.assertIn("use --panorama ADDRESS", err.getvalue())
+
     def test_panorama_flag_is_documented_and_exclusive_with_source(self):
         out = io.StringIO()
         with redirect_stdout(out):

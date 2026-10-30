@@ -25,6 +25,7 @@ from .sources import FakeFleet, SourceError, snapshot
 
 
 _SAID = set()
+DEFAULT_SETTINGS = "settings.toml"   # saved by `settings`; used by every command run from the same folder unless --settings names another
 DEFAULT_LIST = "upgradeList.txt"      # what `select` saves and plan / prepare / upgrade read when no firewalls are named
 
 
@@ -145,11 +146,14 @@ def _announce_connection(args, writing=False):
 
 def _load_settings(args):
     """Load the settings and say, once, where they came from."""
+    found = ""
+    if not args.settings and Path(DEFAULT_SETTINGS).is_file():
+        args.settings, found = str(Path(DEFAULT_SETTINGS).resolve()), " (found in this folder)"     # the kit script then pins this exact file
     settings = settings_mod.load(args.settings, args.set)
     if ("settings", args.settings) not in _SAID:
         _SAID.add(("settings", args.settings))
         style = _style(args)
-        origin = f"settings file {_tilde(args.settings)}" if args.settings else "built-in default settings (no settings file given)"
+        origin = f"settings file {_tilde(args.settings)}{found}" if args.settings else "built-in default settings (no settings file given)"
         extra = f", with {len(args.set)} changed on the command line" if args.set else ""
         print(style.line("info", f"Using {origin}{extra}"))
     return settings
@@ -770,15 +774,51 @@ def _issue_kit(args, style, label):
     return 0
 
 
+def _wants_settings_form(args):
+    """The form opens when asked for (-i), and by itself when `settings` is typed at a terminal with nothing else to say."""
+    if args.interactive is False:
+        return False
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        if args.interactive:
+            raise SourceError("--interactive needs a terminal; without one, `settings` prints the current values")
+        return False
+    return bool(args.interactive) or not args.set
+
+
 def _settings(args):
+    style = _style(args)
     try:
-        current = settings_mod.load(args.settings, args.set)
-    except settings_mod.SettingsError as exc:
+        use_form = _wants_settings_form(args)
+        target = args.settings or DEFAULT_SETTINGS
+        file = args.settings or (DEFAULT_SETTINGS if Path(DEFAULT_SETTINGS).is_file() else None)
+        on_disk = settings_mod.load(file)
+        current = settings_mod.load(file, args.set)
+    except (settings_mod.SettingsError, SourceError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    print(json.dumps(asdict(current), indent=2))
-    for warning in current.loosening_warnings():
-        print(f"caution: {warning}", file=sys.stderr)
+    if not use_form:
+        print(json.dumps(asdict(current), indent=2))
+        for warning in current.loosening_warnings():
+            print(f"caution: {warning}", file=sys.stderr)
+        return 0
+    from . import settingsform, tui
+    existing = Path(target).is_file()
+    notice = (f"Editing {_tilde(Path(target).resolve())}. Saving rewrites it with only the settings that differ from the defaults; comments are not kept."
+              if existing else f"No settings file yet: this starts from the built-in defaults and saves to {_tilde(Path(target).resolve())}.")
+
+    def save(form, chosen):
+        settingsform.write_file(target, chosen)
+        return f"Saved {form.changed_count()} changed setting{'s' if form.changed_count() != 1 else ''} to {target}."
+    form = settingsform.Form(current, target, save, notice, baseline=on_disk)
+    if not tui.show(form, f"panupgrade settings - {_tilde(Path(target).resolve())}"):
+        print("Cancelled; nothing was saved." if form.dirty() else "Closed; nothing changed.")
+        return 1
+    chosen = form.settings()
+    print(style.line("ok", f"Settings saved to {_tilde(Path(target).resolve())} ({form.changed_count()} differ from the defaults)."))
+    if args.settings is None:
+        print(style.line("info", "Every command run from this folder now uses it; name another file with --settings."))
+    for warning in chosen.loosening_warnings():
+        print(style.line("warn", warning))
     return 0
 
 
@@ -828,7 +868,7 @@ The usual order (everything but prepare and upgrade only reads):
 
 Helpers:
   select    build a firewall list from filters, to check and edit (on a terminal it opens a fill-in form)
-  settings  show every setting and its current value
+  settings  change the settings on a form (prints them when there is no terminal)
   help      this page; `panupgrade help <command>` shows that command's options
 
 Every command takes the same filters to choose firewalls (default: all of them):
@@ -922,9 +962,13 @@ def main(argv=None):
     prep.add_argument("--out", help="directory for prepare.plan.json and prepare.approval.template.json")
     prep.set_defaults(func=_prepare)
 
-    st = sub.add_parser("settings", help="show effective settings")
-    st.add_argument("--settings")
-    st.add_argument("--set", action="append")
+    st = sub.add_parser("settings", help="change the settings on a form (or print them when there is no terminal); changes nothing else")
+    st.add_argument("--settings", help=f"the settings file to edit (default ./{DEFAULT_SETTINGS})")
+    st.add_argument("--set", action="append", help="try a one-off value: name=value. With this, the settings are printed instead of editing a file")
+    st.add_argument("-i", "--interactive", action=argparse.BooleanOptionalAction, default=None,
+                    help="edit the settings on a form. Opens by itself when you run `settings` at a terminal; --no-interactive prints the values instead")
+    st.add_argument("--color", choices=["auto", "always", "never"], default="auto", help=argparse.SUPPRESS)
+    st.add_argument("--ascii", action="store_true", help=argparse.SUPPRESS)
     st.set_defaults(func=_settings)
 
     args = parser.parse_args(argv)

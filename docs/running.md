@@ -142,7 +142,23 @@ Every approval records who and when, names exactly the firewalls listed, and sto
 
 ## Tweaking behaviour
 
-`settings.example.toml` lists every setting with its default. Change one run with `--set name=value`, or keep a file and pass `--settings FILE`. Loosening a safety setting (`sync_to_peer`, `ha_config_unsynced`, `allow_downgrade`, wide session bands, `max_parallel`) prints a caution.
+On a terminal, run:
+
+```powershell
+panupgrade settings
+```
+
+Every setting is on one screen, grouped (HA behaviour, Panorama range, Failure handling, Downgrades, Images/disk/time). The column next to each shows its default, and a `*` marks one you have changed.
+
+- **Up / Down / Tab** move between settings. **Left / Right** step through a choice (`sync_to_peer`: never, prepare, upgrade) or flip a yes/no. Numbers and text are typed.
+- **Ctrl-R** (or Delete) puts a setting back to its default.
+- The bottom of the screen says what the setting under the cursor does, what its current value means, and prints a **Caution** for every setting that makes a run riskier (`sync_to_peer = upgrade`, `ha_config_unsynced = caution`, `allow_downgrade`, wide session bands, `max_parallel` above 1, and so on).
+- A value that is not allowed (text in a number, a band above 1, a cross-feature downgrade without `allow_downgrade`) turns red and blocks saving until it is fixed.
+- The buttons work as in `select`: **Save**, **Save & Exit** (Ctrl-D), **Quit without saving** (Esc, which asks first if there are unsaved changes).
+
+Saving writes `settings.toml` in the folder you run it from, containing only the settings that differ from the built-in defaults, so a later, safer default still reaches you. If the file already exists it is rewritten and its comments are not kept. **Every command run from that folder then uses it** and says so (`Using settings file ... (found in this folder)`); name another file with `--settings FILE`, which `settings` edits too. `prepare` pins the file it used into the upgrade script.
+
+Without a terminal, or with `--set`, `settings` prints the current values instead (`--no-interactive` forces this). `--set name=value` changes one run without touching any file. `settings.example.toml` lists every setting with its default for editing by hand.
 
 ## What to confirm on your first live run
 

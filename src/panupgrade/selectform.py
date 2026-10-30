@@ -31,15 +31,15 @@ COLUMNS = [
     Column("hostname", [("pattern", "name_glob", TEXT, "--name", "e.g. site1-*   (* matches anything, ? one character; the whole name must match)"),
                         ("contains", "name_contains", TEXT, "--name-contains", "any part of the name, e.g. gate")],
            28, lambda r: r.hostname),
-    Column("serial", [("is any of", "serials", LIST, "--serial", "full serial numbers, separated by commas")], 16, lambda r: r.serial),
-    Column("model", [("is", "models", LIST, "--model", "e.g. PA-VM")], 10, lambda r: r.model),
+    Column("serial", [("contains", "serials", LIST, "--serial", "part of a serial number; separate several with commas")], 16, lambda r: r.serial),
+    Column("model", [("contains", "models", LIST, "--model", "part of a model name, e.g. VM or 850; add * yourself to anchor it, e.g. PA-8*")], 10, lambda r: r.model),
     Column("PAN-OS", [("is", "version_is", TEXT, "--version-is", "e.g. 10.2.1 or 10.2.*"),
                       ("older than", "version_older_than", TEXT, "--version-older-than", "e.g. 10.2.11   (running something below this)"),
                       ("newer than", "version_newer_than", TEXT, "--version-newer-than", "e.g. 10.2.2   (running something above this)")],
            14, lambda r: r.sw_version or "-"),
-    Column("HA", [("is", "ha_states", LIST, "--ha-state", "e.g. active, passive")], 9, lambda r: r.ha_state or "-"),
-    Column("device group", [("is", "device_groups", LIST, "--device-group", "as named in Panorama")], 16, lambda r: r.device_group or "-"),
-    Column("tags", [("is", "tags", LIST, "--tag", "as named in Panorama")], 14, lambda r: ", ".join(r.tags or []) or "-"),
+    Column("HA", [("contains", "ha_states", LIST, "--ha-state", "e.g. active, passive   (\"active\" also finds active-primary)")], 9, lambda r: r.ha_state or "-"),
+    Column("device group", [("contains", "device_groups", LIST, "--device-group", "part of a device group name")], 16, lambda r: r.device_group or "-"),
+    Column("tags", [("contains", "tags", LIST, "--tag", "part of a tag name")], 14, lambda r: ", ".join(r.tags or []) or "-"),
 ]
 VERSION_ATTRS = ("version_older_than", "version_newer_than")
 MIN_WIDTH = 8
@@ -50,6 +50,11 @@ HELP = {
     SAVE: "Type a file name to save the list, or leave it empty to just look.   Enter: done",
 }
 ALWAYS = "Ctrl-D: done   Esc: cancel"
+
+
+def _wrap(term):
+    """A word typed into a 'contains' filter becomes *word*; one that already has a wildcard is taken as written."""
+    return term if any(c in term for c in "*?[") else f"*{term}*"
 
 
 def _split(text):
@@ -121,7 +126,7 @@ class Form:
             for _label, attr, kind, _flag, _eg in column.modes:
                 text = self.values[attr].strip()
                 if text and attr not in bad:
-                    setattr(sel, attr, _split(text) if kind == LIST else text)
+                    setattr(sel, attr, [_wrap(t) for t in _split(text)] if kind == LIST else text)
         return sel
 
     def filters_active(self):
@@ -436,22 +441,52 @@ def run(form, read_key, out, size, title=""):
 
 
 # ---- the real terminal ------------------------------------------------------------------------------------------------
-_WIN_KEYS = {"H": "up", "P": "down", "K": "left", "M": "right", "\x0f": "shift-tab", "I": "pgup", "Q": "pgdn", "G": "home", "O": "end",
-             "S": "delete"}
 _ANSI_KEYS = {"A": "up", "B": "down", "C": "right", "D": "left", "Z": "shift-tab", "H": "home", "F": "end",
               "5~": "pgup", "6~": "pgdn", "1~": "home", "7~": "home", "4~": "end", "8~": "end", "3~": "delete"}
 _PLAIN_KEYS = {"\r": "enter", "\n": "enter", "\t": "tab", "\x7f": "backspace", "\x08": "backspace", "\x15": "ctrl-u", "\x03": "ctrl-c",
                "\x04": "ctrl-d"}
 
 
+_VK_KEYS = {0x26: "up", 0x28: "down", 0x25: "left", 0x27: "right", 0x21: "pgup", 0x22: "pgdn", 0x24: "home", 0x23: "end",
+            0x2E: "delete", 0x0D: "enter", 0x1B: "esc", 0x08: "backspace"}
+_SHIFT = 0x10
+
+
+def translate_windows_key(vk, char, state):
+    """One Windows console key event as a key name. Reading the event itself (not msvcrt) is what reveals Shift on Tab."""
+    if vk == 0x09:
+        return "shift-tab" if state & _SHIFT else "tab"
+    if vk in _VK_KEYS:
+        return _VK_KEYS[vk]
+    if char and char != chr(0):
+        return _PLAIN_KEYS.get(char, char)
+    return ""                                   # Shift, Ctrl, Alt and the like on their own
+
+
 def _read_key_windows():
-    import msvcrt
-    ch = msvcrt.getwch()
-    if ch in ("\x00", "\xe0"):
-        return _WIN_KEYS.get(msvcrt.getwch(), "")
-    if ch == "\x1b":
-        return "esc"
-    return _PLAIN_KEYS.get(ch, ch)
+    import ctypes
+
+    class KeyEvent(ctypes.Structure):
+        _fields_ = [("down", ctypes.c_int32), ("repeat", ctypes.c_uint16), ("vk", ctypes.c_uint16), ("scan", ctypes.c_uint16),
+                    ("char", ctypes.c_wchar), ("state", ctypes.c_uint32)]
+
+    class Union(ctypes.Union):
+        _fields_ = [("key", KeyEvent), ("pad", ctypes.c_byte * 16)]
+
+    class Record(ctypes.Structure):
+        _fields_ = [("kind", ctypes.c_uint16), ("event", Union)]
+
+    kernel = ctypes.windll.kernel32
+    handle = kernel.GetStdHandle(-10)
+    record, count = Record(), ctypes.c_uint32()
+    while True:
+        if not kernel.ReadConsoleInputW(handle, ctypes.byref(record), 1, ctypes.byref(count)):
+            raise OSError("cannot read keys from this console")
+        key = record.event.key
+        if record.kind == 1 and key.down:                # a key going down; ignore releases, mouse and resize events
+            name = translate_windows_key(key.vk, key.char, key.state)
+            if name:
+                return name
 
 
 def _read_key_posix(fd):
@@ -505,6 +540,8 @@ def show(form, title=""):
     out.write("\x1b[?1049h\x1b[?25l")        # a separate screen, so the user's scrollback is left alone; hide the cursor
     try:
         return run(form, read_key, out, lambda: tuple(shutil.get_terminal_size((100, 30))), title)
+    except KeyboardInterrupt:
+        return False
     finally:
         out.write("\x1b[?25h\x1b[?1049l")
         out.flush()

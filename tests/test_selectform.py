@@ -189,7 +189,7 @@ class Drawing(unittest.TestCase):
         header = next(l for l in lines if "hostname" in l and "serial" in l)
         mode = next(l for l in lines if "< pattern >" in l)
         row = next(l for l in lines if "site1-fw1" in l)
-        for word, below in (("serial", "is any of"), ("PAN-OS", "< is >"), ("HA", "is")):
+        for word, below in (("serial", "contains"), ("PAN-OS", "< is >"), ("HA", "contains")):
             self.assertEqual(header.index(word), mode.index(below, header.index(word) - 1), word)
         self.assertEqual(header.index("serial"), row.index("S1"))
         self.assertEqual(header.index("PAN-OS"), row.index("10.2.1"))
@@ -235,6 +235,44 @@ class Drawing(unittest.TestCase):
         self.assertEqual(form.included, ["S4"])
         self.assertIn("\x1b[H", out.getvalue())
         self.assertFalse(selectform.run(selectform.Form(REFS), lambda: "esc", io.StringIO(), lambda: (100, 30)))
+
+
+class WildcardsAndKeys(unittest.TestCase):
+    def test_a_word_typed_in_a_contains_filter_matches_anywhere_in_the_value(self):
+        form = selectform.Form(REFS)
+        keys(form, "tab", "tab", *typing("P"))                              # model is the third column
+        self.assertEqual(sorted(r.serial for r in form.available()), ["S1", "S2", "S3", "S4"])
+        keys(form, "backspace", *typing("850"))
+        self.assertEqual([r.serial for r in form.available()], ["S4"])
+
+    def test_your_own_wildcards_are_taken_as_written(self):
+        form = selectform.Form(REFS)
+        keys(form, "tab", "tab", *typing("PA-8*"))
+        self.assertEqual([r.serial for r in form.available()], ["S4"])
+        self.assertEqual(form.flags(), [])                                  # a partial list is hand-picked until added
+        keys(form, "down", "a")
+        self.assertEqual(form.flags(), [("--model", "PA-8*")])
+
+    def test_the_wrapped_words_are_what_the_repeat_command_uses(self):
+        form = selectform.Form(REFS)
+        keys(form, "tab", "tab", *typing("VM"), "down", "a")
+        self.assertEqual(form.flags(), [("--model", "*VM*")])
+
+    def test_the_command_line_flags_accept_wildcards_too_and_exact_values_still_work(self):
+        self.assertTrue(Selection(models=["PA-VM"]).matches(REFS[0]))
+        self.assertFalse(Selection(models=["PA-V"]).matches(REFS[0]))
+        self.assertTrue(Selection(models=["pa-*"]).matches(REFS[3]))
+        self.assertTrue(Selection(device_groups=["ed*"]).matches(REFS[2]))
+        self.assertTrue(Selection(ha_states=["ACTIVE"]).matches(REFS[0]))
+        self.assertTrue(Selection(serials=["S1"]).matches(REFS[0]))
+
+    def test_shift_tab_is_told_from_tab_by_the_console_event(self):
+        self.assertEqual(selectform.translate_windows_key(0x09, chr(9), 0x10), "shift-tab")
+        self.assertEqual(selectform.translate_windows_key(0x09, chr(9), 0), "tab")
+        self.assertEqual(selectform.translate_windows_key(0x26, chr(0), 0), "up")
+        self.assertEqual(selectform.translate_windows_key(0x41, "a", 0), "a")
+        self.assertEqual(selectform.translate_windows_key(0x55, chr(21), 0x08), "ctrl-u")
+        self.assertEqual(selectform.translate_windows_key(0x10, chr(0), 0x10), "")      # Shift pressed on its own
 
 
 class SelectVerb(unittest.TestCase):

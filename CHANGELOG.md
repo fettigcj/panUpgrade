@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- `select` form: Shift-Tab now goes backwards on Windows (the console key event is read directly, since `msvcrt` cannot see Shift). The serial, model, HA, device group and tag filters match anywhere in the value, and `*` / `?` work in them, on the command line too (`--model "PA-8*"`).
+- Device groups were never read from Panorama (`show devices all` does not carry them), so the device group column was always empty. They now come from `show devicegroups`; device tags are read from `show devices all`.
 - `select` opens a form on a terminal: filters sit above the table columns (with modes such as pattern / contains and is / older than / newer than), and Available and Included tables let you build the exact batch. The equivalent flags are printed afterwards. `-i` / `--no-interactive` control it.
 - The fleet report no longer counts the PAN-DB URL version against an HA pair; only app, threat and av content are judged (the standby usually cannot reach the URL cloud).
 - Sign-in follows your setup: one account, separate read and change accounts, or a login typed at the prompt (`--ask-credentials changes|all`). No account names are assumed; a file with a single account needs no flag.

@@ -29,6 +29,12 @@ class PlanError(ValueError):
     pass
 
 
+def _glob_any(patterns, value):
+    """True when ``value`` matches any pattern, ignoring case. A pattern with no * or ? is just an exact value."""
+    value = (value or "").lower()
+    return any(fnmatch.fnmatchcase(value, pattern.lower()) for pattern in patterns)
+
+
 @dataclass
 class Selection:
     serials: list = field(default_factory=list)
@@ -44,19 +50,19 @@ class Selection:
     accept_standalone_outage: bool = False
 
     def matches(self, ref):
-        if self.serials and ref.serial not in self.serials:
+        if self.serials and not _glob_any(self.serials, ref.serial):
             return False
         if self.name_glob and not fnmatch.fnmatch(ref.hostname.lower(), self.name_glob.lower()):
             return False
         if self.name_contains and self.name_contains.lower() not in ref.hostname.lower():
             return False
-        if self.models and ref.model not in self.models:
+        if self.models and not _glob_any(self.models, ref.model):
             return False
-        if self.device_groups and ref.device_group not in self.device_groups:
+        if self.device_groups and not _glob_any(self.device_groups, ref.device_group):
             return False
-        if self.tags and not set(self.tags) & set(ref.tags):
+        if self.tags and not any(_glob_any(self.tags, tag) for tag in ref.tags):
             return False
-        if self.ha_states and (ref.ha_state or "").lower() not in [h.lower() for h in self.ha_states]:
+        if self.ha_states and not _glob_any(self.ha_states, ref.ha_state):
             return False
         if self.version_is and not fnmatch.fnmatch(ref.sw_version or "", self.version_is):
             return False

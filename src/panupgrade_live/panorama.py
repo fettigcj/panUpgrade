@@ -197,6 +197,20 @@ def _text(node, path):
     return (found.text or "").strip() if found is not None else ""
 
 
+def device_group_names(reply):
+    """{serial: device group name} from ``show devicegroups``. ``show devices all`` does not say which group a firewall is in."""
+    found = {}
+    for group in reply.findall("./result/devicegroups/entry"):
+        for member in group.findall("devices/entry"):
+            found[member.get("name")] = group.get("name")
+    return found
+
+
+def device_tags(entry):
+    """The tags on one ``show devices all`` entry (empty when none are set)."""
+    return [(m.text or "").strip() for m in entry.findall("tag/member") if (m.text or "").strip()]
+
+
 def live_source(address, key_file=None, verify_tls=None, recorder=None, creds_file=None, account=None, limiter=None, key=None):
     """An OpSource over Panorama: devices from ``show devices all``, facts through the proxy.
 
@@ -217,6 +231,10 @@ def live_source(address, key_file=None, verify_tls=None, recorder=None, creds_fi
     except SourceError:
         pano_clock = None
     devices = api.op("show devices all")
+    try:
+        groups = device_group_names(api.op("show devicegroups"))
+    except SourceError:
+        groups = {}                                   # an account that may not look at device groups just sees none
     refs = []
     for entry in devices.iter("entry"):
         if entry.find("serial") is None:
@@ -224,6 +242,6 @@ def live_source(address, key_file=None, verify_tls=None, recorder=None, creds_fi
         refs.append(DeviceRef(
             serial=_text(entry, "serial"), hostname=_text(entry, "hostname"), model=_text(entry, "model"),
             sw_version=_text(entry, "sw-version"), connected=_text(entry, "connected") == "yes",
-            device_group=_text(entry, "device-group"), ha_state=_text(entry, "ha/state"),
+            device_group=groups.get(_text(entry, "serial"), ""), tags=device_tags(entry), ha_state=_text(entry, "ha/state"),
             peer_serial=_text(entry, "ha/peer/serial")))
     return OpSource(pano_version, refs, lambda serial: (lambda command: api.op(command, target=serial)), pano_clock)

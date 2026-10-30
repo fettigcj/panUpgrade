@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- `select` form: a "Filters in effect" line lists every active filter, including ones hidden because the column was switched to another mode; more space before the Included table.
+- The list `select` saves defaults to `upgradeList.txt`. `plan`, `prepare` and `upgrade` use it when no firewalls are named (`--all` ignores it), and the form reopens on it. Without the form, `select` only writes a file when given `--out`.
 - `select` form: Shift-Tab now goes backwards on Windows (the console key event is read directly, since `msvcrt` cannot see Shift). The serial, model, HA, device group and tag filters match anywhere in the value, and `*` / `?` work in them, on the command line too (`--model "PA-8*"`).
 - Device groups were never read from Panorama (`show devices all` does not carry them), so the device group column was always empty. They now come from `show devicegroups`; device tags are read from `show devices all`.
 - `select` opens a form on a terminal: filters sit above the table columns (with modes such as pattern / contains and is / older than / newer than), and Available and Included tables let you build the exact batch. The equivalent flags are printed afterwards. `-i` / `--no-interactive` control it.

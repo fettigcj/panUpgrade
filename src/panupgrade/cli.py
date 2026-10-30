@@ -25,6 +25,7 @@ from .sources import FakeFleet, SourceError, snapshot
 
 
 _SAID = set()
+DEFAULT_LIST = "upgradeList.txt"      # what `select` saves and plan / prepare / upgrade read when no firewalls are named
 
 
 def _tilde(path):
@@ -174,14 +175,38 @@ def _source(args):
     raise SystemExit("sources: fake:<file> or panorama:<address> (read-only)")
 
 
+def _read_list(path):
+    """The serial numbers in a list file: one per line, '#' starts a note."""
+    serials = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()      # 'SERIAL   # a note' is fine
+        if line:
+            serials.append(line.split()[0])
+    return serials
+
+
+def _default_list(args):
+    """The saved list to use when the command names no firewalls at all (None when it does, or when there is no saved list)."""
+    if getattr(args, "command", None) not in ("plan", "prepare", "upgrade") or getattr(args, "all", False):
+        return None
+    if args.serial or args.serials_file or any(getattr(args, f, None) for f in _FILTERS):
+        return None
+    return Path(DEFAULT_LIST) if Path(DEFAULT_LIST).is_file() else None
+
+
 def _serials(args):
     serials = list(args.serial or [])
-    if args.serials_file:
-        text = Path(args.serials_file).read_text(encoding="utf-8")
-        for line in text.splitlines():
-            line = line.split("#", 1)[0].strip()      # 'SERIAL   # a note' is fine
-            if line:
-                serials.append(line.split()[0])
+    path = args.serials_file
+    default = _default_list(args)
+    if default:
+        path = default
+        if ("list", str(default)) not in _SAID:
+            _SAID.add(("list", str(default)))
+            found = _read_list(default)
+            print(_style(args).line("info", f"Using the firewall list {_tilde(default.resolve())} ({len(found)} firewalls). "
+                                            f"Name others with --serials-file, or use --all for every firewall Panorama manages."))
+    if path:
+        serials += _read_list(path)
     return serials
 
 
@@ -278,7 +303,12 @@ def _select(args):
     selection = _selection(args)
     if use_form:
         from . import selectform
-        form = selectform.Form(refs, selection, args.out or "")
+        saved = args.out or DEFAULT_LIST
+        notice = ""
+        if not selection.serials and Path(saved).is_file():           # come back to the list you made last time
+            selection.serials = _read_list(saved)
+            notice = f"Started with the {len(selection.serials)} firewalls already in {saved}."
+        form = selectform.Form(refs, selection, saved, notice)
         if not selectform.show(form, f"panupgrade select - {len(refs)} firewalls from {_where(args)}"):
             print("Cancelled; nothing was selected.")
             return 1
@@ -290,8 +320,13 @@ def _select(args):
              "yes" if r.connected else "NO"] for i, r in enumerate(chosen, 1)]
     print(style.bold(f"Criteria: {criteria}"))
     sys.stdout.write(console.render_table(["#", "hostname", "serial", "model", "PAN-OS", "HA", "device group", "online"], rows, style))
-    print(style.line("info", f"{len(chosen)} of {len(refs)} devices match. Check the list; edit the file if needed; "
-                             f"then pass it with --serials-file."))
+    print(style.line("info", f"{len(chosen)} of {len(refs)} devices match."))
+    if args.out:
+        print(style.line("info", f"Saving the list to {args.out}. Check it and edit it if needed; " + (
+            "plan, prepare and upgrade use it automatically when you run them from this folder." if Path(args.out).name == DEFAULT_LIST
+            else f"pass it to the later commands with --serials-file {args.out}.")))
+    else:
+        print(style.line("info", f"To keep this list, add --out {DEFAULT_LIST}; plan, prepare and upgrade then use it automatically."))
     if args.out:
         lines = [f"# panupgrade device list - criteria: {criteria}",
                  "# One serial per line; text after # is ignored. Delete a line to drop a device; the file is the list that is used."]
@@ -758,7 +793,9 @@ def _selection_args(p):
     conn.add_argument("--record", help="directory to save each raw device response, to build test fixtures")
     pick = p.add_argument_group("choose which firewalls (filters combine; with none, every firewall)")
     pick.add_argument("--serial", action="append", help="this serial (repeatable)")
-    pick.add_argument("--serials-file", help="file with one serial per line ('#' starts a comment); the output of `select`")
+    pick.add_argument("--serials-file", help="file with one serial per line ('#' starts a comment); the output of `select`. "
+                                             f"Without any firewall named, plan / prepare / upgrade use ./{DEFAULT_LIST} if it exists")
+    pick.add_argument("--all", action="store_true", help=f"every firewall Panorama manages, even if ./{DEFAULT_LIST} exists")
     pick.add_argument("--name", help="host name glob, e.g. 'site1-*'")
     pick.add_argument("--name-contains", help="host name contains this text")
     pick.add_argument("--version-is", help="running version matches this glob, e.g. '10.2.1' or '10.2.*'")

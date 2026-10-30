@@ -49,24 +49,28 @@ The filters sit directly above the columns they filter, and two tables sit below
 - **Modes.** A column with more than one way to filter shows `< pattern >` or `< older than >` above its input. Up to the mode row, then Left / Right to change it. Hostname offers *pattern* (`site1-*`) and *contains*; PAN-OS offers *is*, *older than* and *newer than*. Serial, model, HA, device group and tag are all *contains*: type `VM` and every model with VM in it matches, or add your own `*` or `?` (`PA-8*`) to say exactly where. Several words, separated by commas, match any of them. PAN-OS *is* is exact unless you add a `*` (`10.2.*`).
 - **Known values.** On an input, Left / Right fill in a value this fleet really has (a version, an HA state, a model, a device group, a tag).
 - **Building the batch.** In Available, Space (or Enter) moves the firewall under the cursor into Included, and `A` moves every firewall listed. In Included, Space, Enter or `D` takes one back out, and `C` clears the list. Filters only change what Available shows; they never remove anything from Included.
-- **Finishing.** Ctrl-D (or Enter in the save box) accepts, Esc cancels (twice, if you have an unsaved Included list). Type a file name in the save box to write the list for `--serials-file`.
+- **Finishing.** Ctrl-D (or Enter in the save box) accepts, Esc cancels (twice, if you have an unsaved Included list). The save box is filled in with `upgradeList.txt`; the list is written there when you finish. Change the name if you like, or clear it to save nothing.
 
 A `!` in the left margin marks a firewall that is offline. When the form closes, `select` prints the flags that make the same list. If you picked firewalls by hand, it prints their serials, or points to the saved file when there are many. `-i` opens the form even when you give some filters: a `--serials-file` or `--serial` list starts in Included, and the other filters fill in the filter row. `--no-interactive` never opens it.
+
+**Filters in effect.** The row under the filters lists every filter that is narrowing Available, including one left in a mode you have since switched away from (for example *PAN-OS is 10.2.\** after you moved that column to *newer than*). Those are marked *hidden, other mode* in yellow, so a list that looks too short always has its reason on screen. Switch the column back to that mode to change or clear it.
+
+**The saved list is the default.** `plan`, `prepare` and `upgrade` use `upgradeList.txt` from the folder you run them in whenever you name no firewalls (no `--serial`, `--serials-file` or filter flag), and they say so when they do. Use `--serials-file` for another list, or `--all` for every firewall Panorama manages. Running `select` again with the form starts from the list you saved last time. Without the form, add `--out upgradeList.txt` to keep a list.
 
 Or give the filters as flags, which is what scripts do:
 
 ```powershell
-panupgrade select --panorama <panorama-address> --version-is 10.2.1 --name-contains <text> --out firewalls.txt
+panupgrade select --panorama <panorama-address> --version-is 10.2.1 --name-contains <text> --out upgradeList.txt
 ```
 
-Criteria: `--name-contains`, `--name` (glob), `--version-is` (glob), `--version-older-than`, `--version-newer-than`, `--ha-state`, `--model`, `--device-group`, `--tag`, `--serial`. Use `--serials-file firewalls.txt` in every command below.
+Criteria: `--name-contains`, `--name` (glob), `--version-is` (glob), `--version-older-than`, `--version-newer-than`, `--ha-state`, `--model`, `--device-group`, `--tag`, `--serial`. The saved `upgradeList.txt` is picked up by every command below; use `--serials-file` to name a different list.
 
 ### 2. Plan (changes nothing)
 
 What would happen to each firewall, why some are blocked, and what needs your acknowledgement. The output lists blocked firewalls first and counts routine skipped checks instead of listing them (`--verbose` lists every check).
 
 ```powershell
-panupgrade plan --panorama <panorama-address> --serials-file firewalls.txt --target 10.2.2 --settings settings.toml --xlsx readiness.xlsx
+panupgrade plan --panorama <panorama-address> --target 10.2.2 --settings settings.toml --xlsx readiness.xlsx
 ```
 
 ### 3. Prepare (optional, makes the window shorter and calmer)
@@ -82,11 +86,11 @@ It never installs, reboots or fails anything over. Whatever it cannot fix stays 
 Dry run first, then the real thing. The real run shows exactly what you are approving and asks you to type APPROVE.
 
 ```powershell
-panupgrade prepare --dry-run --panorama <panorama-address> --serials-file firewalls.txt --target 10.2.2 --settings settings.toml
+panupgrade prepare --dry-run --panorama <panorama-address> --target 10.2.2 --settings settings.toml
 ```
 
 ```powershell
-panupgrade prepare --panorama <panorama-address> --serials-file firewalls.txt --target 10.2.2 --settings settings.toml
+panupgrade prepare --panorama <panorama-address> --target 10.2.2 --settings settings.toml
 ```
 
 When it finishes, `prepare` writes the **upgrade kit** into `prepared\` (change with `--kit-dir`):
@@ -110,7 +114,7 @@ The approval holds only while the plan is unchanged (the firewalls, their versio
 To rehearse the upgrade against a model of the fleet (asks nothing, changes nothing):
 
 ```powershell
-panupgrade upgrade --dry-run --panorama <panorama-address> --serials-file firewalls.txt --target 10.2.2 --settings settings.toml
+panupgrade upgrade --dry-run --panorama <panorama-address> --target 10.2.2 --settings settings.toml
 ```
 
 You can also skip `prepare` and run `upgrade` without `--dry-run`. It then shows the plan and asks you to type APPROVE.

@@ -5,6 +5,8 @@
 
 import argparse
 import io
+import os
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from unittest import mock
@@ -275,7 +277,40 @@ class WildcardsAndKeys(unittest.TestCase):
         self.assertEqual(selectform.translate_windows_key(0x10, chr(0), 0x10), "")      # Shift pressed on its own
 
 
+class HiddenFilters(unittest.TestCase):
+    def test_a_filter_left_behind_by_changing_the_mode_is_still_listed_and_flagged(self):
+        form = selectform.Form(REFS)
+        keys(form, "tab", "tab", "tab", *typing("10.2.*"), "up", "right")            # PAN-OS 'is' 10.2.*, then on to 'older than'
+        self.assertEqual(form.mode[3], 1)
+        self.assertEqual(form.in_effect(), [("PAN-OS is 10.2.*", False)])
+        text = screen(form)
+        self.assertIn("Filters in effect: PAN-OS is 10.2.* (hidden, other mode)", text)
+        keys(form, "down", *typing("10.2.11"))
+        self.assertEqual(form.in_effect(), [("PAN-OS is 10.2.*", False), ("PAN-OS older than 10.2.11", True)])
+        self.assertEqual([r.serial for r in form.available()], ["S1", "S2"])         # both really apply
+
+    def test_with_nothing_typed_the_line_says_everything_is_listed(self):
+        self.assertIn("Filters in effect: none, every firewall is listed", screen(selectform.Form(REFS)))
+
+    def test_the_mode_row_explains_that_other_modes_keep_applying(self):
+        form = selectform.Form(REFS)
+        keys(form, "up")
+        self.assertIn("other modes still apply", screen(form))
+
+    def test_the_two_tables_are_separated_by_a_blank_line(self):
+        lines = screen(selectform.Form(REFS)).split("\n")
+        at = next(i for i, l in enumerate(lines) if "INCLUDED" in l)
+        self.assertEqual(lines[at - 1].strip(), "")
+
+
 class SelectVerb(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.here = os.getcwd()
+        os.chdir(self.tmp.name)                      # the form saves upgradeList.txt in the working folder
+        self.addCleanup(os.chdir, self.here)
+
     def args(self, **over):
         base = dict(interactive=None, out=None, source="panorama:192.0.2.1", color="never", ascii=True)
         base.update(over)
@@ -331,6 +366,63 @@ class SelectVerb(unittest.TestCase):
         self.assertIn("Criteria: 2 firewalls picked by hand", text)
         self.assertIn("--serial S4 --serial S1", text.replace("\n", " ") if False else text) if False else None
         self.assertIn("--serial", text)
+
+    def test_the_form_saves_to_upgradeList_by_default_and_plan_and_friends_then_use_it(self):
+        def fill(form, title=""):
+            self.assertEqual(form.out, cli.DEFAULT_LIST)
+            keys(form, "down", "a")
+            return True
+        code, text = self.run_select(fill)
+        self.assertEqual(code, 0)
+        self.assertEqual(cli._read_list(cli.DEFAULT_LIST), ["S4", "S1", "S2", "S3"])
+        a = argparse.Namespace(command="plan", serial=None, serials_file=None, all=False)
+        for f in cli._FILTERS:
+            setattr(a, f, getattr(a, f, None))
+        said = io.StringIO()
+        with redirect_stdout(said):
+            self.assertEqual(cli._serials(a), ["S4", "S1", "S2", "S3"])
+        self.assertIn("Using the firewall list", said.getvalue())
+        for command in ("prepare", "upgrade"):
+            a.command = command
+            self.assertEqual(len(cli._serials(a)), 4)
+
+    def test_the_saved_list_is_not_used_when_firewalls_are_named_or_all_is_asked_for_or_the_verb_is_read_only(self):
+        with open(cli.DEFAULT_LIST, "w", encoding="utf-8") as fh:
+            fh.write("S1\nS2\n")
+        def ns(**over):
+            a = argparse.Namespace(command="plan", serial=None, serials_file=None, all=False)
+            for f in cli._FILTERS:
+                setattr(a, f, getattr(a, f, None))
+            for k, v in over.items():
+                setattr(a, k, v)
+            return a
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(cli._serials(ns()), ["S1", "S2"])
+        self.assertEqual(cli._serials(ns(all=True)), [])
+        self.assertEqual(cli._serials(ns(serial=["S9"])), ["S9"])
+        self.assertEqual(cli._serials(ns(name="x*")), [])
+        self.assertEqual(cli._serials(ns(command="report")), [])
+        self.assertEqual(cli._serials(ns(command="select")), [])
+
+    def test_reopening_the_form_starts_from_the_list_saved_last_time(self):
+        with open(cli.DEFAULT_LIST, "w", encoding="utf-8") as fh:
+            fh.write("S2\nS3\n")
+        seen = {}
+        def fill(form, title=""):
+            seen["included"], seen["note"] = list(form.included), form.message
+            return False
+        self.run_select(fill)
+        self.assertEqual(seen["included"], ["S2", "S3"])
+        self.assertIn("already in upgradeList.txt", seen["note"])
+
+    def test_a_flag_only_select_does_not_write_a_file_but_says_how_to_keep_the_list(self):
+        source = mock.Mock()
+        source.list_devices.return_value = REFS
+        out = io.StringIO()
+        with redirect_stdout(out), mock.patch("panupgrade.cli._source", return_value=source):
+            cli.main(["select", "--panorama", "192.0.2.1", "--name", "site1-*", "--color", "never"])
+        self.assertFalse(os.path.exists(cli.DEFAULT_LIST))
+        self.assertIn("--out upgradeList.txt", out.getvalue())
 
     def test_cancelling_the_form_selects_nothing(self):
         code, text = self.run_select(lambda form, title="": False)

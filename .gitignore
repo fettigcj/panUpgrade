@@ -8,3 +8,4 @@ prepared/
 backups/
 panupgrade-data/
 *.approval.json
+upgradeList.txt

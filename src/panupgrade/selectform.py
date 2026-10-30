@@ -80,7 +80,7 @@ def _choices(refs):
 
 
 class Form:
-    def __init__(self, refs, initial=None, out=""):
+    def __init__(self, refs, initial=None, out="", notice=""):
         self.refs = sorted(refs, key=lambda r: r.hostname.lower())
         self.choices = _choices(refs)
         self.values = {}
@@ -103,7 +103,7 @@ class Form:
         self.cursor = {AVAILABLE: 0, INCLUDED: 0}
         self.offset = {AVAILABLE: 0, INCLUDED: 0}
         self.page = 10
-        self.message = ""
+        self.message = notice
         self.armed = False
 
     # ---- what the filters mean
@@ -336,6 +336,8 @@ class Form:
             label, attr, kind, _flag, example = COLUMNS[self.fcol].modes[self.mode[self.fcol]]
             known = self.choices.get(attr) or []
             status = (f"This fleet has: {', '.join(known)}" if known else example)
+        if not status and self.zone == FILTER and self.frow == MODE:
+            status = "Left / Right changes the mode. Filters set in the other modes still apply: see 'Filters in effect' below."
         lines.append([("error" if status.startswith("!") else "dim", " " + status.lstrip("!"))])
         lines.append([])
 
@@ -363,9 +365,10 @@ class Form:
         lines.append(cells(input_row))
         for attr, text in ((a, errors[a]) for a in errors):
             lines.append([("error", f"   {attr.replace('_', ' ')}: {text}")])
+        lines.append(self._in_effect())
         lines.append([])
 
-        fixed = len(lines) + 3                                   # two table headings and the save line
+        fixed = len(lines) + 5                                   # two table headings, the gaps before the second table and the save line
         room = max(height - fixed, 6)
         top = max(3, (room + 1) // 2)
         bottom = max(3, room - top)
@@ -373,6 +376,8 @@ class Form:
 
         def table(zone, rows, shown, heading, note, empty):
             self._clamp()
+            if zone == INCLUDED:
+                lines.append([])
             here = self.zone == zone
             cursor, off = self.cursor[zone], self.offset[zone]
             if cursor < off:
@@ -396,10 +401,32 @@ class Form:
         table(INCLUDED, incl, bottom, "INCLUDED", f"{len(incl)} firewall{'s' if len(incl) != 1 else ''} for the batch",
               "Empty. Move firewalls here from Available with Space.")
         here = self.zone == SAVE
+        lines.append([])
         lines.append([("focus" if here else "bold", f" {'>' if here else ' '} Save the list to "),
                       ("focus" if here else "", f"[{self.out}{'_' if here else ''}".ljust(32) + "]"),
-                      ("dim", "  (empty: just look)")])
+                      ("dim", "  plan, prepare and upgrade use this file when you don't name firewalls" if self.out.strip()
+                       else "  not saved: later commands will need --serial or --serials-file")])
         return [self._cut(line, width - 1) for line in lines[:height]]
+
+    def in_effect(self):
+        """[(text, shown)] for every filter that has something typed in it, whether or not its mode is the one on screen."""
+        found = []
+        for i, column in enumerate(COLUMNS):
+            for m, (label, attr, _kind, _flag, _eg) in enumerate(column.modes):
+                text = self.values[attr].strip()
+                if text:
+                    found.append((f"{column.title} {label} {text}", m == self.mode[i]))
+        return found
+
+    def _in_effect(self):
+        """The one line that says what is narrowing Available, so a filter hidden behind another mode is never a mystery."""
+        found = self.in_effect()
+        if not found:
+            return [("dim", " Filters in effect: none, every firewall is listed")]
+        line = [("bold", " Filters in effect: ")]
+        for n, (text, shown) in enumerate(found):
+            line += [("dim", "" if n == 0 else "  and  "), ("bold" if shown else "warn", text if shown else text + " (hidden, other mode)")]
+        return line
 
     @staticmethod
     def _cut(line, width):
@@ -417,7 +444,7 @@ def plain(lines):
     return "\n".join("".join(text for _style, text in line) for line in lines)
 
 
-CODES = {"bold": "\x1b[1m", "dim": "\x1b[2m", "focus": "\x1b[7m", "error": "\x1b[31m", "focus-error": "\x1b[7;31m", "": ""}
+CODES = {"bold": "\x1b[1m", "dim": "\x1b[2m", "focus": "\x1b[7m", "error": "\x1b[31m", "warn": "\x1b[33m", "focus-error": "\x1b[7;31m", "": ""}
 
 
 def draw(form, out, width, height, title=""):

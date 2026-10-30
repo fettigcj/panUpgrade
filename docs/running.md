@@ -24,6 +24,14 @@ Passwords are never printed or logged.
 
 ## The workflow
 
+### 0. Report on the fleet (changes nothing)
+
+No target version needed. It reads every firewall Panorama manages (or the ones your criteria select) and says what needs attention, which PAN-OS versions are running, and how each firewall looks.
+
+```powershell
+panupgrade report --source panorama:<panorama-address>
+```
+
 ### 1. Pick the firewalls (changes nothing)
 
 Criteria combine. The output is a list you check and edit.
@@ -64,11 +72,11 @@ panupgrade prepare --source panorama:<panorama-address> --serials-file firewalls
 
 When it finishes, `prepare` writes the **upgrade kit** into `prepared\` (change with `--kit-dir`):
 
-- a sign-off report (HTML, text and Excel)
+- a sign-off pack (HTML, text and Excel)
 - the firewall list and the approval
 - a ready-to-run script, `run-upgrade-<target>-<time>.bat` on Windows or `.sh` elsewhere
 
-There is no second prompt. Take the report to whoever must agree, then come back to the script.
+There is no second prompt. Take the pack to whoever must agree, then come back to the script.
 
 ### 4. Upgrade
 
@@ -103,7 +111,7 @@ Without a terminal, add `--resume` or `--fresh`. `--journal FILE` and `--runs-di
 
 One requirement: a person decided to go ahead knowing what will change and which cautions apply.
 
-- **Kit flow:** the decision is running the script, after the report has been read and agreed.
+- **Kit flow:** the decision is running the script, after the pack has been read and agreed.
 - **`prepare`'s own tasks** (config sync, image downloads) are confirmed by typing APPROVE, because they change firewalls straight away.
 - **`upgrade` run directly** shows the plan and asks you to type APPROVE.
 

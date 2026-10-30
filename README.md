@@ -10,12 +10,13 @@ panUpgrade reads your fleet, tells you what would happen to each firewall and wh
 
 | Step | Command | Changes anything? |
 |---|---|---|
+| See the state of the fleet | `panupgrade report` | No |
 | Choose firewalls | `panupgrade select` | No |
-| See the plan | `panupgrade plan` | No |
+| See what an upgrade would do | `panupgrade plan --target X` | No |
 | Get ready (content, config sync, image downloads) | `panupgrade prepare` | Yes, after you type APPROVE |
 | Upgrade | the script `prepare` writes, or `panupgrade upgrade` | Yes, only the firewalls the approval names |
 
-`prepare` finishes by writing an **upgrade kit**: a sign-off report (HTML, text, Excel), the firewall list, the approval, and a ready-to-run script. Take the report to whoever must agree; running the script is the go-ahead.
+`prepare` finishes by writing an **upgrade kit**: a sign-off pack (HTML, text, Excel), the firewall list, the approval, and a ready-to-run script. Take the pack to whoever must agree; running the script is the go-ahead.
 
 ## Safety model
 

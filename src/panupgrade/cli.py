@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from dataclasses import asdict
 from pathlib import Path
 
-from . import (approval as approval_mod, console, executor, paths, prepare as prepare_mod, report,
+from . import (approval as approval_mod, fleetreport, console, executor, paths, prepare as prepare_mod, report,
                settings as settings_mod, xlsxout)
 from .site import DEFAULT_CREDS, DEFAULT_READ_ACCOUNT, DEFAULT_WORK_ACCOUNT
 from .journal import Journal, JournalError
@@ -118,6 +118,28 @@ def _select(args):
                  "# One serial per line; text after # is ignored. Delete a line to drop a device; the file is the list that is used."]
         lines += [f"{r.serial}   # {r.hostname}  {r.sw_version}  {r.ha_state or '-'}" for r in chosen]
         Path(args.out).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"Wrote {args.out}")
+    return 0
+
+
+def _report(args):
+    """Read the fleet and say what state it is in. No target version, no plan, nothing changes."""
+    style = _style(args)
+    try:
+        live = _source(args)
+        refs = live.list_devices()
+        chosen = [r for r in refs if _selection(args).matches(r)]
+        include = {r.serial for r in chosen} | {r.peer_serial for r in chosen if r.peer_serial}
+        snap = snapshot(live, include)
+        snap["devices"] = [d for d in snap["devices"] if d["serial"] in include]
+    except (SourceError, OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    report = fleetreport.build(snap)
+    sys.stdout.write(fleetreport.render(report, style, args.source.split(":", 1)[-1] if args.source.startswith("panorama:") else ""))
+    if args.out:
+        Path(args.out).write_text(json.dumps({"panorama_version": report["panorama_version"], "versions": report["versions"],
+                                              "attention": report["attention"], "devices": report["devices"]}, indent=1) + chr(10), encoding="utf-8")
         print(f"Wrote {args.out}")
     return 0
 
@@ -591,6 +613,11 @@ def main(argv=None):
     _selection_args(sel)
     sel.add_argument("--out", help="write the list here (one serial per line) for --serials-file")
     sel.set_defaults(func=_select)
+
+    rep = sub.add_parser("report", help="show the state of the fleet right now (versions, HA, sync, content); changes nothing")
+    _selection_args(rep)
+    rep.add_argument("--out", help="also save the full report as JSON")
+    rep.set_defaults(func=_report)
 
     plan = sub.add_parser("plan", help="show what would happen to each device; changes nothing")
     _plan_args(plan)

@@ -291,6 +291,13 @@ def _repeat_hint(args, flags):
     return "To get this same list without the form: " + _command_line(args, flags + ([("--out", args.out)] if args.out else []))
 
 
+def _write_list(path, chosen, criteria):
+    lines = [f"# panupgrade device list - criteria: {criteria}",
+             "# One serial per line; text after # is ignored. Delete a line to drop a device; the file is the list that is used."]
+    lines += [f"{r.serial}   # {r.hostname}  {r.sw_version}  {r.ha_state or '-'}" for r in chosen]
+    Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _select(args):
     """Build the list of devices from criteria, show it, and save it for the user to check and edit."""
     style = _style(args)
@@ -308,7 +315,11 @@ def _select(args):
         if not selection.serials and Path(saved).is_file():           # come back to the list you made last time
             selection.serials = _read_list(saved)
             notice = f"Started with the {len(selection.serials)} firewalls already in {saved}."
-        form = selectform.Form(refs, selection, saved, notice)
+        def save_list(form):
+            path = form.out.strip()
+            _write_list(path, form.included_refs(), form.describe())
+            return f"Saved {len(form.included)} firewall{'s' if len(form.included) != 1 else ''} to {path}."
+        form = selectform.Form(refs, selection, saved, notice, save_list)
         if not selectform.show(form, f"panupgrade select - {len(refs)} firewalls from {_where(args)}"):
             print("Cancelled; nothing was selected.")
             return 1
@@ -328,10 +339,7 @@ def _select(args):
     else:
         print(style.line("info", f"To keep this list, add --out {DEFAULT_LIST}; plan, prepare and upgrade then use it automatically."))
     if args.out:
-        lines = [f"# panupgrade device list - criteria: {criteria}",
-                 "# One serial per line; text after # is ignored. Delete a line to drop a device; the file is the list that is used."]
-        lines += [f"{r.serial}   # {r.hostname}  {r.sw_version}  {r.ha_state or '-'}" for r in chosen]
-        Path(args.out).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        _write_list(args.out, chosen, criteria)
         print(f"Wrote {args.out}")
     return 0
 

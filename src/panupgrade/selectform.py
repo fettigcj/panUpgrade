@@ -16,7 +16,9 @@ from .planner import Selection
 from .versions import Version, VersionError
 
 TEXT, LIST = "text", "list"
-FILTER, AVAILABLE, INCLUDED, SAVE = "filter", "available", "included", "save"
+FILTER, AVAILABLE, INCLUDED, SAVE, BUTTONS = "filter", "available", "included", "save", "buttons"
+BUTTON_LABELS = ["Save", "Save & Exit", "Quit without saving"]
+SAVE_ONLY, SAVE_EXIT, QUIT = 0, 1, 2
 INPUT, MODE = "input", "mode"
 NOTHING = "everything Panorama manages"
 
@@ -47,9 +49,10 @@ HELP = {
     FILTER: "Tab: next filter   Up / Down: mode row, input row, tables   Left / Right: change mode or pick a known value",
     AVAILABLE: "Space / Enter: add to Included   A: add all listed   Up / Down / PgUp / PgDn: move   Tab: next section",
     INCLUDED: "Space / Enter / D: take out   C: clear the list   Up / Down / PgUp / PgDn: move   Tab: next section",
-    SAVE: "Type a file name to save the list, or leave it empty to just look.   Enter: done",
+    SAVE: "Type the file name the list is saved to (empty: no file).   Enter: go to the buttons",
+    BUTTONS: "Left / Right: choose a button   Enter or Space: press it   Up: back to the file name",
 }
-ALWAYS = "Ctrl-D: done   Esc: cancel"
+ALWAYS = "Shortcuts: Ctrl-D = Save & Exit   Esc = Quit without saving (asks first if there are unsaved changes)"
 
 
 def _wrap(term):
@@ -80,7 +83,7 @@ def _choices(refs):
 
 
 class Form:
-    def __init__(self, refs, initial=None, out="", notice=""):
+    def __init__(self, refs, initial=None, out="", notice="", saver=None):
         self.refs = sorted(refs, key=lambda r: r.hostname.lower())
         self.choices = _choices(refs)
         self.values = {}
@@ -97,7 +100,9 @@ class Form:
                     break
         wanted = set(initial.serials)                         # a list of serials given up front is the Included list itself
         self.included = [r.serial for r in self.refs if r.serial in wanted]
-        self.start = list(self.included)
+        self.start = list(self.included)                       # what is on disk, as far as the form knows
+        self.saver = saver                                     # saver(form) writes the list and returns a message
+        self.button = SAVE_EXIT
         self.out = out or ""
         self.zone, self.fcol, self.frow = FILTER, 0, INPUT
         self.cursor = {AVAILABLE: 0, INCLUDED: 0}
@@ -169,35 +174,75 @@ class Form:
         if key == "ctrl-c":
             return "cancel"
         if key == "esc":
-            if self.included != self.start and not was_armed:
+            if self.dirty() and not was_armed:
                 self.armed = True
                 self.message = "!Your Included list has not been saved. Press Esc again to throw it away, or any other key to carry on."
                 return None
             return "cancel"
         if key == "ctrl-d":
-            return self._finish()
+            return self._save_and_exit()
         if key in ("tab", "shift-tab"):
             self._step(1 if key == "tab" else -1)
         elif self.zone == FILTER:
             self._filter_key(key)
         elif self.zone == SAVE:
-            return self._save_key(key)
+            self._save_key(key)
+        elif self.zone == BUTTONS:
+            return self._button_key(key)
         else:
             self._table_key(key)
         return None
 
-    def _finish(self):
+    def dirty(self):
+        """True when the Included list differs from the last time it was saved (or from how it started)."""
+        return self.included != self.start
+
+    def _problem(self):
         if self.errors():
-            self.message = "!Fix the red filter first."
-        elif not self.included:
-            self.message = "!The Included list is empty. Move firewalls into it from Available (Space), or press A to add all of them."
-        else:
-            return "accept"
+            return "Fix the red filter first."
+        if not self.included:
+            return "The Included list is empty. Move firewalls into it from Available (Space), or press A to add all of them."
+        return ""
+
+    def _save(self, need_name):
+        """Write the list now, if there is somewhere to write it. Returns True when the form may carry on to exit."""
+        problem = self._problem()
+        if not problem and need_name and not self.out.strip():
+            problem = "Type a file name in 'Save the list to' first."
+        if problem:
+            self.message = "!" + problem
+            return False
+        if self.out.strip() and self.saver:
+            try:
+                self.message = self.saver(self)
+            except OSError as exc:
+                self.message = f"!Could not save: {exc.strerror or exc}"
+                return False
+        self.start = list(self.included)
+        return True
+
+    def _save_and_exit(self):
+        return "accept" if self._save(need_name=False) else None
+
+    def _button_key(self, key):
+        if key == "left":
+            self.button = max(self.button - 1, 0)
+        elif key == "right":
+            self.button = min(self.button + 1, len(BUTTON_LABELS) - 1)
+        elif key == "up":
+            self.zone = SAVE
+        elif key in ("enter", " "):
+            if self.button == SAVE_ONLY:
+                self._save(need_name=True)
+            elif self.button == SAVE_EXIT:
+                return self._save_and_exit()
+            else:
+                return "cancel"
         return None
 
     def _step(self, delta):
-        ring = [(FILTER, i) for i in range(len(COLUMNS))] + [(AVAILABLE, 0), (INCLUDED, 0), (SAVE, 0)]
-        here = self.fcol if self.zone == FILTER else len(COLUMNS) + [AVAILABLE, INCLUDED, SAVE].index(self.zone)
+        ring = [(FILTER, i) for i in range(len(COLUMNS))] + [(AVAILABLE, 0), (INCLUDED, 0), (SAVE, 0), (BUTTONS, 0)]
+        here = self.fcol if self.zone == FILTER else len(COLUMNS) + [AVAILABLE, INCLUDED, SAVE, BUTTONS].index(self.zone)
         zone, col = ring[(here + delta) % len(ring)]
         if zone == FILTER:
             if self.zone != FILTER:
@@ -300,9 +345,9 @@ class Form:
         self._clamp()
 
     def _save_key(self, key):
-        if key == "enter":
-            return self._finish()
-        if key == "up":
+        if key in ("enter", "down"):
+            self.zone, self.button = BUTTONS, SAVE_EXIT
+        elif key == "up":
             self.zone = INCLUDED
         elif key == "backspace":
             self.out = self.out[:-1]
@@ -310,7 +355,6 @@ class Form:
             self.out = ""
         elif len(key) == 1 and key.isprintable():
             self.out += key
-        return None
 
     # ---- drawing
     def _widths(self, total):
@@ -368,7 +412,7 @@ class Form:
         lines.append(self._in_effect())
         lines.append([])
 
-        fixed = len(lines) + 5                                   # two table headings, the gaps before the second table and the save line
+        fixed = len(lines) + 7                                   # two table headings, the gaps before the second table and the save line
         room = max(height - fixed, 6)
         top = max(3, (room + 1) // 2)
         bottom = max(3, room - top)
@@ -406,6 +450,14 @@ class Form:
                       ("focus" if here else "", f"[{self.out}{'_' if here else ''}".ljust(32) + "]"),
                       ("dim", "  plan, prepare and upgrade use this file when you don't name firewalls" if self.out.strip()
                        else "  not saved: later commands will need --serial or --serials-file")])
+        lines.append([])
+        buttons = [("", "   ")]
+        for n, label in enumerate(BUTTON_LABELS):
+            on = self.zone == BUTTONS and self.button == n
+            buttons += [("focus" if on else "bold", f"[ {label} ]"), ("", "  ")]
+        if self.dirty():
+            buttons.append(("warn", "unsaved changes"))
+        lines.append([(style, text) for style, text in buttons])
         return [self._cut(line, width - 1) for line in lines[:height]]
 
     def in_effect(self):

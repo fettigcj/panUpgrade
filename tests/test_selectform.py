@@ -48,15 +48,15 @@ class Filters(unittest.TestCase):
 
     def test_tab_walks_across_the_filters_then_the_tables_then_the_save_box_and_round_again(self):
         seen = []
-        for _ in range(len(selectform.COLUMNS) + 4):
+        for _ in range(len(selectform.COLUMNS) + 5):
             seen.append((self.form.zone, self.form.fcol))
             self.form.press("tab")
         self.assertEqual([z for z, _c in seen[:7]], ["filter"] * 7)
         self.assertEqual([c for _z, c in seen[:7]], list(range(7)))
-        self.assertEqual([z for z, _c in seen[7:]], ["available", "included", "save", "filter"])
+        self.assertEqual([z for z, _c in seen[7:]], ["available", "included", "save", "buttons", "filter"])
         fresh = selectform.Form(REFS)
         fresh.press("shift-tab")
-        self.assertEqual(fresh.zone, "save")
+        self.assertEqual(fresh.zone, "buttons")
 
     def test_typing_in_a_column_filter_narrows_the_available_table_as_you_go(self):
         keys(self.form, *typing("site1-*"))
@@ -156,9 +156,11 @@ class Lists(unittest.TestCase):
         keys(self.form, " ")
         self.assertEqual(self.form.press("ctrl-d"), "accept")
 
-    def test_enter_in_the_save_box_is_done(self):
+    def test_enter_in_the_save_box_moves_on_to_the_buttons_and_enter_there_saves_and_exits(self):
         keys(self.form, " ", "tab", "tab", *typing("my.txt"))
         self.assertEqual(self.form.out, "my.txt")
+        self.assertIsNone(self.form.press("enter"))
+        self.assertEqual((self.form.zone, self.form.button), ("buttons", selectform.SAVE_EXIT))
         self.assertEqual(self.form.press("enter"), "accept")
 
     def test_escape_asks_twice_when_a_list_would_be_lost_and_once_when_not(self):
@@ -275,6 +277,75 @@ class WildcardsAndKeys(unittest.TestCase):
         self.assertEqual(selectform.translate_windows_key(0x41, "a", 0), "a")
         self.assertEqual(selectform.translate_windows_key(0x55, chr(21), 0x08), "ctrl-u")
         self.assertEqual(selectform.translate_windows_key(0x10, chr(0), 0x10), "")      # Shift pressed on its own
+
+
+class Buttons(unittest.TestCase):
+    def setUp(self):
+        self.saved = []
+        self.form = selectform.Form(REFS, out="list.txt", saver=lambda f: self.saved.append(list(f.included)) or f"Saved {len(f.included)}.")
+        keys(self.form, "down", " ", " ")                        # two firewalls into Included
+        keys(self.form, "tab", "tab", "tab")                     # Available -> Included -> save box -> buttons
+        self.assertEqual(self.form.zone, "buttons")
+
+    def test_the_three_buttons_are_drawn_and_the_focused_one_is_marked(self):
+        text = screen(self.form)
+        for label in ("[ Save ]", "[ Save & Exit ]", "[ Quit without saving ]", "unsaved changes"):
+            self.assertIn(label, text)
+        focused = [t for s, t in self.form.render(110, 36)[-1] if s == "focus"]
+        self.assertEqual(focused, ["[ Save & Exit ]"])
+
+    def test_save_writes_now_and_stays_open_and_clears_the_unsaved_marker(self):
+        keys(self.form, "left")
+        self.assertIsNone(self.form.press("enter"))
+        self.assertEqual(len(self.saved), 1)
+        self.assertEqual(len(self.saved[0]), 2)
+        self.assertEqual(self.form.message, "Saved 2.")
+        self.assertFalse(self.form.dirty())
+        self.assertNotIn("warn", [style for style, _t in self.form.render(110, 36)[-1]])
+
+    def test_save_and_exit_saves_then_finishes(self):
+        self.assertEqual(self.form.press("enter"), "accept")
+        self.assertEqual(len(self.saved), 1)
+
+    def test_quit_without_saving_leaves_at_once_and_writes_nothing(self):
+        keys(self.form, "right")
+        self.assertEqual(self.form.press("enter"), "cancel")
+        self.assertEqual(self.saved, [])
+
+    def test_ctrl_d_is_save_and_exit_from_anywhere(self):
+        form = selectform.Form(REFS, out="list.txt", saver=lambda f: "ok")
+        keys(form, "down", " ")
+        self.assertEqual(form.press("ctrl-d"), "accept")
+
+    def test_save_needs_something_included_and_a_file_name(self):
+        empty = selectform.Form(REFS, out="list.txt", saver=lambda f: "ok")
+        empty.zone = "buttons"
+        keys(empty, "left")
+        self.assertIsNone(empty.press("enter"))
+        self.assertIn("Included list is empty", empty.message)
+        nameless = selectform.Form(REFS, out="", saver=lambda f: "ok")
+        keys(nameless, "down", " ", "tab", "tab", "tab", "left")
+        self.assertIsNone(nameless.press("enter"))
+        self.assertIn("Type a file name", nameless.message)
+        keys(nameless, "right")
+        self.assertEqual(nameless.press("enter"), "accept")        # Save & Exit with no file name just returns the list
+
+    def test_a_save_that_fails_says_why_and_keeps_the_form_open(self):
+        def broken(form):
+            raise PermissionError(13, "Permission denied")
+        form = selectform.Form(REFS, out="list.txt", saver=broken)
+        keys(form, "down", " ", "tab", "tab", "tab")
+        self.assertIsNone(form.press("enter"))
+        self.assertIn("Could not save: Permission denied", form.message)
+        self.assertTrue(form.dirty())
+
+    def test_escape_no_longer_nags_once_the_list_has_been_saved(self):
+        keys(self.form, "left", "enter")
+        self.assertEqual(self.form.press("esc"), "cancel")
+
+    def test_up_from_the_buttons_goes_back_to_the_file_name(self):
+        keys(self.form, "up")
+        self.assertEqual(self.form.zone, "save")
 
 
 class HiddenFilters(unittest.TestCase):

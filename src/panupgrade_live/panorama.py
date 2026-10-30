@@ -73,6 +73,9 @@ def _tls(verify_tls=None):
 
 def load_accounts(path):
     """The credentials file: a Python-style dict {'account': 'password', ...}. Only the names are ever shown."""
+    if not Path(path).is_file():
+        raise SourceError(f"there is no credentials file at {path}. Create one holding {{'account': 'password'}}, keep it in your own "
+                          f"home folder, and point to it with --creds-file or PANUPGRADE_CREDS") from None
     try:
         data = ast.literal_eval(Path(path).read_text(encoding="utf-8").strip())
     except (OSError, ValueError, SyntaxError) as exc:

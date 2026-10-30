@@ -32,7 +32,8 @@ def _quote(value, windows):
 
 def upgrade_argv(args, serials_file, approval_file, journal_file):
     """The upgrade command as a list, rebuilt from how ``prepare`` was invoked."""
-    argv = ["python", "-m", "panupgrade", "upgrade", "--source", args.source, "--serials-file", str(serials_file),
+    where = ["--panorama", args.source[len("panorama:"):]] if args.source.startswith("panorama:") else ["--source", args.source]
+    argv = ["python", "-m", "panupgrade", "upgrade", *where, "--serials-file", str(serials_file),
             "--target", args.target, "--approval", str(approval_file), "--journal", str(journal_file)]
     for flag, value in (("--settings", args.settings), ("--creds-file", args.creds_file), ("--key-file", args.key_file),
                         ("--path-rules", args.path_rules)):

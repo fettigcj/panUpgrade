@@ -29,7 +29,7 @@ Passwords are never printed or logged.
 No target version needed. It reads every firewall Panorama manages (or the ones your criteria select) and says what needs attention, which PAN-OS versions are running, and how each firewall looks.
 
 ```powershell
-panupgrade report --source panorama:<panorama-address>
+panupgrade report --panorama <panorama-address>
 ```
 
 ### 1. Pick the firewalls (changes nothing)
@@ -37,7 +37,7 @@ panupgrade report --source panorama:<panorama-address>
 Criteria combine. The output is a list you check and edit.
 
 ```powershell
-panupgrade select --source panorama:<panorama-address> --version-is 10.2.1 --name-contains <text> --out firewalls.txt
+panupgrade select --panorama <panorama-address> --version-is 10.2.1 --name-contains <text> --out firewalls.txt
 ```
 
 Criteria: `--name-contains`, `--name` (glob), `--version-is` (glob), `--version-older-than`, `--version-newer-than`, `--ha-state`, `--model`, `--device-group`, `--tag`, `--serial`. Use `--serials-file firewalls.txt` in every command below.
@@ -47,7 +47,7 @@ Criteria: `--name-contains`, `--name` (glob), `--version-is` (glob), `--version-
 What would happen to each firewall, why some are blocked, and what needs your acknowledgement. The output lists blocked firewalls first and counts routine skipped checks instead of listing them (`--verbose` lists every check).
 
 ```powershell
-panupgrade plan --source panorama:<panorama-address> --serials-file firewalls.txt --target 10.2.2 --settings settings.toml --xlsx readiness.xlsx
+panupgrade plan --panorama <panorama-address> --serials-file firewalls.txt --target 10.2.2 --settings settings.toml --xlsx readiness.xlsx
 ```
 
 ### 3. Prepare (optional, makes the window shorter and calmer)
@@ -63,11 +63,11 @@ It never installs, reboots or fails anything over. Whatever it cannot fix stays 
 Dry run first, then the real thing. The real run shows exactly what you are approving and asks you to type APPROVE.
 
 ```powershell
-panupgrade prepare --dry-run --source panorama:<panorama-address> --serials-file firewalls.txt --target 10.2.2 --settings settings.toml
+panupgrade prepare --dry-run --panorama <panorama-address> --serials-file firewalls.txt --target 10.2.2 --settings settings.toml
 ```
 
 ```powershell
-panupgrade prepare --source panorama:<panorama-address> --serials-file firewalls.txt --target 10.2.2 --settings settings.toml
+panupgrade prepare --panorama <panorama-address> --serials-file firewalls.txt --target 10.2.2 --settings settings.toml
 ```
 
 When it finishes, `prepare` writes the **upgrade kit** into `prepared\` (change with `--kit-dir`):
@@ -91,7 +91,7 @@ The approval holds only while the plan is unchanged (the firewalls, their versio
 To rehearse the upgrade against a model of the fleet (asks nothing, changes nothing):
 
 ```powershell
-panupgrade upgrade --dry-run --source panorama:<panorama-address> --serials-file firewalls.txt --target 10.2.2 --settings settings.toml
+panupgrade upgrade --dry-run --panorama <panorama-address> --serials-file firewalls.txt --target 10.2.2 --settings settings.toml
 ```
 
 You can also skip `prepare` and run `upgrade` without `--dry-run`. It then shows the plan and asks you to type APPROVE.

@@ -24,8 +24,77 @@ from .sources import FakeFleet, SourceError, snapshot
 
 
 
+_SAID = set()
+
+
+def _tilde(path):
+    """A path as the person would type it: under their home folder it starts with ~."""
+    full = Path(path).expanduser()
+    try:
+        return os.path.join("~", str(full.resolve().relative_to(Path.home().resolve())))
+    except ValueError:
+        return str(full)
+
+
+def _in_home(path):
+    try:
+        Path(path).expanduser().resolve().relative_to(Path.home().resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _origin(value, env_name, builtin):
+    """Where a value came from, so the person can see what to change: the environment variable, the built-in default or a flag."""
+    if os.environ.get(env_name) and value == os.environ[env_name]:
+        return f"from {env_name}"
+    return "built-in default" if value == builtin else "set with a flag"
+
+
+def _announce_connection(args, writing=False):
+    """Say, once per run, what the tool is about to connect to and who it will be: credentials are never shown, only whose they are."""
+    style = _style(args)
+    if writing and ("writing", args.source) not in _SAID:
+        _SAID.add(("writing", args.source))
+        _announce_connection(args)
+        print(style.line("warn", f"Changes will be made as: {args.work_account} ({_origin(args.work_account, 'PANUPGRADE_WORK_ACCOUNT', 'panupgrade-write')})"))
+        return
+    key = ("connection", args.source)
+    if key in _SAID:
+        return
+    _SAID.add(key)
+    if args.source.startswith("fake:"):
+        print(style.line("info", f"Using the invented fleet in {_tilde(args.source[5:])}: a simulation, no real firewall is contacted"))
+        return
+    from .site import verify_tls
+    address = args.source[len("panorama:"):]
+    print(style.line("info", f"Panorama: {address}, " + ("certificate checked" if verify_tls() else "certificate NOT checked (lab use only)")))
+    if args.key_file:
+        print(style.line("info", f"Signing in with the API key in {_tilde(args.key_file)} (--key-file)"))
+        return
+    creds = args.creds_file or DEFAULT_CREDS
+    print(style.line("info", f"Credentials file: {_tilde(creds)} ({'set with --creds-file' if args.creds_file else ('from PANUPGRADE_CREDS' if os.environ.get('PANUPGRADE_CREDS') else 'default location')})"))
+    if not _in_home(creds):
+        print(style.line("warn", "That file is outside your home folder. Credentials should be personal: one account per person, never a shared file."))
+    print(style.line("info", f"Reading as: {args.account} ({_origin(args.account, 'PANUPGRADE_READ_ACCOUNT', 'panupgrade-read')}; "
+                              f"this account should be read-only)"))
+
+
+def _load_settings(args):
+    """Load the settings and say, once, where they came from."""
+    settings = settings_mod.load(args.settings, args.set)
+    if ("settings", args.settings) not in _SAID:
+        _SAID.add(("settings", args.settings))
+        style = _style(args)
+        origin = f"settings file {_tilde(args.settings)}" if args.settings else "built-in default settings (no settings file given)"
+        extra = f", with {len(args.set)} changed on the command line" if args.set else ""
+        print(style.line("info", f"Using {origin}{extra}"))
+    return settings
+
+
 def _source(args):
     spec, key_file, record = args.source, args.key_file, args.record
+    _announce_connection(args, writing=getattr(args, "_writing", False))
     if spec.startswith("fake:"):
         return FakeFleet.from_file(spec[len("fake:"):])
     if spec.startswith("panorama:"):
@@ -65,7 +134,7 @@ def _style(args):
 
 
 def _build(args, source=None):
-    settings = settings_mod.load(args.settings, args.set)
+    settings = _load_settings(args)
     rules = paths.load_rules(args.path_rules) if args.path_rules else None
     source = source or _source(args)
     return build_plan(source, args.target, settings, _selection(args), rules), settings
@@ -318,8 +387,9 @@ def _backend_and_source(args):
                 raise SystemExit("--sim-fail is for the simulator only")
             from panupgrade_live.backend import LiveBackend
             from panupgrade_live.panorama import PanoramaApi, RateLimiter, key_from_account, write_api
+            _announce_connection(args, writing=True)
             address, creds = args.source[len("panorama:"):], args.creds_file or DEFAULT_CREDS
-            settings = settings_mod.load(args.settings, args.set)
+            settings = _load_settings(args)
             limiter = RateLimiter(settings.api_rate_per_s)           # one politeness budget for every worker, reads and writes
             read_api = PanoramaApi(address, key=key_from_account(address, creds, args.account), limiter=limiter)
             work_api = write_api(address, creds, args.work_account, limiter=limiter)
@@ -395,7 +465,7 @@ def _upgrade(args):
 def _prepare(args):
     style = _style(args)
     try:
-        settings = settings_mod.load(args.settings, args.set)
+        settings = _load_settings(args)
         rules = paths.load_rules(args.path_rules) if args.path_rules else None
         backend, fleet, label = _backend_and_source(args)
         plan = prepare_mod.build(fleet, settings, _selection(args), args.target, rules)
@@ -560,7 +630,9 @@ def _settings(args):
 def _selection_args(p):
     """Connection options and the filters that choose which firewalls a command looks at (all of them by default)."""
     conn = p.add_argument_group("connect to Panorama")
-    conn.add_argument("--source", required=True, help="panorama:<address> (read-only), or fake:<fleet.json> to try it without a firewall")
+    where = conn.add_mutually_exclusive_group(required=True)
+    where.add_argument("--panorama", metavar="ADDRESS", help="the Panorama that manages your firewalls (name or IP address)")
+    where.add_argument("--source", help="fake:<fleet.json> to try the tool on an invented fleet, with no firewall involved")
     conn.add_argument("--creds-file", help=f"credentials file, a dict of account -> password (default {DEFAULT_CREDS}, or set PANUPGRADE_CREDS); never printed")
     conn.add_argument("--account", default=DEFAULT_READ_ACCOUNT,
                       help=f"which account in the credentials file to read with (default {DEFAULT_READ_ACCOUNT}, or set PANUPGRADE_READ_ACCOUNT); use a read-only one")
@@ -588,10 +660,10 @@ def _selection_args(p):
 OVERVIEW = """panupgrade: upgrade Palo Alto firewalls through Panorama, safely.
 
 The usual order (everything but prepare and upgrade only reads):
-  report    what state is the fleet in right now?                        panupgrade report --source panorama:<address>
-  plan      what would an upgrade to a version do, and what blocks it?   panupgrade plan --source ... --target 10.2.2
-  prepare   get ready ahead of the window, then write the run script     panupgrade prepare --source ... --target 10.2.2
-  upgrade   carry out an approved upgrade (the script does this)         panupgrade upgrade --source ... --approval FILE
+  report    what state is the fleet in right now?                        panupgrade report --panorama <address>
+  plan      what would an upgrade to a version do, and what blocks it?   panupgrade plan --panorama <address> --target 10.2.2
+  prepare   get ready ahead of the window, then write the run script     panupgrade prepare --panorama <address> --target 10.2.2
+  upgrade   carry out an approved upgrade (the script does this)         panupgrade upgrade --panorama <address> --approval FILE
 
 Helpers:
   select    build a firewall list from filters, to check and edit
@@ -690,6 +762,8 @@ def main(argv=None):
     st.set_defaults(func=_settings)
 
     args = parser.parse_args(argv)
+    if getattr(args, "panorama", None):
+        args.source = "panorama:" + args.panorama
     if getattr(args, "insecure_tls", False):
         os.environ["PANUPGRADE_INSECURE_TLS"] = "1"
     return args.func(args)

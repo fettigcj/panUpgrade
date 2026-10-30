@@ -659,7 +659,7 @@ class KitWriting(unittest.TestCase):
     def test_windows_script_is_a_bat_with_the_exact_command(self):
         files, name = self.make(True)
         self.assertTrue(name.endswith(".bat"))
-        self.assertIn("python -m panupgrade upgrade --source panorama:192.0.2.1", files["script"])
+        self.assertIn("python -m panupgrade upgrade --panorama 192.0.2.1", files["script"])
         self.assertIn("--set sync_to_peer=upgrade", files["script"])
         self.assertIn("--approval", files["script"])
         self.assertIn("--account reader --work-account writer", files["script"])      # pinned, so the script does not depend on the environment it is run under

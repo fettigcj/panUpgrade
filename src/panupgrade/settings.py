@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """User-tunable settings: one plain TOML file, strict types, safe defaults.
 
 Secrets never appear here. Credentials are *paths* to files (keys ending in

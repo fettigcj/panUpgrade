@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """Command line: ``select`` and ``plan`` (read-only), ``prepare`` and ``upgrade`` (real with a live source, a rehearsal with --dry-run or a fake source), ``settings``."""
 
 import argparse

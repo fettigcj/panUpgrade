@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """Preflight checks. Pure functions: context in, CheckResult out, no I/O.
 
 A check that cannot decide returns skip/no_data. A check that crashes becomes an

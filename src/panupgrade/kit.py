@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """The upgrade kit: what ``prepare`` leaves behind so the upgrade window is one command.
 
 Three files, written side by side once the preparation is done. There is no second prompt: the kit is the offer, and

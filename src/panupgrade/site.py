@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """Per-site defaults, taken from the environment so nothing about one installation is baked into the code."""
 
 import os

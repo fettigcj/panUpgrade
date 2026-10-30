@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Licensed under GPL-3.0-or-later.
 - Plan output grouped by verdict (blocked first), routine skipped checks counted instead of listed (`--verbose` lists them), identical step lists shared.
 - Credentials path and account names are configurable (`PANUPGRADE_CREDS`, `PANUPGRADE_READ_ACCOUNT`, `PANUPGRADE_WORK_ACCOUNT`); upgrade kits pin them explicitly.
 - Panorama TLS certificates are now verified by default; `--insecure-tls` / `PANUPGRADE_INSECURE_TLS=1` opts out with a warning.

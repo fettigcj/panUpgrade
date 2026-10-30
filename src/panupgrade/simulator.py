@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """An in-memory fleet that behaves like paired and standalone firewalls, for rehearsing an execution.
 
 Nothing here is a model of real PAN-OS timing or output; it exists so the executor's

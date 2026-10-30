@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """Plain data shared by sources, checks, planner and reports.
 
 Vocabulary is panInventory's: pass / warn / fail / skip / info / error, with skip

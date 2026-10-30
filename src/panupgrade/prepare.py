@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """Pre-maintenance task: smooth out what can be smoothed ahead of the upgrade window, so the window itself goes quicker.
 
 What it does, for the selected firewalls:

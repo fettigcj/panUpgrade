@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """Read-only access to Panorama's XML API, with per-firewall ``op`` proxied through Panorama (``target=<serial>``).
 
 The API key is read from a file whose path the caller supplies; its content is never printed or logged.

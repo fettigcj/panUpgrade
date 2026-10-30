@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """Read-only device queries as parsers over an ``op`` callable, plus a canned-XML double.
 
 ``op(command)`` takes an operational command as free text (for example

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """Certificate-expiry advisories: is this PAN-OS build (and content) one that carries the fix?
 
 Older builds ship certificates that have expired (the root/default certificate on 31 Dec 2023, the CDSS and Panorama

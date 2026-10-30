@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """Terminal output: ANSI colour and emoji chosen by OUTCOME, with a plain fallback.
 
 Every line carries a status glyph, so a long run can be scanned by shape and colour alone. The glyph is picked from what

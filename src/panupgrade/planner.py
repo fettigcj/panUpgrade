@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """Turn a source's facts into a plan: what would happen to each device, in what order.
 
 Read-only by construction: the planner only calls Source.list_devices() and

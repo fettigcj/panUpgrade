@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """Append-only record of an execution, one JSON object per line.
 
 Every step writes ``started`` before it acts and ``ok`` or ``failed`` after. On

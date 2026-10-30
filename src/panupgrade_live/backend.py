@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """The live Backend: carries out the executor's steps on real firewalls, through Panorama.
 
 Every step is one allow-listed command (see ``WriteApi.WRITE_ALLOWED``) plus polling with a read-only connection;

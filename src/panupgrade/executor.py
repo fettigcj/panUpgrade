@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """Carry out an approved plan against a Backend (today: only the simulator).
 
 Rules the code enforces, each with a test:

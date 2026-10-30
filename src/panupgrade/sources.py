@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """Where facts come from.
 
 FakeFleet is a JSON file describing an invented fleet, so the whole engine can be

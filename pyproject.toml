@@ -7,6 +7,8 @@ name = "panupgrade"
 version = "0.1.0.dev0"
 description = "Plan (and later run) PAN-OS upgrades across a Panorama-managed fleet: report first, change only on explicit say-so."
 readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 classifiers = [
   "Development Status :: 3 - Alpha",

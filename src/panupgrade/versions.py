@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """PAN-OS version strings: parse, order, and format.
 
 Order is (major, minor, maintenance, hotfix); "20.2.9" < "20.2.9-h1" < "20.2.10".

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """The only place that talks to a device, and only to read.
 
 Kept apart from ``panupgrade`` on purpose: the engine package is forbidden from importing anything that can

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """Render a plan as canonical JSON, readable text, and a self-contained HTML page.
 
 The HTML uses panInventory's design tokens by name (the :root set only). It is a

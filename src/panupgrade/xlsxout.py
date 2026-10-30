@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """A small .xlsx writer (standard library only) for the readiness workbook.
 
 Sheet 'Firewalls' keeps the columns of the legacy upgradeFirewalls.xlsx so reports line up side by side:

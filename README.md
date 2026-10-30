@@ -77,3 +77,7 @@ Standard library only. Fixtures are invented; a test fails if they contain real-
 ## Credits
 
 Ideas (dry run, pre/post snapshots, readiness checks, parallelism, direct and Panorama-proxied modes) are acknowledged from cdot65's `pan-os-upgrade` and `pan-os-upgrade-web`. This code is written clean-room; none of it is copied from those projects.
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE). Run it against anything you like; if you distribute a modified version, share its source under the same terms. As the license says, it comes with no warranty: test before you trust it with production firewalls.

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """Work out which releases to download and install to get from A to B.
 
 The rules about *which feature releases may be skipped* are data

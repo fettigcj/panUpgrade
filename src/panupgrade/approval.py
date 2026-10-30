@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 the panUpgrade contributors
+
 """The operator's go-ahead, as data: which plan, which devices, which cautions were acknowledged.
 
 Nothing executes without one. It names devices (never "all"), is bound to one plan

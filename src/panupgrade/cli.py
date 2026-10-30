@@ -558,27 +558,60 @@ def _settings(args):
 
 
 def _selection_args(p):
-    p.add_argument("--source", required=True, help="fake:<fleet.json> or panorama:<address> (read-only)")
-    p.add_argument("--creds-file", help=f"credentials file, a dict of account -> password (default {DEFAULT_CREDS}, or set PANUPGRADE_CREDS); never printed")
-    p.add_argument("--account", default=DEFAULT_READ_ACCOUNT,
-                   help=f"which account in the credentials file to read with (default {DEFAULT_READ_ACCOUNT}, or set PANUPGRADE_READ_ACCOUNT); use a read-only one")
-    p.add_argument("--insecure-tls", action="store_true",
-                   help="do not verify Panorama's TLS certificate (lab with a self-signed certificate only; or set PANUPGRADE_INSECURE_TLS=1)")
-    p.add_argument("--key-file", help="alternative to --creds-file: a file whose first line is an API key")
-    p.add_argument("--record", help="directory to save each raw device response, to build test fixtures")
-    p.add_argument("--serial", action="append", help="limit to this serial (repeatable)")
-    p.add_argument("--serials-file", help="file with one serial per line ('#' starts a comment); the output of `select`")
-    p.add_argument("--name", help="host name glob, e.g. 'site1-*'")
-    p.add_argument("--name-contains", help="host name contains this text")
-    p.add_argument("--version-is", help="running version matches this glob, e.g. '10.2.1' or '10.2.*'")
-    p.add_argument("--version-older-than", help="running version is older than this")
-    p.add_argument("--version-newer-than", help="running version is newer than this")
-    p.add_argument("--ha-state", action="append", help="HA state as Panorama reports it: active, passive, ... (repeatable)")
-    p.add_argument("--model", action="append")
-    p.add_argument("--device-group", action="append")
-    p.add_argument("--tag", action="append")
-    p.add_argument("--color", choices=["auto", "always", "never"], default="auto", help="ANSI colour (NO_COLOR is honoured)")
-    p.add_argument("--ascii", action="store_true", help="plain [ OK ]-style tags instead of emoji")
+    """Connection options and the filters that choose which firewalls a command looks at (all of them by default)."""
+    conn = p.add_argument_group("connect to Panorama")
+    conn.add_argument("--source", required=True, help="panorama:<address> (read-only), or fake:<fleet.json> to try it without a firewall")
+    conn.add_argument("--creds-file", help=f"credentials file, a dict of account -> password (default {DEFAULT_CREDS}, or set PANUPGRADE_CREDS); never printed")
+    conn.add_argument("--account", default=DEFAULT_READ_ACCOUNT,
+                      help=f"which account in the credentials file to read with (default {DEFAULT_READ_ACCOUNT}, or set PANUPGRADE_READ_ACCOUNT); use a read-only one")
+    conn.add_argument("--insecure-tls", action="store_true",
+                      help="do not verify Panorama's TLS certificate (lab with a self-signed certificate only; or set PANUPGRADE_INSECURE_TLS=1)")
+    conn.add_argument("--key-file", help="alternative to --creds-file: a file whose first line is an API key")
+    conn.add_argument("--record", help="directory to save each raw device response, to build test fixtures")
+    pick = p.add_argument_group("choose which firewalls (filters combine; with none, every firewall)")
+    pick.add_argument("--serial", action="append", help="this serial (repeatable)")
+    pick.add_argument("--serials-file", help="file with one serial per line ('#' starts a comment); the output of `select`")
+    pick.add_argument("--name", help="host name glob, e.g. 'site1-*'")
+    pick.add_argument("--name-contains", help="host name contains this text")
+    pick.add_argument("--version-is", help="running version matches this glob, e.g. '10.2.1' or '10.2.*'")
+    pick.add_argument("--version-older-than", help="running version is older than this")
+    pick.add_argument("--version-newer-than", help="running version is newer than this")
+    pick.add_argument("--ha-state", action="append", help="HA state as Panorama reports it: active, passive, ... (repeatable)")
+    pick.add_argument("--model", action="append")
+    pick.add_argument("--device-group", action="append")
+    pick.add_argument("--tag", action="append")
+    look = p.add_argument_group("how it looks")
+    look.add_argument("--color", choices=["auto", "always", "never"], default="auto", help="ANSI colour (NO_COLOR is honoured)")
+    look.add_argument("--ascii", action="store_true", help="plain [ OK ]-style tags instead of emoji")
+
+
+OVERVIEW = """panupgrade: upgrade Palo Alto firewalls through Panorama, safely.
+
+The usual order (everything but prepare and upgrade only reads):
+  report    what state is the fleet in right now?                        panupgrade report --source panorama:<address>
+  plan      what would an upgrade to a version do, and what blocks it?   panupgrade plan --source ... --target 10.2.2
+  prepare   get ready ahead of the window, then write the run script     panupgrade prepare --source ... --target 10.2.2
+  upgrade   carry out an approved upgrade (the script does this)         panupgrade upgrade --source ... --approval FILE
+
+Helpers:
+  select    build a firewall list from filters, to check and edit
+  settings  show every setting and its current value
+  help      this page; `panupgrade help <command>` shows that command's options
+
+Every command takes the same filters to choose firewalls (default: all of them):
+  --name-contains TEXT   --name GLOB   --version-is 10.2.*   --version-older-than V   --version-newer-than V
+  --ha-state active      --model M     --device-group G      --tag T      --serial S   --serials-file FILE
+
+Set up once (or pass as flags): PANUPGRADE_CREDS, PANUPGRADE_READ_ACCOUNT, PANUPGRADE_WORK_ACCOUNT.
+Full guide: docs/running.md
+"""
+
+
+def _help(args):
+    if args.topic:
+        return main([args.topic, "--help"])
+    sys.stdout.write(OVERVIEW)
+    return 0
 
 
 def _plan_args(p):
@@ -606,13 +639,17 @@ def _run_args(p, journal_required=False):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="panupgrade", description="Plan PAN-OS upgrades; rehearse them against a simulator.")
+    parser = argparse.ArgumentParser(prog="panupgrade", description="Upgrade Palo Alto firewalls through Panorama, safely. Run `panupgrade help` for the order to use the commands in.", epilog="Run `panupgrade help` for an overview.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sel = sub.add_parser("select", help="build the device list from criteria, for you to check and edit; changes nothing")
     _selection_args(sel)
     sel.add_argument("--out", help="write the list here (one serial per line) for --serials-file")
     sel.set_defaults(func=_select)
+
+    hp = sub.add_parser("help", help="what each command is for and the order to use them")
+    hp.add_argument("topic", nargs="?", help="a command to show the options of")
+    hp.set_defaults(func=_help)
 
     rep = sub.add_parser("report", help="show the state of the fleet right now (versions, HA, sync, content); changes nothing")
     _selection_args(rep)

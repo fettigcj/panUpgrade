@@ -90,7 +90,8 @@ def render(report, style, address=""):
     devices = report["devices"]
     by_serial = {d["serial"]: d for d in devices}
     out = [style.bold(f"Fleet report{' for ' + address if address else ''}"),
-           f"{len(devices)} firewalls: {report['pairs']} HA pairs and {report['standalone']} standalone"
+           f"{len(devices)} firewall{'s' if len(devices) != 1 else ''}: {report['pairs']} HA pair{'s' if report['pairs'] != 1 else ''} "
+           f"and {report['standalone']} standalone"
            f"  |  Panorama {report['panorama_version'] or 'unknown'}  |  nothing was changed", ""]
     if report["attention"]:
         out.append(style.bold(f"Needs attention ({len(report['attention'])} firewalls)"))

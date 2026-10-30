@@ -180,7 +180,7 @@ class EventPrinter:
 def render_outcomes(result, names, style):
     mapping = {"done": "ok", "failed": "fail", "held": "held", "needs_attention": "stop", "paused": "pause", "stopped": "stop",
                "not_started": "skip", "not_approved": "skip"}
-    lines = [""]
+    lines = ["", style.bold("Result")]
     for serial, (state, detail) in result["outcome"].items():
         kind, parts = mapping.get(state, "info"), [p for p in (detail or "").split("; ") if p]
         if len(parts) <= 1 and len(detail or "") <= 70:
@@ -188,8 +188,11 @@ def render_outcomes(result, names, style):
         else:                                                        # several things to say: one per line, not one long string
             lines.append(style.line(kind, f"{names.get(serial, serial)}: {state}"))
             lines += [style.bullet(p) for p in parts]
-    lines.append(style.line("stop" if result["stopped"] else ("fail" if result["failures"] else "ok"),
-                            f"failed devices: {result['failures']}" + ("  (stopped: failure limit reached)" if result["stopped"] else "")))
+    done = sum(1 for state, _ in result["outcome"].values() if state == "done")
+    verdict = f"{done} of {len(result['outcome'])} firewalls finished, {result['failures']} failed"
+    if result["stopped"]:
+        verdict += ". Stopped early: the failure limit was reached, so nothing further was started"
+    lines += ["", style.line("stop" if result["stopped"] else ("fail" if result["failures"] else "ok"), verdict)]
     return "\n".join(lines) + "\n"
 
 

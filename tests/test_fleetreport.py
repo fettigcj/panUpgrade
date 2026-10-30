@@ -46,6 +46,12 @@ class FleetReport(unittest.TestCase):
         self.assertIn("uncommitted", text["a1"])
         self.assertIn("not connected", text["c1"])
 
+    def test_the_url_database_never_counts_against_a_pair(self):
+        compat = {"build": "Match", "app": "Match", "threat": "Match", "av": "Match", "url": "Mismatch", "iot": "Unknown"}
+        r = self.report(dev("A", "a1", peer="B", ha_config_sync=True, ha_content_compat=compat),
+                        dev("B", "a2", peer="A", ha_config_sync=True, ha_content_compat=compat))
+        self.assertEqual(r["attention"], [])
+
     def test_the_text_leads_with_attention_then_versions_then_the_table(self):
         out = fleetreport.render(self.report(dev("A", "a1", pending_changes=True)), STYLE)
         self.assertLess(out.index("Needs attention"), out.index("PAN-OS versions"))

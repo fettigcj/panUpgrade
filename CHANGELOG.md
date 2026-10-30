@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- The fleet report no longer counts the PAN-DB URL version against an HA pair; only app, threat and av content are judged (the standby usually cannot reach the URL cloud).
 - Sign-in follows your setup: one account, separate read and change accounts, or a login typed at the prompt (`--ask-credentials changes|all`). No account names are assumed; a file with a single account needs no flag.
 - Licensed under GPL-3.0-or-later.
 - `--panorama ADDRESS` replaces `--source panorama:ADDRESS` (`--source fake:FILE` remains for the invented fleet). Commands now say which Panorama, credentials file (shown under ~ when in the home folder, with a warning when it is not), account and settings file they use.

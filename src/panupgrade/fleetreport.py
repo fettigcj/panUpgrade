@@ -12,6 +12,9 @@ from collections import Counter
 from . import console
 
 
+CHECKED_CONTENT = ("app", "threat", "av")
+
+
 def _facts(dev):
     return dev.get("facts") or {}
 
@@ -41,8 +44,10 @@ def _attention(devices):
         if facts.get("ha_config_sync") is False:
             note(dev, "HA config is not synchronized with its peer")
         compat = facts.get("ha_content_compat") or {}
-        bad = sorted(k for k, v in compat.items() if v == "Mismatch")
-        unknown = sorted(k for k, v in compat.items() if v == "Unknown")
+        # Only the content that moves with an upgrade, as prepare judges it. The PAN-DB URL version is left out: the standby
+        # often has no connection to the URL cloud, so it never matches, and PAN-OS's own HA health view ignores it too.
+        bad = sorted(k for k, v in compat.items() if k in CHECKED_CONTENT and v == "Mismatch")
+        unknown = sorted(k for k, v in compat.items() if k in CHECKED_CONTENT and v == "Unknown")
         if bad:
             note(dev, f"content does not match its HA peer ({', '.join(bad)})")
         if unknown:

@@ -184,7 +184,7 @@ def parse_ha(op):
     if _text(group, "local-info/preemptive"):
         out["preemption"] = _yes(_text(group, "local-info/preemptive"))
     # PAN-OS's own sanity check on whether the members' content can coexist. Seen 2026-10-29: "Match" on pairs whose config sync
-    # works, "Unknown" on pairs whose config sync is refused, "Mismatch" for the PAN-DB URL version (which does not matter here).
+    # works, "Unknown" on pairs whose config sync is refused, "Mismatch" for the PAN-DB URL version (never judged: the standby usually cannot reach the URL cloud).
     compat = {k: _text(group, f"local-info/{k}-compat") for k in ("build", "app", "threat", "av", "url", "iot")}
     if any(compat.values()):
         out["ha_content_compat"] = compat

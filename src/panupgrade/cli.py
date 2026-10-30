@@ -230,15 +230,52 @@ def _plan(args):
     return 0
 
 
+_FILTERS = ("serial", "serials_file", "name", "name_contains", "model", "device_group", "tag",
+            "version_is", "version_older_than", "version_newer_than", "ha_state")
+
+
+def _wants_form(args):
+    """The form opens when asked for (-i), and by itself when `select` is typed at a terminal with nothing to filter by."""
+    if args.interactive is False:
+        return False
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        if args.interactive:
+            raise SourceError("--interactive needs a terminal; give the filters as flags instead (see `panupgrade help select`)")
+        return False
+    return bool(args.interactive) or not (args.out or any(getattr(args, f, None) for f in _FILTERS))
+
+
+def _where(args):
+    return args.source[len("panorama:"):] if args.source.startswith("panorama:") else _tilde(args.source[len("fake:"):])
+
+
+def _command_line(args, flags):
+    """A command the user can paste to repeat the selection; values with anything unusual in them are double-quoted."""
+    def word(text):
+        return text if re.fullmatch(r"[A-Za-z0-9._:/\\~=+-]+", text) else '"' + text.replace('"', '\\"') + '"'
+    where = ("--panorama", args.source[len("panorama:"):]) if args.source.startswith("panorama:") else ("--source", args.source)
+    return "panupgrade select " + " ".join(f"{flag} {word(value)}" for flag, value in [where] + flags)
+
+
 def _select(args):
     """Build the list of devices from criteria, show it, and save it for the user to check and edit."""
     style = _style(args)
     try:
+        use_form = _wants_form(args)
         refs = _source(args).list_devices()
     except (SourceError, OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     selection = _selection(args)
+    if use_form:
+        from . import selectform
+        form = selectform.Form(refs, selection, args.out or "")
+        title = f"panupgrade select - {len(refs)} firewalls from {_where(args)}"
+        if not selectform.show(form, title):
+            print("Cancelled; nothing was selected.")
+            return 1
+        selection, args.out = form.selection(selection), form.values["out"].strip() or None
+        print(style.line("info", "To get this same list without the form: " + _command_line(args, form.flags())))
     chosen = [r for r in refs if selection.matches(r)]
     rows = [[i, r.hostname, r.serial, r.model, r.sw_version, r.ha_state or "-", r.device_group or "-",
              "yes" if r.connected else "NO"] for i, r in enumerate(chosen, 1)]
@@ -736,7 +773,7 @@ The usual order (everything but prepare and upgrade only reads):
   upgrade   carry out an approved upgrade (the script does this)         panupgrade upgrade --panorama <address> --approval FILE
 
 Helpers:
-  select    build a firewall list from filters, to check and edit
+  select    build a firewall list from filters, to check and edit (on a terminal it opens a fill-in form)
   settings  show every setting and its current value
   help      this page; `panupgrade help <command>` shows that command's options
 
@@ -789,6 +826,9 @@ def main(argv=None):
     sel = sub.add_parser("select", help="build the device list from criteria, for you to check and edit; changes nothing")
     _selection_args(sel)
     sel.add_argument("--out", help="write the list here (one serial per line) for --serials-file")
+    sel.add_argument("-i", "--interactive", action=argparse.BooleanOptionalAction, default=None,
+                     help="fill in the filters on a form: Tab moves between fields and the matching firewalls update as you type. "
+                          "Opens by itself when you run `select` at a terminal with no filters; --no-interactive turns that off")
     sel.set_defaults(func=_select)
 
     hp = sub.add_parser("help", help="what each command is for and the order to use them")

@@ -37,6 +37,16 @@ panupgrade report --panorama <panorama-address>
 
 Criteria combine. The output is a list you check and edit.
 
+**On a terminal, the easy way is the form.** Run `select` with no filters and a form opens:
+
+```powershell
+panupgrade select --panorama <panorama-address>
+```
+
+Tab (or Shift-Tab) moves between the filter fields. Left and Right fill a field with a value this fleet really has (a PAN-OS version, an HA state, a model, a device group, a tag). The list of matching firewalls underneath updates as you type. Enter accepts, Esc cancels. The last field saves the list to a file. When the form closes, `select` prints the flags that make the same list, so you can repeat it in a script. `-i` opens the form even when you give some filters (they pre-fill it), and `--no-interactive` never opens it.
+
+Or give the filters as flags, which is what scripts do:
+
 ```powershell
 panupgrade select --panorama <panorama-address> --version-is 10.2.1 --name-contains <text> --out firewalls.txt
 ```

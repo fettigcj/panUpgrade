@@ -1,7 +1,7 @@
 # Changelog
 
 ## Unreleased
-- `select` opens a fill-in form on a terminal: Tab between the filter fields, pick values the fleet really has with Left/Right, watch the matching firewalls update, and get the equivalent flags printed afterwards. `-i` / `--no-interactive` control it.
+- `select` opens a form on a terminal: filters sit above the table columns (with modes such as pattern / contains and is / older than / newer than), and Available and Included tables let you build the exact batch. The equivalent flags are printed afterwards. `-i` / `--no-interactive` control it.
 - The fleet report no longer counts the PAN-DB URL version against an HA pair; only app, threat and av content are judged (the standby usually cannot reach the URL cloud).
 - Sign-in follows your setup: one account, separate read and change accounts, or a login typed at the prompt (`--ask-credentials changes|all`). No account names are assumed; a file with a single account needs no flag.
 - Licensed under GPL-3.0-or-later.

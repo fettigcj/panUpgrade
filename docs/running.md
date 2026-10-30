@@ -43,7 +43,15 @@ Criteria combine. The output is a list you check and edit.
 panupgrade select --panorama <panorama-address>
 ```
 
-Tab (or Shift-Tab) moves between the filter fields. Left and Right fill a field with a value this fleet really has (a PAN-OS version, an HA state, a model, a device group, a tag). The list of matching firewalls underneath updates as you type. Enter accepts, Esc cancels. The last field saves the list to a file. When the form closes, `select` prints the flags that make the same list, so you can repeat it in a script. `-i` opens the form even when you give some filters (they pre-fill it), and `--no-interactive` never opens it.
+The filters sit directly above the columns they filter, and two tables sit below them: **Available** (firewalls that match the filters) and **Included** (the batch you are building).
+
+- **Tab / Shift-Tab** walk across the filters, then on to the Available table, the Included table and the save box. The arrow keys do the same job: Up and Down move between a filter's mode row, its input row and the tables.
+- **Modes.** A column with more than one way to filter shows `< pattern >` or `< older than >` above its input. Up to the mode row, then Left / Right to change it. Hostname offers *pattern* (`site1-*`) and *contains*; PAN-OS offers *is*, *older than* and *newer than*.
+- **Known values.** On an input, Left / Right fill in a value this fleet really has (a version, an HA state, a model, a device group, a tag).
+- **Building the batch.** In Available, Space (or Enter) moves the firewall under the cursor into Included, and `A` moves every firewall listed. In Included, Space, Enter or `D` takes one back out, and `C` clears the list. Filters only change what Available shows; they never remove anything from Included.
+- **Finishing.** Ctrl-D (or Enter in the save box) accepts, Esc cancels (twice, if you have an unsaved Included list). Type a file name in the save box to write the list for `--serials-file`.
+
+A `!` in the left margin marks a firewall that is offline. When the form closes, `select` prints the flags that make the same list. If you picked firewalls by hand, it prints their serials, or points to the saved file when there are many. `-i` opens the form even when you give some filters: a `--serials-file` or `--serial` list starts in Included, and the other filters fill in the filter row. `--no-interactive` never opens it.
 
 Or give the filters as flags, which is what scripts do:
 

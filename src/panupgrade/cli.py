@@ -257,6 +257,15 @@ def _command_line(args, flags):
     return "panupgrade select " + " ".join(f"{flag} {word(value)}" for flag, value in [where] + flags)
 
 
+def _repeat_hint(args, flags):
+    """How to get the list the form just built without the form, or why that is not short enough to print."""
+    if len([f for f in flags if f[0] == "--serial"]) > 8:
+        if args.out:
+            return f"This list is saved in {args.out}; use it in later commands with --serials-file {args.out}"
+        return "This is a hand-picked list. Put a file name in 'Save the list to' next time to keep it for the later commands."
+    return "To get this same list without the form: " + _command_line(args, flags + ([("--out", args.out)] if args.out else []))
+
+
 def _select(args):
     """Build the list of devices from criteria, show it, and save it for the user to check and edit."""
     style = _style(args)
@@ -270,21 +279,21 @@ def _select(args):
     if use_form:
         from . import selectform
         form = selectform.Form(refs, selection, args.out or "")
-        title = f"panupgrade select - {len(refs)} firewalls from {_where(args)}"
-        if not selectform.show(form, title):
+        if not selectform.show(form, f"panupgrade select - {len(refs)} firewalls from {_where(args)}"):
             print("Cancelled; nothing was selected.")
             return 1
-        selection, args.out = form.selection(selection), form.values["out"].strip() or None
-        print(style.line("info", "To get this same list without the form: " + _command_line(args, form.flags())))
-    chosen = [r for r in refs if selection.matches(r)]
+        chosen, criteria, args.out = form.included_refs(), form.describe(), form.out.strip() or None
+        print(style.line("info", _repeat_hint(args, form.flags())))
+    else:
+        chosen, criteria = [r for r in refs if selection.matches(r)], selection.describe()
     rows = [[i, r.hostname, r.serial, r.model, r.sw_version, r.ha_state or "-", r.device_group or "-",
              "yes" if r.connected else "NO"] for i, r in enumerate(chosen, 1)]
-    print(style.bold(f"Criteria: {selection.describe()}"))
+    print(style.bold(f"Criteria: {criteria}"))
     sys.stdout.write(console.render_table(["#", "hostname", "serial", "model", "PAN-OS", "HA", "device group", "online"], rows, style))
     print(style.line("info", f"{len(chosen)} of {len(refs)} devices match. Check the list; edit the file if needed; "
                              f"then pass it with --serials-file."))
     if args.out:
-        lines = [f"# panupgrade device list - criteria: {selection.describe()}",
+        lines = [f"# panupgrade device list - criteria: {criteria}",
                  "# One serial per line; text after # is ignored. Delete a line to drop a device; the file is the list that is used."]
         lines += [f"{r.serial}   # {r.hostname}  {r.sw_version}  {r.ha_state or '-'}" for r in chosen]
         Path(args.out).write_text("\n".join(lines) + "\n", encoding="utf-8")

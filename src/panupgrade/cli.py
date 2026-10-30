@@ -70,7 +70,7 @@ def _login(args):
                                   f"(or PANUPGRADE_ACCOUNT), or use --ask-credentials to type a login instead")
             reading, how = names[0], "the only account in that file"
     if ask not in ("changes", "all"):
-        changes = args.work_account or reading
+        changes = getattr(args, "work_account", None) or reading
     args._login = {"reading": reading, "changes": changes, "ask": ask, "how": how}
     return args._login
 

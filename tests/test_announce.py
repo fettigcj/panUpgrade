@@ -47,6 +47,11 @@ class SignIn(unittest.TestCase):
         self.assertIn("Reading as: tool (the only account in that file)", text)
         self.assertEqual(cli._login(a), {"reading": "tool", "changes": "tool", "ask": None, "how": "the only account in that file"})
 
+    def test_read_only_verbs_have_no_work_account_option_and_still_sign_in(self):
+        a = args(creds_file=self.creds("{'tool': 'x'}"))
+        del a.work_account
+        self.assertEqual(cli._login(a)["changes"], "tool")
+
     def test_several_accounts_and_none_named_asks_which_without_guessing(self):
         a = args(creds_file=self.creds("{'a': 'x', 'b': 'y'}"))
         with self.assertRaisesRegex(SourceError, "holds 2 accounts \\(a, b\\).*--account NAME.*--ask-credentials"):

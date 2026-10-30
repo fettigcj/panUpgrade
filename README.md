@@ -29,16 +29,47 @@ panUpgrade reads your fleet, tells you what would happen to each firewall and wh
 
 ## Install
 
-Python 3.11 or newer. The core has no third-party dependencies (`openpyxl` is optional, for Excel output).
+Python 3.11 or newer. The core has no third-party dependencies (`openpyxl` is optional, for Excel output). A virtual environment gives you a plain `panupgrade` command and keeps its packages away from everything else on the machine.
+
+### Build the virtual environment (once)
+
+Create it in your working folder, not inside the checkout, so the checkout stays clean.
 
 ```
 git clone <this repository>
-cd panUpgrade
+cd <your working folder>
 python -m venv .venv
-pip install -e .
 ```
 
-See [docs/venv.md](docs/venv.md) for step-by-step virtual-environment help.
+Activate it. Your prompt then starts with `(.venv)`.
+
+```
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+
+# Linux or macOS
+source .venv/bin/activate
+```
+
+Install panUpgrade into it. `-e` makes it editable: a `git pull` in the checkout takes effect at once, with no reinstall. The first install downloads the `setuptools` build tool, so it needs internet.
+
+```
+python -m pip install -e <path to the panUpgrade checkout>
+```
+
+### Use the virtual environment (every new terminal)
+
+Go to your working folder and activate the environment. Nothing else is needed; the `panupgrade` command now works from anywhere.
+
+```
+cd <your working folder>
+.venv\Scripts\Activate.ps1        # Linux or macOS: source .venv/bin/activate
+panupgrade help
+```
+
+Leave the environment with `deactivate`. If `panupgrade` is "not found", the environment isn't active: check for `(.venv)` at the start of the prompt.
+
+More detail, including running the tests, is in [docs/venv.md](docs/venv.md).
 
 ## First look (no firewall needed)
 

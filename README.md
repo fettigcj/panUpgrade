@@ -102,14 +102,16 @@ Keep your settings, firewall lists, run journals and kits in a working folder of
 | A read-only account for the tool, and an administrator's own login for changes | Put the tool's account in the file and add `--ask-credentials changes`. Reading uses the file; the steps that change firewalls ask for a username and password. |
 | An administrator's own login for everything | `--ask-credentials all`. Nothing is read from a file. |
 | Two accounts, both in the file | `--account NAME` for reading and `--work-account NAME` for changes. |
+| Several Panoramas | Make a **profile** for each with `panupgrade auth`: its address, its own admin accounts, and its own firewall list, settings and records, kept apart. `--profile NAME` picks one; naming a Panorama's address picks its profile. |
 
 A typed login is used for that run only; it is never stored, printed or logged. The credentials file is a dict of account name to either a password or a ready-made API key, for example `{'person': 'their-password', 'service': {'api_key': 'KEY'}}`. An account kept as an API key signs in with that key and needs no login. Keep the file in your own home folder and out of version control. Every command tells you which Panorama, credentials file and account it is using before it connects.
 
 | Setting | Flag | Environment variable | Default |
 |---|---|---|---|
-| Credentials file | `--creds-file` | `PANUPGRADE_CREDS` | `~/.panupgrade/credentials.txt` |
-| Account to sign in with | `--account` | `PANUPGRADE_ACCOUNT` | the only account in the file |
-| A different account for changes | `--work-account` | `PANUPGRADE_WORK_ACCOUNT` | same as `--account` |
+| Panorama profile | `--profile` | `PANUPGRADE_PROFILE` | the one matching `--panorama`, else the one used last |
+| Credentials file | `--creds-file` | `PANUPGRADE_CREDS` | the profile's `credentials.txt` |
+| Account to sign in with | `--account` | `PANUPGRADE_ACCOUNT` | the profile's choice, else the only account in the file |
+| A different account for changes | `--work-account` | `PANUPGRADE_WORK_ACCOUNT` | the profile's choice, else the same as `--account` |
 | Skip certificate checks (lab only) | `--insecure-tls` | `PANUPGRADE_INSECURE_TLS=1` | off |
 
 Then follow [docs/running.md](docs/running.md). Every setting and its default is listed in [settings.example.toml](settings.example.toml).

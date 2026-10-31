@@ -19,7 +19,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from panupgrade import authform, cli, trust
+from panupgrade import authform, cli, profiles, trust
 from panupgrade.trust import CertificateChanged, CertificateProblem
 from panupgrade_live import panorama
 from tests.test_auth import FakeServices, Home, keys, screen, typing
@@ -134,7 +134,8 @@ class WithARealSelfSignedServer(Home):
 
             def trusted(self, addr):
                 return trust.record(addr)
-        form = authform.Form({}, self.home / "credentials.txt", "default location", address=address, services=Real())
+        lab = authform.Entry("lab", address, {}, "", "", str(profiles.root() / "lab" / "credentials.txt"))
+        form = authform.Form([lab], "lab", services=Real())
         form.zone = "accounts"
         keys(form, "a", *typing("admin"), "tab", "right", "right", "tab", *typing("their-password"), "tab", "enter")      # sign in now, keep the key
         self.assertIsNotNone(form.prompt)
@@ -155,9 +156,10 @@ class Prompting(Home):
         return CertificateProblem("192.0.2.1", "self-signed certificate", sha)
 
     def form(self, **over):
-        values = dict(address="192.0.2.1", services=Services())
+        values = dict(services=Services())
         values.update(over)
-        return authform.Form({"a": "pw"}, self.home / "credentials.txt", "default location", **values)
+        lab = authform.Entry("lab", "192.0.2.1", {"a": "pw"}, "", "", str(profiles.root() / "lab" / "credentials.txt"))
+        return authform.Form([lab], "lab", **values)
 
     def test_cancel_trusts_nothing_and_sends_nothing(self):
         form = self.form()

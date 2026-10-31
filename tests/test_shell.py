@@ -5,13 +5,14 @@
 
 import io
 import os
+import tempfile
 import threading
 import time
 import unittest
 from contextlib import redirect_stdout
 from unittest import mock
 
-from panupgrade import cli, credstore, shell, site, trust, tui
+from panupgrade import cli, credstore, profiles, shell, site, trust, tui
 from panupgrade.trust import CertificateProblem
 from panupgrade.model import DeviceRef
 from panupgrade.sources import SourceError
@@ -47,7 +48,8 @@ class ShellCase(Home):
         patcher = mock.patch("panupgrade.userenv.supported", return_value=False)
         patcher.start()
         self.addCleanup(patcher.stop)
-        credstore.write(self.home / "credentials.txt", {"tool": "pw"})
+        self.lab = profiles.create("lab", "192.0.2.1")
+        credstore.write(self.lab.creds_file, {"tool": "pw"})
         self.commands, self.reads = [], []
 
     def make(self, address="192.0.2.1", target="12.1.10", run=None, read=None):
@@ -58,7 +60,7 @@ class ShellCase(Home):
         def read_devices(args):
             self.reads.append(args.command)
             return read(args) if read else REFS
-        session = shell.Session(cli.parse_args(["shell"]), address, target)
+        session = shell.Session(cli.parse_args(["shell"]), address, target, self.lab)
         return shell.Shell(session, run_command=run_command, read_devices=read_devices)
 
     def text(self, ui, width=110, height=30):
@@ -69,7 +71,7 @@ class Home_(ShellCase):
     def test_it_opens_on_the_home_screen_with_the_steps_in_order_and_where_each_stands(self):
         ui = self.make()
         text = self.text(ui)
-        for needle in ("Panorama address", "[192.0.2.1_]", "Target PAN-OS", "1  Sign in", "2  Fleet report", "3  Choose firewalls", "4  Plan the upgrade",
+        for needle in ("Panorama profile", "< lab >", "Panorama address", "[192.0.2.1]", "Target PAN-OS", "1  Sign in", "2  Fleet report", "3  Choose firewalls", "4  Plan the upgrade",
                        "5  Prepare", "6  Upgrade", "7  Settings", "8  PAN-OS releases", "Q  Quit", "Alt-R report"):
             self.assertIn(needle, text)
         self.assertIn("tool (password) reads", text)
@@ -77,6 +79,7 @@ class Home_(ShellCase):
 
     def test_the_address_and_target_are_typed_on_the_home_screen(self):
         ui = self.make(address="", target="")
+        ui.press("down")                                       # off the profile row, onto the address
         for ch in "pano.example":
             ui.press(ch)
         ui.press("enter")
@@ -89,8 +92,8 @@ class Home_(ShellCase):
 
     def test_enter_opens_a_step_and_escape_or_q_leaves(self):
         ui = self.make()
-        ui.press("down"); ui.press("down")                    # off the fields, onto step 1
-        ui.press("down")                                      # step 2: the fleet report
+        for _ in range(4):                                    # profile, address, target, then step 1 (sign in) and step 2: the fleet report
+            ui.press("down")
         ui.press("enter")
         self.assertEqual(ui.screen.name, "report")
         wait(ui)
@@ -98,16 +101,110 @@ class Home_(ShellCase):
         self.assertEqual(ui.screen.name, "home")
         self.assertEqual(ui.press("esc"), "accept")           # esc on home quits
         ui2 = self.make()
-        ui2.at = 0
-        ui2.screen.at = len(ui2.screen.FIELDS) + len(shell.STEP_ORDER)
+        ui2.screen.at = ui2.screen.TOP + len(shell.STEP_ORDER)
         self.assertEqual(ui2.press("enter"), "accept")
 
     def test_q_quits_from_the_step_list_but_is_just_a_letter_in_a_text_field(self):
         ui = self.make()
+        ui.press("down")                                       # onto the address
         ui.press("q")
         self.assertEqual(ui.session.address, "192.0.2.1q")
-        ui.screen.at = 3
+        ui.screen.at = ui.screen.TOP
         self.assertEqual(ui.press("q"), "accept")
+
+
+class SeveralPanoramas(ShellCase):
+    def setUp(self):
+        super().setUp()
+        self.west = profiles.create("west", "10.0.0.2")
+        self.west.target = "11.1.4"
+        self.west.save()
+        credstore.write(self.west.creds_file, {"w-admin": "pw"})
+
+    def test_left_and_right_on_the_profile_row_switch_panorama_with_its_address_and_target(self):
+        ui = self.make(target="10.2.11-h1")
+        ui.press("right")
+        self.assertEqual((ui.session.profile.name, ui.session.address, ui.session.target), ("west", "10.0.0.2", "11.1.4"))
+        self.assertIn("Now working in the profile west", ui.message)
+        text = self.text(ui)
+        self.assertIn("< west >", text)
+        self.assertIn("2 of 2", text)
+        self.assertIn("w-admin (password) reads", text)
+        ui.press("left")
+        self.assertEqual((ui.session.profile.name, ui.session.address), ("lab", "192.0.2.1"))
+        self.assertEqual(profiles.remembered(), "lab")
+
+    def test_what_was_read_for_one_panorama_is_forgotten_when_switching_to_another(self):
+        ui = self.make(run=lambda args: print("report") or 0)
+        ui.press("alt-r"); wait(ui)
+        self.assertIn("read at", self.text(ui.goto("home") or ui))
+        ui.press("right")
+        self.assertIn("not read yet", self.text(ui))
+        ui.press("alt-r"); wait(ui)
+        self.assertEqual(len(self.commands), 2)                   # it read again, for the other Panorama
+
+    def test_a_step_runs_in_the_profile_in_use(self):
+        seen = []
+        ui = self.make(run=lambda args: seen.append((args._profile.name, args.source)) or 0)
+        ui.press("alt-r"); wait(ui)
+        ui.press("alt-h"); ui.press("right")
+        ui.press("alt-r"); wait(ui)
+        self.assertEqual(seen, [("lab", "panorama:192.0.2.1"), ("west", "panorama:10.0.0.2")])
+
+    def test_the_address_and_target_typed_are_kept_in_the_profile_not_in_a_shared_file(self):
+        ui = self.make()
+        ui.press("down")
+        ui.press("ctrl-u")
+        for ch in "192.0.2.9":
+            ui.press(ch)
+        ui.press("enter")
+        ui.press("ctrl-u")
+        for ch in "12.1.10":
+            ui.press(ch)
+        ui.press("alt-r")                                        # leaving the screen keeps them
+        loaded = profiles.load("lab")
+        self.assertEqual((loaded.address, loaded.target), ("192.0.2.9", "12.1.10"))
+        self.assertEqual(profiles.load("west").target, "11.1.4")  # the other Panorama is untouched
+        self.assertEqual(site.read_state().get("panorama"), None)
+
+    def test_without_a_profile_what_is_typed_is_remembered_for_next_time_as_before(self):
+        session = shell.Session(cli.parse_args(["shell"]), "pano.example", "10.2.11-h1", None)
+        ui = shell.Shell(session, run_command=lambda a: 0, read_devices=lambda a: REFS)
+        ui.goto("report")
+        self.assertEqual(site.read_state(), {"panorama": "pano.example", "target": "10.2.11-h1"})
+        self.assertIn("< none >", self.text(ui.goto("home") or ui))
+        self.assertIn("no Panorama profile yet", self.text(ui))
+
+    def test_enter_on_the_profile_row_opens_the_screen_that_manages_profiles(self):
+        ui = self.make()
+        ui.press("enter")
+        self.assertEqual(ui.screen.name, "auth")
+        self.assertIn("Panorama profile", self.text(ui))
+
+    def test_the_first_visit_with_no_profile_goes_straight_to_making_one_with_the_address_filled_in(self):
+        for p in profiles.names():
+            profiles.remove(p)
+        session = shell.Session(cli.parse_args(["shell"]), "192.0.2.77", "", None)
+        ui = shell.Shell(session, run_command=lambda a: 0, read_devices=lambda a: REFS)
+        ui.press("enter")
+        self.assertEqual(ui.screen.name, "auth")
+        self.assertEqual(ui.screen.form.modal["type"], "profile")
+        self.assertIn("New Panorama profile", self.text(ui))
+
+    def test_the_command_line_starts_in_the_profile_it_names(self):
+        seen = {}
+        with redirect_stdout(io.StringIO()), mock.patch("sys.stdin.isatty", return_value=True), mock.patch("sys.stdout.isatty", return_value=True), \
+                mock.patch("panupgrade.tui.show", side_effect=lambda ui, title="": seen.update(p=ui.session.profile.name, a=ui.session.address,
+                                                                                          t=ui.session.target) or True):
+            cli.main(["shell", "--profile", "west"])
+        self.assertEqual(seen, {"p": "west", "a": "10.0.0.2", "t": "11.1.4"})
+        self.assertEqual(profiles.remembered(), "west")
+
+    def test_an_unknown_profile_on_the_command_line_is_an_error(self):
+        with mock.patch("sys.stdin.isatty", return_value=True), mock.patch("sys.stdout.isatty", return_value=True), \
+                mock.patch("sys.stderr", io.StringIO()) as err, self.assertRaises(SystemExit):
+            cli.main(["shell", "--profile", "nope"]) if False else cli.parse_args(["shell", "--profile", "nope"])
+        self.assertIn("", err.getvalue())
 
 
 class LeavingWithCtrlC(ShellCase):
@@ -193,7 +290,7 @@ class TheFleetReport(ShellCase):
     def test_without_an_address_it_says_where_to_type_one_and_reads_nothing(self):
         ui = self.make(address="")
         ui.press("alt-r")
-        self.assertIn("Type the Panorama address on the home screen", self.text(ui))
+        self.assertIn("type its address, on the home screen", self.text(ui))
         self.assertEqual(self.commands, [])
 
     def test_the_action_bar_changes_sign_in_or_goes_home(self):
@@ -357,7 +454,7 @@ class ChoosingFirewalls(ShellCase):
         for key in ("down", "a", "ctrl-d"):                  # into Available, add all, Save & Exit
             ui.press(key)
         self.assertEqual(ui.screen.name, "home")
-        self.assertEqual(cli._read_list("upgradeList.txt"), ["S1", "S2"])
+        self.assertEqual(cli._read_list(self.lab.path("upgradeList.txt")), ["S1", "S2"])
         self.assertIn("2 firewalls in upgradeList.txt", self.text(ui))
 
     def test_a_list_that_cannot_be_read_is_explained_and_enter_tries_again(self):
@@ -377,7 +474,7 @@ class ChoosingFirewalls(ShellCase):
     def test_without_an_address_it_says_so(self):
         ui = self.make(address="")
         ui.press("alt-f")
-        self.assertIn("Type the Panorama address", self.text(ui))
+        self.assertIn("type its address", self.text(ui))
         self.assertEqual(self.reads, [])
 
     def test_a_sign_in_problem_goes_to_the_sign_in_screen(self):
@@ -392,11 +489,11 @@ class OtherSteps(ShellCase):
         ui = self.make(address="pano.example", target="10.2.11-h1")
         ui.press("alt-5")
         text = self.text(ui)
-        self.assertIn("panupgrade prepare --panorama pano.example --target 10.2.11-h1", text)
+        self.assertIn("panupgrade prepare --profile lab --target 10.2.11-h1", text)
         self.assertIn("not on the screen yet", text)
         ui.press("enter")
         ui.press("alt-6")
-        self.assertIn("panupgrade upgrade --panorama pano.example --target 10.2.11-h1", self.text(ui))
+        self.assertIn("panupgrade upgrade --profile lab --target 10.2.11-h1", self.text(ui))
 
     def test_settings_open_in_the_shell_and_save_to_settings_toml(self):
         ui = self.make()
@@ -406,7 +503,7 @@ class OtherSteps(ShellCase):
         form.press("backspace"); form.press("2")
         ui.press("ctrl-d")
         self.assertEqual(ui.screen.name, "home")
-        self.assertIn("max_parallel = 2", open("settings.toml", encoding="utf-8").read())
+        self.assertIn("max_parallel = 2", self.lab.path("settings.toml").read_text(encoding="utf-8"))
 
     def test_the_release_table_needs_no_panorama(self):
         ui = self.make(address="", run=lambda args: print("PAN-OS releases") or 0)
@@ -557,7 +654,7 @@ class Painting(unittest.TestCase):
         self.assertNotIn("nonsense", text)
 
     def test_the_real_screens_only_use_styles_the_painter_knows(self):
-        with mock.patch.dict(os.environ, {"PANUPGRADE_HOME": "."}):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {"PANUPGRADE_HOME": folder}):
             session = shell.Session(cli.parse_args(["shell"]), "192.0.2.1", "10.2.11-h1")
             ui = shell.Shell(session, run_command=lambda a: 0, read_devices=lambda a: REFS)
             known = set(tui.CODES)

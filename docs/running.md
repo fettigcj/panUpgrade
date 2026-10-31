@@ -2,11 +2,11 @@
 
 ## The one-screen way
 
-`panupgrade` with no arguments, typed at a terminal, opens a single screen for the whole workflow. The top has two boxes, the **Panorama address** and the **target PAN-OS version** (both remembered for next time in `~/.panupgrade/state.json`, which holds no secrets). Below them are the steps, each with a line saying where it stands:
+`panupgrade` with no arguments, typed at a terminal, opens a single screen for the whole workflow. The top has three rows: the **Panorama profile** (Left and Right switch between your Panoramas; Enter manages them), its **address**, and the **target PAN-OS version**. The address and target are kept in the profile, so each Panorama remembers its own; with no profile they are remembered as typed (`~/.panupgrade/state.json`, which holds no secrets). Below them are the steps, each with a line saying where it stands:
 
 1. **Sign in**: the `auth` screen. If a step finds it cannot sign in, the screen takes you here and brings you back to the step when you save.
 2. **Fleet report**: what `panupgrade report` prints, read in the background. R refreshes it; Up, Down, PgUp and PgDn scroll.
-3. **Choose firewalls**: the `select` form, saving `upgradeList.txt`.
+3. **Choose firewalls**: the `select` form, saving `upgradeList.txt` in the profile's workspace.
 4. **Plan the upgrade**: what `panupgrade plan --target ...` prints. Read-only.
 5. **Prepare** and 6. **Upgrade**: still run from the command line, where you type APPROVE; the screen shows the exact command with your address and target filled in.
 7. **Settings**: the `settings` form.
@@ -27,19 +27,29 @@ pip install -e <path to your panUpgrade checkout>
 cd <your working folder>
 ```
 
-**Signing in.** You choose how; panUpgrade assumes nothing about your accounts. The easy way is a screen:
+**Panorama profiles: one workspace per Panorama.** A site with several Panoramas keeps them apart. A profile is a folder, `~/.panupgrade/profiles/<name>/`, holding everything that belongs to one Panorama and nothing that belongs to another:
+
+- its **address** and which **admin accounts** it has (`credentials.txt`), with the choice of which account reads and which makes changes;
+- the **firewall list** (`upgradeList.txt`), **settings** (`settings.toml`), **release table** (`releases.json`) and the **target version** last used;
+- the **records** of what was done there: run journals (`runs/`), upgrade kits (`prepared/`) and configuration backups (`backups/`).
+
+`panupgrade auth` is where profiles and the admin accounts under them are made:
 
 ```powershell
 panupgrade auth
 ```
 
-It lists the accounts in your credentials file (names and whether each holds a password or an API key, never the secrets), lets you **add** one (type the name and a hidden password or API key, or type the password once and keep only the API key it gets back), **remove** one, choose which account **reads** and which makes **changes**, and **test** a sign-in against your Panorama (give the address in the first field, or start it with `--panorama ADDRESS`). Your choice of account is kept in `~/.panupgrade/auth.json` (names only, no secrets), or, on Windows, in user-level environment variables if you prefer; the screen warns when a variable already set in your terminal would override it. Any command run at a terminal that finds no credentials file, or no account to use, opens this screen by itself and carries on when you save. Without a terminal, `panupgrade auth` prints a summary and the command fails with an error that says what is missing.
+Switch profile with Left and Right, make one with **New profile** (a name and an address), and under each profile **add** admin accounts (type the name and a hidden password or API key, or type the password once and keep only the API key it gets back), **remove** them, choose which account **reads** and which makes **changes**, and **test** a sign-in. The same user name can have different passwords on different Panoramas because each profile has its own accounts. Nothing reaches the disk until you Save. **Remove profile** does not delete anything: the folder is renamed `<name>.removed-<date>`, because it may hold configuration backups and run journals.
+
+Which profile a command uses: `--profile NAME`; else the `PANUPGRADE_PROFILE` environment variable; else the profile whose address matches `--panorama`; else, when no Panorama was named, the one used last (or the only one there is). A Panorama named on the command line that matches no profile is simply used as it is, with the current folder as its workspace and a credentials file named by `--creds-file`. The upgrade script `prepare` writes carries `--profile`, so it runs in the same workspace.
+
+Which profile is in use is remembered automatically, or on Windows can be kept in the user-level variable `PANUPGRADE_PROFILE` (the last choice on the sign-in screen). The environment variables `PANUPGRADE_CREDS`, `PANUPGRADE_ACCOUNT` and `PANUPGRADE_WORK_ACCOUNT` still override what a profile says; the sign-in screen warns when one is set in your terminal. Any command run at a terminal that finds no credentials, or no account to use, opens the sign-in screen by itself and carries on in the profile you make or fix; without a terminal it stops with an error that says what is missing, and `panupgrade auth` prints a summary of the profiles.
 
 **A Panorama with a self-signed certificate.** Most Panoramas present a certificate their own CA made, which a normal check rejects. Anything that connects (adding an account with "sign in now", Test sign-in, a report, a plan, choosing firewalls) then stops with the reason, the certificate's SHA-256 fingerprint, and **Accept risk & continue?** On a terminal outside the screen it is a plain `[y/N]` question; in a script it is just the error. Compare the fingerprint with the one Panorama shows for its own certificate (Device > Certificate Management > Certificates) before accepting. Accepting does not switch checking off: it records exactly that certificate for that address (`~/.panupgrade/trusted_certs.json`, public fingerprints only), and from then on a connection must present the same certificate. If it ever differs, the connection is refused with a message saying so, because it means a replaced certificate or someone in the middle. **Forget certificate** on the sign-in screen (with the address filled in) takes the acceptance back. `--insecure-tls` still exists for a throwaway lab, but this is the way to do it properly.
 
-The pieces it manages, if you would rather do it by hand:
+The pieces a profile manages, if you would rather do it by hand:
 
-- **A credentials file** holds a dict of account name to either a password, or a ready-made API key written `{'api_key': 'KEY'}`, for example `{'person': 'their-password', 'service': {'api_key': 'KEY'}}`. A password account is logged in with each run; an API key account is used as it is. Point to it with `--creds-file` or `PANUPGRADE_CREDS`. If it holds one account, that account is used. If it holds several, name one with `--account` (or `PANUPGRADE_ACCOUNT`).
+- **A credentials file** holds a dict of account name to either a password, or a ready-made API key written `{'api_key': 'KEY'}`, for example `{'person': 'their-password', 'service': {'api_key': 'KEY'}}`. A password account is logged in with each run; an API key account is used as it is. It is the profile's `credentials.txt`, or the file named by `--creds-file` or `PANUPGRADE_CREDS`. If it holds one account, that account is used. If it holds several, name one with `--account` (or `PANUPGRADE_ACCOUNT`).
 - **A separate account for changes:** `--work-account NAME` (or `PANUPGRADE_WORK_ACCOUNT`). Without it, the same account is used for everything.
 - **Type a login instead:** `--ask-credentials changes` asks for a username and password only for the steps that change firewalls, and reading still uses the file. `--ask-credentials all` asks once and uses that login for everything, with no file needed. A typed login is never stored, printed or logged.
 
@@ -183,7 +193,7 @@ Every setting is on one screen, grouped (HA behaviour, Panorama range, Failure h
 - A value that is not allowed (text in a number, a band above 1, a cross-feature downgrade without `allow_downgrade`) turns red and blocks saving until it is fixed.
 - The buttons work as in `select`: **Save**, **Save & Exit** (Ctrl-D), **Quit without saving** (Esc, which asks first if there are unsaved changes).
 
-Saving writes `settings.toml` in the folder you run it from, containing only the settings that differ from the built-in defaults, so a later, safer default still reaches you. If the file already exists it is rewritten and its comments are not kept. **Every command run from that folder then uses it** and says so (`Using settings file ... (found in this folder)`); name another file with `--settings FILE`, which `settings` edits too. `prepare` pins the file it used into the upgrade script.
+Saving writes `settings.toml` containing only the settings that differ from the built-in defaults, so a later, safer default still reaches you. If the file already exists it is rewritten and its comments are not kept. In a profile it is saved in the profile's workspace; with no profile, in the folder you run it from. **Every command in that workspace then uses it** and says so (`Using settings file ... (found in the profile lab)`); name another file with `--settings FILE`, which `settings` edits too. `prepare` pins the file it used into the upgrade script.
 
 **Two settings to know about.**
 

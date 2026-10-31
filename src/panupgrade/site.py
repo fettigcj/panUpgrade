@@ -8,66 +8,54 @@ administrator's own login for changes, or an administrator's own login for all o
 (a credentials file with named accounts, and typing a login at the prompt) and assumes none of them.
 
 Which credentials file and which account(s) to use come from, in order: the command line, an environment variable
-(PANUPGRADE_CREDS, PANUPGRADE_ACCOUNT, PANUPGRADE_WORK_ACCOUNT), the sign-in settings file ``~/.panupgrade/auth.json``
-that ``panupgrade auth`` writes, and finally the defaults. The settings hold names and paths only, never a secret.
+(PANUPGRADE_CREDS, PANUPGRADE_ACCOUNT, PANUPGRADE_WORK_ACCOUNT), the Panorama profile in use (see ``profiles``), and finally the
+defaults. Profiles and their settings hold names and paths only, never a secret.
 """
 
 import json
 import os
 from pathlib import Path
 
-CONFIG_NAME = "auth.json"
 CREDS_NAME = "credentials.txt"
 
 
 def home_dir():
-    """The folder that holds the sign-in settings and, by default, the credentials file. PANUPGRADE_HOME moves it (tests use that)."""
+    """The folder that holds the profiles and what the shell remembers. PANUPGRADE_HOME moves it (tests use that)."""
     return Path(os.environ.get("PANUPGRADE_HOME") or Path.home() / ".panupgrade")
-
-
-def config_path():
-    return home_dir() / CONFIG_NAME
 
 
 def default_creds_path():
     return home_dir() / CREDS_NAME
 
 
-def read_config():
-    """The sign-in settings file as a dict. A missing or unreadable file is just no settings."""
-    try:
-        data = json.loads(config_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+def creds_path(profile=None):
+    """(path of the credentials file, where that choice came from)."""
+    if os.environ.get("PANUPGRADE_CREDS"):
+        return os.environ["PANUPGRADE_CREDS"], "PANUPGRADE_CREDS"
+    if profile is not None:
+        return profile.creds_file, f"profile:{profile.name}"
+    return str(default_creds_path()), "default"
 
 
-def _pick(env_name, key, default=None):
-    """(value, where it came from): the environment variable, else the settings file, else the default."""
+def _account(env_name, attr, profile):
     if os.environ.get(env_name):
         return os.environ[env_name], env_name
-    value = read_config().get(key)
-    if isinstance(value, str) and value:
-        return value, CONFIG_NAME
-    return default, "default"
+    value = getattr(profile, attr, "") if profile is not None else ""
+    return (value, f"profile:{profile.name}") if value else (None, "default")
 
 
-def creds_path():
-    return _pick("PANUPGRADE_CREDS", "creds_file", str(default_creds_path()))
-
-
-def account():
+def account(profile=None):
     """The account to read with, when none is named on the command line: (name or None, where from)."""
-    return _pick("PANUPGRADE_ACCOUNT", "account")
+    return _account("PANUPGRADE_ACCOUNT", "account", profile)
 
 
-def work_account():
+def work_account(profile=None):
     """The account for changes, when none is named: (name or None, where from)."""
-    return _pick("PANUPGRADE_WORK_ACCOUNT", "work_account")
+    return _account("PANUPGRADE_WORK_ACCOUNT", "work_account", profile)
 
 
 def read_state():
-    """What the shell remembered last time (the Panorama address and target version): plain words, nothing secret."""
+    """What the shell remembered last time (the profile in use, or the Panorama typed without one): plain words, nothing secret."""
     try:
         data = json.loads((home_dir() / "state.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):

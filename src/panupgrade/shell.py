@@ -21,7 +21,7 @@ import traceback
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from . import cli, credstore, site
+from . import cli, credstore, profiles, site
 from .sources import SourceError
 
 SPIN = "|/-\\"
@@ -82,14 +82,16 @@ class Job:
 # ---- session -----------------------------------------------------------------------------------------------------------------
 
 class Session:
-    """What the person has told the shell so far, shared by every screen."""
+    """What the person has told the shell so far, shared by every screen: the Panorama profile in use, its address and target version."""
 
-    def __init__(self, base, address="", target=""):
-        self.base, self.address, self.target = base, address, target
-        self.results = {}                                # screen name -> (time, text)
+    def __init__(self, base, address="", target="", profile=None):
+        self.base, self.address, self.target, self.profile = base, address, target, profile
+        self.results = {}                                # screen name -> (time, text, code)
 
     def args_for(self, command, *extra, address=True):
-        argv = [command] + (["--panorama", self.address.strip()] if address else []) + ["--color", "never", "--ascii", *extra]
+        argv = [command] + (["--profile", self.profile.name] if self.profile else [])
+        argv += ["--panorama", self.address.strip()] if address and self.address.strip() else []
+        argv += ["--color", "never", "--ascii", *extra]
         if getattr(self.base, "creds_file", None):
             argv += ["--creds-file", self.base.creds_file]
         args = cli.parse_args(argv)
@@ -97,8 +99,33 @@ class Session:
         return args
 
     def base_args(self):
-        """Arguments for questions that need no Panorama (where the credentials are, which settings file)."""
-        return cli.parse_args(["auth"] + (["--creds-file", self.base.creds_file] if getattr(self.base, "creds_file", None) else []))
+        """Arguments for questions that need no Panorama call (where the credentials are, which settings file)."""
+        return self.args_for("auth")
+
+    def creds_path(self):
+        """The credentials file in use: the one named on the command line, else the environment's, else the profile's."""
+        return getattr(self.base, "creds_file", None) or site.creds_path(self.profile)[0]
+
+    def ws(self, name):
+        """A file in the working place: the profile's workspace, or the current folder when there is no profile."""
+        return self.profile.path(name) if self.profile else Path(name)
+
+    def use(self, name):
+        """Switch to another profile: its address and target replace the ones shown, and what was read before no longer applies."""
+        self.persist()
+        self.profile = profiles.load(name)
+        self.address, self.target = (self.profile.address, self.profile.target) if self.profile else ("", "")
+        self.results.clear()
+        profiles.remember(name)
+
+    def persist(self):
+        """Keep the address and target typed here: in the profile when there is one, else as what was typed last."""
+        if self.profile is not None:
+            if (self.profile.address, self.profile.target) != (self.address.strip(), self.target.strip()):
+                self.profile.address, self.profile.target = self.address, self.target
+                self.profile.save()
+        else:
+            site.write_state(panorama=self.address.strip(), target=self.target.strip())
 
 
 # ---- screens ---------------------------------------------------------------------------------------------------------------------
@@ -167,21 +194,25 @@ class JobScreen(Screen):
     def reset(self):
         self.job, self.lines, self.for_address = None, [], None
 
+    @staticmethod
+    def key(session):
+        return (session.profile.name if session.profile else "", session.address, session.target)
+
     def enter(self):
         session = self.shell.session
-        if self.job is None and not self.lines or self.for_address != (session.address, session.target):
+        if self.job is None and not self.lines or self.for_address != self.key(session):
             self.start()
 
     def start(self):
         session = self.shell.session
         self.lines, self.offset, self.note = [], 0, ""
         if self.needs_address and not session.address.strip():
-            self.note = "Type the Panorama address on the home screen first (Alt-H)."
+            self.note = "Choose or make a Panorama profile, or type its address, on the home screen first (Alt-H)."
             return
         if self.needs_target and not session.target.strip():
             self.note = "Type the target PAN-OS version on the home screen first (Alt-H)."
             return
-        self.for_address = (session.address, session.target)
+        self.for_address = self.key(session)
         args = session.args_for(self.command, *(["--target", session.target.strip()] if self.needs_target else []), address=self.needs_address)
         self.args = args
         self.job = Job(lambda: self.shell.run_command(args))
@@ -287,7 +318,7 @@ class SelectScreen(Screen):
         if self.form is not None:
             return
         if not session.address.strip():
-            self.note = "Type the Panorama address on the home screen first (Alt-H)."
+            self.note = "Choose or make a Panorama profile, or type its address, on the home screen first (Alt-H)."
             return
         self.note = ""
         self.args = session.args_for("select")
@@ -355,14 +386,15 @@ class StaticScreen(Screen):
 
 class HomeScreen(Screen):
     name, title = "home", "upgrade Palo Alto firewalls through Panorama, safely"
-    FIELDS = ("address", "target")
+    TEXT = {1: "address", 2: "target"}                                   # the rows of the top block that are typed into
+    TOP = 3                                                              # profile, address, target
 
     def __init__(self, shell):
         super().__init__(shell)
         self.at = 0
 
     def stops(self):
-        return len(self.FIELDS) + len(STEP_ORDER) + 1                    # the two fields, the steps, Quit
+        return self.TOP + len(STEP_ORDER) + 1                            # the top block, the steps, Quit
 
     def press(self, key):
         session = self.shell.session
@@ -372,8 +404,13 @@ class HomeScreen(Screen):
             self.at = (self.at + 1) % self.stops()
         elif key in ("up", "shift-tab"):
             self.at = (self.at - 1) % self.stops()
-        elif self.at < len(self.FIELDS):
-            attr = self.FIELDS[self.at]
+        elif self.at == 0:
+            if key in ("left", "right"):
+                self.shell.switch_profile(1 if key == "right" else -1)
+            elif key in ("enter", " "):
+                return ("goto", "auth")                                  # manage profiles, or make the first one
+        elif self.at in self.TEXT:
+            attr = self.TEXT[self.at]
             text = getattr(session, attr)
             if key == "enter":
                 self.at += 1
@@ -384,29 +421,33 @@ class HomeScreen(Screen):
             elif len(key) == 1 and key.isprintable():
                 setattr(session, attr, text + key)
         elif key == "enter" or key == " ":
-            step = self.at - len(self.FIELDS)
+            step = self.at - self.TOP
             return "quit" if step == len(STEP_ORDER) else ("goto", STEP_ORDER[step])
         elif key in ("q", "Q"):
             return "quit"
         return None
 
-    def status(self, name):
-        """(style, text) for one step: where it stands, without touching the network."""
-        return self.shell.status(name)
-
     def render(self, width, height):
         session = self.shell.session
+        names = profiles.names()
         lines = [[("bold", " panupgrade - upgrade Palo Alto firewalls through Panorama, safely")], []]
         on = self.at == 0
+        if session.profile:
+            hint = f"  {names.index(session.profile.name) + 1} of {len(names)}   Left / Right switch; Enter manages profiles" if session.profile.name in names else ""
+            lines.append([("focus" if on else "bold", f" {'>' if on else ' '} Panorama profile  "), ("focus" if on else "", f"< {session.profile.name} >"), ("dim", hint)])
+        else:
+            lines.append([("focus" if on else "bold", f" {'>' if on else ' '} Panorama profile  "), ("focus" if on else "", "< none >"),
+                          ("dim", "  Enter makes one (a profile keeps one Panorama's accounts, list and records apart)")])
+        on = self.at == 1
         lines.append([("focus" if on else "bold", f" {'>' if on else ' '} Panorama address  "), ("focus" if on else "", f"[{session.address}{'_' if on else ''}]".ljust(28)),
                       ("dim", "  name or IP address")])
-        on = self.at == 1
+        on = self.at == 2
         lines.append([("focus" if on else "bold", f" {'>' if on else ' '} Target PAN-OS      "), ("focus" if on else "", f"[{session.target}{'_' if on else ''}]".ljust(28)),
                       ("dim", "  needed to plan, prepare and upgrade")])
         lines += [[], [("bold", " Steps in order"), ("dim", "   (Enter opens one; the Alt keys below jump from anywhere)")]]
         for n, name in enumerate(STEP_ORDER):
-            here = self.at == len(self.FIELDS) + n
-            style, text = self.status(name)
+            here = self.at == self.TOP + n
+            style, text = self.shell.status(name)
             label = self.shell.titles[name]
             lines.append([("focus" if here else "bold", f" {'>' if here else ' '} {n + 1}  {label.ljust(20)}"), ("focus" if here else style, " " + text)])
         here = self.at == self.stops() - 1
@@ -494,9 +535,21 @@ class Shell:
         return None
 
     def goto(self, name):
+        self.session.persist()
         self.screen = self.screens[name]
         self.screen.enter()
         return None
+
+    def switch_profile(self, step):
+        """Left / Right on the home screen: the next or previous Panorama profile, with everything that was read forgotten."""
+        names = profiles.names()
+        if not names:
+            return
+        at = names.index(self.session.profile.name) if self.session.profile and self.session.profile.name in names else -1
+        self.session.use(names[(at + step) % len(names)])
+        for screen in self.screens.values():
+            screen.reset()
+        self.message = f"Now working in the profile {self.session.profile.name}."
 
     def form_finished(self, screen, result):
         """A form ended: accepted (saved) or cancelled. Back to where the person came from, or home."""
@@ -535,19 +588,20 @@ class Shell:
             return "error", f"({type(exc).__name__})"
 
     def _status_auth(self, session):
-        path, _origin = cli._creds(session.base)
+        if session.profile is None:
+            return "warn", "no Panorama profile yet - open this to make one"
         try:
-            accounts = credstore.read(path)
+            accounts = credstore.read(session.creds_path())
         except credstore.NeedsSignIn:
-            return "warn", "no credentials yet - open this to add an account"
+            return "warn", f"{session.profile.name}: no credentials yet - open this to add an account"
         except Exception:
             return "error", "the credentials file cannot be read"
         if not accounts:
-            return "warn", "no accounts yet - open this to add one"
-        reading = site.account()[0] or (next(iter(accounts)) if len(accounts) == 1 else "")
+            return "warn", f"{session.profile.name}: no accounts yet - open this to add one"
+        reading = site.account(session.profile)[0] or (next(iter(accounts)) if len(accounts) == 1 else "")
         if not reading:
-            return "warn", f"{len(accounts)} accounts, none chosen - open this to choose"
-        changes = site.work_account()[0]
+            return "warn", f"{session.profile.name}: {len(accounts)} accounts, none chosen - open this to choose"
+        changes = site.work_account(session.profile)[0]
         return "ok", f"{reading} ({credstore.kind(accounts.get(reading))}) reads" + (f"; {changes} changes" if changes else "; changes use the same")
 
     def _status_report(self, session):
@@ -558,7 +612,7 @@ class Shell:
         return ("warn" if hit else "ok"), f"read at {got[0]}" + (f": {hit.group(1)} firewalls need attention" if hit else ": nothing needs attention")
 
     def _status_select(self, session):
-        path = Path(cli.DEFAULT_LIST)
+        path = session.ws(cli.DEFAULT_LIST)
         if not path.is_file():
             return "dim", f"no {cli.DEFAULT_LIST} yet - open this to choose firewalls"
         return "ok", f"{len(cli._read_list(path))} firewalls in {cli.DEFAULT_LIST}"
@@ -576,7 +630,7 @@ class Shell:
         return "dim", "not on this screen yet: use the command line"
 
     def _status_settings(self, session):
-        path = Path(cli.DEFAULT_SETTINGS)
+        path = session.ws(cli.DEFAULT_SETTINGS)
         return ("ok", f"{cli._tilde(path.resolve())} in use") if path.is_file() else ("dim", "built-in defaults (no settings file yet)")
 
     def _status_releases(self, session):
@@ -584,21 +638,21 @@ class Shell:
 
     # -- pieces the screens call
     def _auth_args(self):
-        return self.session.args_for("auth") if self.session.address.strip() else self.session.base_args()
+        return self.session.args_for("auth")
 
     def _settings_form(self):
-        args = self.session.base_args()
-        args.settings, args.set = None, None
+        args = self.session.args_for("settings", address=False)
         try:
             return cli._settings_form(args), ""
         except Exception as exc:
             return None, f"cannot open the settings: {exc}"
 
     def _not_yet(self, step):
-        address, target = self.session.address.strip() or "<panorama>", self.session.target.strip() or "<version>"
+        profile, target = self.session.profile, self.session.target.strip() or "<version>"
+        where = f"--profile {profile.name}" if profile else f"--panorama {self.session.address.strip() or '<panorama>'}"
         what = "get the firewalls ready (content, config sync, image downloads)" if step == "prepare" else "run the upgrade"
         return (f"This step is not on the screen yet. Until it is, it runs from the command line, where you type APPROVE to confirm it.\n\n"
-                f"To {what}:\n\n    panupgrade {step} --panorama {address} --target {target}\n\n"
+                f"To {what}:\n\n    panupgrade {step} {where} --target {target}\n\n"
                 f"It uses {cli.DEFAULT_LIST} for the firewalls and the same sign-in and settings you have just set up.")
 
     @staticmethod

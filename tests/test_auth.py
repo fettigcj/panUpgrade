@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 the panUpgrade contributors
 
-"""The sign-in screen: accounts in the credentials file, the choice of account, and what happens when credentials are missing."""
+"""Panorama profiles and the sign-in screen: a workspace per Panorama, the admin accounts under each, and what happens when credentials
+are missing."""
 
 import argparse
 import io
@@ -14,11 +15,11 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from panupgrade import authform, cli, credstore, site, tui
+from panupgrade import authform, cli, credstore, profiles, site, tui
 from panupgrade.sources import SourceError
 
 SECRET = "SECRET-VALUE-123"
-KEYS = ("PANUPGRADE_HOME", "PANUPGRADE_CREDS", "PANUPGRADE_ACCOUNT", "PANUPGRADE_WORK_ACCOUNT")
+KEYS = ("PANUPGRADE_HOME", "PANUPGRADE_CREDS", "PANUPGRADE_ACCOUNT", "PANUPGRADE_WORK_ACCOUNT", "PANUPGRADE_PROFILE")
 
 
 class Home(unittest.TestCase):
@@ -41,36 +42,102 @@ class Home(unittest.TestCase):
         path.write_text(text, encoding="utf-8")
         return path
 
+    def profile(self, name="lab", address="192.0.2.1", accounts=None, **data):
+        """A profile on disk, with its credentials file when accounts are given."""
+        profile = profiles.create(name, address)
+        profile.data.update(data)
+        profile.save()
+        if accounts is not None:
+            credstore.write(profile.creds_file, accounts)
+        return profile
 
-class SettingsPrecedence(Home):
+
+class TheProfiles(Home):
+    def test_a_profile_is_a_folder_that_lists_itself(self):
+        self.assertEqual(profiles.names(), [])
+        lab = profiles.create("lab", " 192.0.2.1 ")
+        self.assertEqual((lab.name, lab.address), ("lab", "192.0.2.1"))
+        self.assertEqual(profiles.names(), ["lab"])
+        self.assertEqual(Path(lab.path("upgradeList.txt")), self.home / "profiles" / "lab" / "upgradeList.txt")
+        self.assertEqual(Path(lab.creds_file), self.home / "profiles" / "lab" / "credentials.txt")
+
+    def test_names_are_checked_and_not_reused(self):
+        for bad in ("", " x", "a/b", "..", "a\\b", "x" * 41, "name.", "old.removed-1"):
+            self.assertFalse(profiles.valid_name(bad), bad)
+        self.assertTrue(profiles.valid_name("prod east 2"))
+        profiles.create("lab")
+        with self.assertRaisesRegex(profiles.ProfileError, "already"):
+            profiles.create("lab")
+        with self.assertRaises(profiles.ProfileError):
+            profiles.create("../x")
+
+    def test_removing_a_profile_keeps_its_folder_so_no_backup_or_journal_is_lost(self):
+        lab = profiles.create("lab", "192.0.2.1")
+        lab.path("backups").mkdir()
+        (lab.path("backups") / "config.xml").write_text("<config/>", encoding="utf-8")
+        kept = profiles.remove("lab")
+        self.assertEqual(profiles.names(), [])
+        self.assertTrue((self.home / "profiles" / kept / "backups" / "config.xml").is_file())
+        profiles.create("lab")                                      # the name is free again
+        self.assertEqual(profiles.names(), ["lab"])
+        profiles.remove("lab")                                      # and a second removal does not collide with the first
+        self.assertEqual(len([p for p in (self.home / "profiles").iterdir() if ".removed-" in p.name]), 2)
+
+    def test_which_profile_is_used(self):
+        a, b = profiles.create("a", "10.0.0.1"), profiles.create("b", "10.0.0.2")
+        self.assertIsNone(profiles.choose(address="10.9.9.9"))                       # a Panorama with no profile is used as it is
+        self.assertEqual(profiles.choose(address="10.0.0.2").name, "b")              # matched by address
+        self.assertEqual(profiles.choose(address="10.0.0.2".upper()).name, "b")
+        self.assertIsNone(profiles.choose())                                          # two profiles, none remembered
+        profiles.remember("a")
+        self.assertEqual(profiles.choose().name, "a")                                 # the one used last
+        self.assertEqual(profiles.choose("b").name, "b")                              # explicit wins
+        os.environ["PANUPGRADE_PROFILE"] = "b"
+        self.assertEqual(profiles.choose().name, "b")                                 # then the environment variable
+        self.assertEqual(profiles.choose("a").name, "a")
+        with self.assertRaisesRegex(profiles.ProfileError, "no profile called nope.*profiles: a, b"):
+            profiles.choose("nope")
+        self.assertEqual((a.address, b.address), ("10.0.0.1", "10.0.0.2"))
+
+    def test_a_single_profile_is_simply_the_one_in_use(self):
+        profiles.create("only", "10.0.0.1")
+        self.assertEqual(profiles.choose().name, "only")
+        self.assertIsNone(profiles.choose(address="10.0.0.9"))
+
+    def test_the_record_holds_names_and_addresses_not_secrets(self):
+        lab = self.profile(accounts={"admin": SECRET})
+        record = (lab.dir / "profile.json").read_text(encoding="utf-8")
+        self.assertNotIn(SECRET, record)
+        self.assertEqual(json.loads(record), {"address": "192.0.2.1"})
+
+
+class WhereTheChoiceComesFrom(Home):
     def test_defaults_when_nothing_is_set(self):
         self.assertEqual(site.creds_path(), (str(self.home / "credentials.txt"), "default"))
         self.assertEqual(site.account(), (None, "default"))
 
-    def test_the_settings_file_beats_the_default_and_an_environment_variable_beats_the_file(self):
-        (self.home / "auth.json").write_text(json.dumps({"account": "from-file", "work_account": "worker"}), encoding="utf-8")
-        self.assertEqual(site.account(), ("from-file", "auth.json"))
-        self.assertEqual(site.work_account(), ("worker", "auth.json"))
+    def test_a_profile_beats_the_default_and_an_environment_variable_beats_the_profile(self):
+        lab = self.profile(account="from-profile", work_account="worker")
+        self.assertEqual(site.account(lab), ("from-profile", "profile:lab"))
+        self.assertEqual(site.work_account(lab), ("worker", "profile:lab"))
+        self.assertEqual(site.creds_path(lab), (lab.creds_file, "profile:lab"))
         os.environ["PANUPGRADE_ACCOUNT"] = "from-env"
-        self.assertEqual(site.account(), ("from-env", "PANUPGRADE_ACCOUNT"))
+        os.environ["PANUPGRADE_CREDS"] = "elsewhere.txt"
+        self.assertEqual(site.account(lab), ("from-env", "PANUPGRADE_ACCOUNT"))
+        self.assertEqual(site.creds_path(lab), ("elsewhere.txt", "PANUPGRADE_CREDS"))
 
-    def test_a_broken_settings_file_is_just_no_settings(self):
-        (self.home / "auth.json").write_text("{not json", encoding="utf-8")
-        self.assertEqual(site.account(), (None, "default"))
-
-    def test_the_announcement_says_where_the_choice_came_from(self):
-        (self.home / "auth.json").write_text(json.dumps({"account": "svc"}), encoding="utf-8")
-        creds = self.creds("{'svc': 'pw', 'other': 'pw'}")
+    def test_the_announcement_says_which_profile_the_choice_came_from(self):
+        lab = self.profile(accounts={"svc": "pw", "other": "pw"}, account="svc")
         a = argparse.Namespace(source="panorama:192.0.2.1", creds_file=None, account=None, work_account=None, ask_credentials=None,
-                               color="never", ascii=True)
+                               color="never", ascii=True, _profile=lab)
         out = io.StringIO()
         with redirect_stdout(out):
             cli._announce_connection(a)
         text = out.getvalue()
-        self.assertIn("Reading as: svc (from your sign-in settings", text)
-        self.assertIn("default location", text)
+        self.assertIn("Reading as: svc (from the profile lab)", text)
+        self.assertIn("Credentials file:", text)
+        self.assertIn("from the profile lab", text)
         self.assertNotIn("pw", text.replace("PANUPGRADE", ""))
-        self.assertTrue(creds.is_file())
 
 
 class TheCredentialsFile(Home):
@@ -115,7 +182,7 @@ class FakeServices:
         return True, f"{name} signed in to {address}."
 
     def save(self, form):
-        self.saved.append(dict(form.accounts))
+        self.saved.append({n: dict(e.accounts) for n, e in form.entries.items()})
         return authform.save_all(form, set_user_env=lambda *a: None, delete_user_env=lambda *a: None)
 
 
@@ -132,12 +199,15 @@ def screen(form, width=110, height=36):
     return tui.plain(form.render(width, height, "title here"))
 
 
+def entry(name="lab", address="192.0.2.1", accounts=None, reading="", changes=""):
+    return authform.Entry(name, address, accounts or {}, reading, changes, str(profiles.root() / name / "credentials.txt"))
+
+
 class TheForm(Home):
-    def form(self, accounts=None, **over):
-        path = self.home / "credentials.txt"
-        values = dict(reading="", changes="", store="config", address="", notice="", services=FakeServices(), overrides=())
+    def form(self, *entries, active="", **over):
+        values = dict(store="state", notice="", services=FakeServices(), overrides=())
         values.update(over)
-        return authform.Form(accounts if accounts is not None else {}, path, "default location", **values)
+        return authform.Form(list(entries) or [entry()], active, **values)
 
     def add(self, form, name, kind, secret):
         form.zone = "accounts"
@@ -146,7 +216,7 @@ class TheForm(Home):
             form.press("right")
         keys(form, "tab", *typing(secret), "tab", "enter")
 
-    def test_a_password_account_is_added_and_never_shown_again(self):
+    def test_a_password_account_is_added_to_the_profile_in_use_and_never_shown_again(self):
         form = self.form()
         self.add(form, "person", 0, SECRET)
         self.assertEqual(form.accounts, {"person": SECRET})
@@ -171,24 +241,24 @@ class TheForm(Home):
         self.assertIn("API key", screen(form))
 
     def test_sign_in_now_keeps_only_the_key_and_forgets_the_password(self):
-        form = self.form(address="192.0.2.1")
+        form = self.form()
         self.add(form, "admin", 2, "their-password")
         self.assertEqual(form.accounts, {"admin": {"api_key": "KEY-FROM-LOGIN"}})
         self.assertEqual(form.services.signed_in, [("192.0.2.1", "admin")])
         self.assertNotIn("their-password", repr(form.accounts))
 
     def test_a_failed_sign_in_keeps_the_dialog_open_and_adds_nothing(self):
-        form = self.form(address="192.0.2.1")
+        form = self.form()
         self.add(form, "admin", 2, "wrong")
         self.assertEqual(form.accounts, {})
         self.assertIsNotNone(form.modal)
         self.assertIn("login as admin failed", form.message)
 
-    def test_sign_in_now_needs_the_panorama_address(self):
-        form = self.form()
+    def test_sign_in_now_needs_the_profiles_address(self):
+        form = self.form(entry(address=""))
         self.add(form, "admin", 2, "pw")
         self.assertEqual(form.accounts, {})
-        self.assertIn("needs the Panorama address", form.message)
+        self.assertIn("needs this profile's Panorama address", form.message)
 
     def test_a_name_and_a_secret_are_required_and_escape_closes_the_dialog(self):
         form = self.form()
@@ -202,7 +272,7 @@ class TheForm(Home):
         self.assertIsNone(form.modal)
 
     def test_remove_and_the_choices_for_reading_and_changes(self):
-        form = self.form({"a": "1", "b": "2", "c": "3"})
+        form = self.form(entry(accounts={"a": "1", "b": "2", "c": "3"}))
         form.zone = "accounts"
         keys(form, "r")                                              # a for reading
         keys(form, "down", "c")                                      # b for changes
@@ -210,113 +280,259 @@ class TheForm(Home):
         keys(form, "c")                                              # again: back to the same as reading
         self.assertEqual(form.changes, "")
         keys(form, "c", "delete")                                    # b chosen for changes, then removed
-        self.assertEqual((form.names(), form.reading, form.changes), (["a", "c"], "a", ""))
+        self.assertEqual((form.account_names(), form.reading, form.changes), (["a", "c"], "a", ""))
         self.assertIn("used for", screen(form))
 
     def test_the_only_account_is_used_for_everything_without_choosing(self):
-        form = self.form({"solo": "pw"})
+        form = self.form(entry(accounts={"solo": "pw"}))
         self.assertEqual((form.effective_reading(), form.effective_changes()), ("solo", "solo"))
         self.assertIn("only account", screen(form))
 
     def test_test_sign_in_needs_an_address_then_reports(self):
-        form = self.form({"a": "pw"})
+        form = self.form(entry(address="", accounts={"a": "pw"}))
         form.zone = "accounts"
         keys(form, "t")
-        self.assertIn("Type the Panorama address", form.message)
+        self.assertIn("Type this profile's Panorama address first", form.message)
         self.assertEqual(form.zone, "address")
-        keys(form, *typing("192.0.2.1"), "tab", "tab", "t")
+        keys(form, *typing("192.0.2.1"), "tab", "t")
         self.assertEqual(form.services.tested, [("192.0.2.1", "a")])
         self.assertEqual(form.message, "a signed in to 192.0.2.1.")
 
-    def test_the_ring_of_zones_wraps(self):
-        form = self.form({"a": "pw"})
+
+class SeveralPanoramas(Home):
+    def form(self, *entries, **over):
+        values = dict(store="state", notice="", services=FakeServices(), overrides=())
+        values.update(over)
+        return authform.Form(list(entries), values.pop("active", ""), **values)
+
+    def two(self):
+        return self.form(entry("east", "10.0.0.1", {"e-admin": "pw"}, "e-admin"), entry("west", "10.0.0.2", {"w-one": "pw", "w-two": "pw"}))
+
+    def test_left_and_right_switch_profile_and_each_has_its_own_address_and_accounts(self):
+        form = self.two()
+        self.assertEqual((form.active, form.address, form.account_names()), ("east", "10.0.0.1", ["e-admin"]))
+        form.zone = "profile"
+        form.press("right")
+        self.assertEqual((form.active, form.address, form.account_names()), ("west", "10.0.0.2", ["w-one", "w-two"]))
+        form.press("right")
+        self.assertEqual(form.active, "east")                          # wraps
+        form.press("left")
+        self.assertEqual(form.active, "west")
+        text = screen(form)
+        self.assertIn("< west >", text)
+        self.assertIn("2 of 2", text)
+
+    def test_an_account_added_belongs_to_the_profile_in_use_only(self):
+        form = self.two()
+        form.zone = "accounts"
+        keys(form, "a", *typing("new"), "tab", "tab", *typing("pw"), "tab", "enter")
+        self.assertEqual(form.entries["east"].accounts, {"e-admin": "pw", "new": "pw"})
+        self.assertEqual(form.entries["west"].accounts, {"w-one": "pw", "w-two": "pw"})
+
+    def test_the_same_user_name_can_have_different_secrets_on_different_panoramas(self):
+        form = self.form(entry("east", "10.0.0.1", {"admin": "east-pw"}), entry("west", "10.0.0.2", {"admin": "west-pw"}))
+        self.assertEqual(form.entries["east"].accounts["admin"], "east-pw")
+        self.assertEqual(form.entries["west"].accounts["admin"], "west-pw")
+
+    def test_the_address_is_edited_for_the_profile_in_use(self):
+        form = self.two()
         form.zone = "address"
+        keys(form, "ctrl-u", *typing("pano.example"))
+        self.assertEqual(form.entries["east"].address, "pano.example")
+        self.assertEqual(form.entries["west"].address, "10.0.0.2")
+
+    def test_a_new_profile_is_made_from_a_name_and_an_address_and_becomes_the_one_in_use(self):
+        form = self.two()
+        form.zone = "profile"
+        keys(form, "n", *typing("south"), "tab", *typing("10.0.0.3"), "tab", "enter")
+        self.assertIsNone(form.modal)
+        self.assertEqual((form.active, form.address, form.account_names()), ("south", "10.0.0.3", []))
+        self.assertIn("Added the profile south", form.message)
+        self.assertTrue(form.dirty())
+
+    def test_a_bad_or_taken_profile_name_is_refused_with_a_reason(self):
+        form = self.two()
+        form.zone = "profile"
+        keys(form, "n", *typing("../x"), "tab", "tab", "enter")
+        self.assertIn("starts with a letter or digit", form.message)
+        form.press("ctrl-u")
+        keys(form, *typing("east"), "tab", "tab", "enter")
+        self.assertIn("already a profile called east", form.message)
+        self.assertEqual(sorted(form.entries), ["east", "west"])
+
+    def test_the_new_profile_button_works_from_the_action_row_too(self):
+        form = self.two()
+        form.zone, form.action = "actions", authform.NEW_PROFILE
+        form.press("enter")
+        self.assertEqual(form.modal["type"], "profile")
+
+    def test_removing_a_profile_hides_it_and_says_its_folder_is_kept(self):
+        form = self.two()
+        form.zone = "profile"
+        form.press("delete")
+        self.assertEqual((form.names(), form.active), (["west"], "west"))
+        self.assertIn("folder is kept", form.message)
+
+    def test_removing_the_last_profile_goes_straight_to_making_a_new_one(self):
+        form = self.form(entry())
+        form.zone = "profile"
+        form.press("delete")
+        self.assertEqual(form.modal["type"], "profile")
+
+    def test_with_no_profiles_at_all_it_starts_on_the_new_profile_dialog(self):
+        form = authform.Form([], services=FakeServices(), draft_address="192.0.2.77")
+        self.assertEqual(form.modal["type"], "profile")
+        self.assertEqual(form.modal["address"], "192.0.2.77")
+        self.assertIn("New Panorama profile", screen(form))
+
+    def test_a_panorama_with_no_profile_yet_offers_to_make_one_even_when_others_exist(self):
+        form = authform.Form([entry("east", "10.0.0.1")], "east", services=FakeServices(), draft_address="10.9.9.9")
+        self.assertEqual(form.modal["address"], "10.9.9.9")
+        known = authform.Form([entry("east", "10.0.0.1")], "east", services=FakeServices(), draft_address="10.0.0.1")
+        self.assertIsNone(known.modal)
+
+    def test_the_account_actions_say_to_make_a_profile_first_when_there_is_none(self):
+        form = authform.Form([], services=FakeServices())
+        form.modal = None
+        form.zone = "actions"
+        form.press("enter")
+        self.assertIn("Make a profile first", form.message)
+
+    def test_the_ring_of_zones_wraps(self):
+        form = self.two()
+        form.zone = "profile"
         seen = []
-        for _ in range(6):
+        for _ in range(7):
             seen.append(form.zone)
             form.press("tab")
-        self.assertEqual(seen, ["address", "store", "accounts", "actions", "buttons", "address"])
-        form.zone = "address"
+        self.assertEqual(seen, ["profile", "address", "accounts", "actions", "store", "buttons", "profile"])
+        form.zone = "profile"
         form.press("shift-tab")
         self.assertEqual(form.zone, "buttons")
 
     def test_unsaved_changes_are_marked_and_escape_asks_twice(self):
-        form = self.form({"a": "pw"})
+        form = self.two()
         self.assertEqual(form.press("esc"), "cancel")
+        form = self.two()
         form.zone = "accounts"
-        keys(form, "r")
+        keys(form, "c")                                              # east's account also makes the changes: a difference from what was saved
         self.assertTrue(form.dirty())
         self.assertIn("unsaved changes", screen(form))
         self.assertIsNone(form.press("esc"))
         self.assertEqual(form.press("esc"), "cancel")
 
     def test_no_line_is_wider_than_the_window_and_the_buttons_stay_visible(self):
-        form = self.form({f"account-{i}": "pw" for i in range(12)}, address="192.0.2.1")
-        for width, height in ((60, 20), (90, 24), (140, 40)):
+        form = self.form(entry(accounts={f"account-{i}": "pw" for i in range(12)}), entry("west", "10.0.0.2"))
+        for width, height in ((60, 24), (90, 24), (140, 40)):
             lines = form.render(width, height)
             self.assertLessEqual(len(lines), height)
             for line in lines:
                 self.assertLess(len("".join(t for _s, t in line)), width)
             self.assertIn("[ Save & Exit ]", tui.plain(lines))
 
+    def test_every_action_button_is_on_screen_however_narrow_the_window(self):
+        form = self.two()
+        for width in (160, 100, 70):
+            text = tui.plain(form.render(width, 40))
+            for label in authform.ACTION_LABELS:
+                self.assertIn(f"[ {label} ]", text, (width, label))
+
 
 class Saving(Home):
-    def form(self, accounts, **over):
-        values = dict(reading="", changes="", store="config", services=FakeServices())
+    def form(self, *entries, active="", **over):
+        values = dict(store="state", services=FakeServices())
         values.update(over)
-        return authform.Form(accounts, self.home / "credentials.txt", "default location", **values)
+        return authform.Form(list(entries), active, **values)
 
-    def test_save_writes_the_file_and_the_settings_and_nothing_secret_goes_in_the_settings(self):
-        form = self.form({})
-        form.accounts.update({"a": SECRET, "b": {"api_key": "KEY"}})
-        form.reading, form.changes = "a", "b"
-        message = authform.save_all(form, set_user_env=mock.Mock(), delete_user_env=mock.Mock())
-        self.assertIn("2 accounts", message)
-        self.assertEqual(credstore.read(self.home / "credentials.txt"), {"a": SECRET, "b": {"api_key": "KEY"}})
-        config = json.loads((self.home / "auth.json").read_text(encoding="utf-8"))
-        self.assertEqual(config, {"account": "a", "work_account": "b"})
-        self.assertNotIn(SECRET, (self.home / "auth.json").read_text(encoding="utf-8"))
-        self.assertEqual((site.account()[0], site.work_account()[0]), ("a", "b"))
+    def save(self, form, **kw):
+        return authform.save_all(form, set_user_env=kw.get("set", mock.Mock()), delete_user_env=kw.get("delete", mock.Mock()))
 
-    def test_clearing_the_choices_removes_them_and_an_empty_settings_file_goes_away(self):
-        (self.home / "auth.json").write_text(json.dumps({"account": "a"}), encoding="utf-8")
-        credstore.write(self.home / "credentials.txt", {"a": "pw"})
-        form = self.form({"a": "pw"})
-        authform.save_all(form, set_user_env=mock.Mock(), delete_user_env=mock.Mock())
-        self.assertFalse((self.home / "auth.json").exists())
+    def test_a_new_profile_is_written_with_its_record_its_credentials_and_is_remembered(self):
+        form = authform.Form([], services=FakeServices(), draft_address="192.0.2.1")
+        keys(form, *typing("lab"), "tab", "tab", "enter")                       # the new profile dialog: name, address (prefilled), Create
+        form.zone = "accounts"
+        keys(form, "a", *typing("admin"), "tab", "tab", *typing(SECRET), "tab", "enter", "r")
+        message = self.save(form)
+        self.assertIn("lab (1 account)", message)
+        lab = profiles.load("lab")
+        self.assertEqual((lab.address, lab.account), ("192.0.2.1", "admin"))
+        self.assertEqual(credstore.read(lab.creds_file), {"admin": SECRET})
+        self.assertNotIn(SECRET, (lab.dir / "profile.json").read_text(encoding="utf-8"))
+        self.assertEqual(profiles.remembered(), "lab")
 
-    def test_the_environment_choice_sets_user_variables_and_leaves_the_settings_file_without_them(self):
-        (self.home / "auth.json").write_text(json.dumps({"account": "old", "creds_file": "keep.txt"}), encoding="utf-8")
-        form = self.form({"a": "pw", "b": "pw"}, reading="a", changes="", store="env")
+    def test_several_profiles_are_written_each_to_its_own_folder(self):
+        east, west = entry("east", "10.0.0.1", {"a": "1"}), entry("west", "10.0.0.2", {"b": "2"})
+        east.new = west.new = True
+        self.save(self.form(east, west, active="west"))
+        self.assertEqual(credstore.read(profiles.load("east").creds_file), {"a": "1"})
+        self.assertEqual(credstore.read(profiles.load("west").creds_file), {"b": "2"})
+        self.assertEqual(profiles.names(), ["east", "west"])
+        self.assertEqual(profiles.remembered(), "west")
+
+    def test_saving_keeps_what_the_screen_does_not_edit_such_as_the_target_version(self):
+        lab = self.profile(accounts={"a": "pw"}, target="10.2.11-h1")
+        form = self.form(authform.Entry("lab", lab.address, {"a": "pw"}, "", "", lab.creds_file))
+        form.address = "192.0.2.50"
+        self.save(form)
+        self.assertEqual((profiles.load("lab").address, profiles.load("lab").target), ("192.0.2.50", "10.2.11-h1"))
+
+    def test_removing_a_profile_renames_its_folder_and_never_deletes_it(self):
+        lab = self.profile(accounts={"a": "pw"})
+        lab.path("backups").mkdir()
+        (lab.path("backups") / "kept.xml").write_text("x", encoding="utf-8")
+        form = self.form(authform.Entry("lab", lab.address, {"a": "pw"}, "", "", lab.creds_file), entry("other"))
+        form.zone = "profile"
+        form.active = "lab"
+        form.press("delete")
+        message = self.save(form)
+        self.assertIn("removed lab (folder kept as lab.removed-", message)
+        self.assertEqual(profiles.names(), ["other"])
+        kept = next(p for p in (self.home / "profiles").iterdir() if p.name.startswith("lab.removed-"))
+        self.assertTrue((kept / "backups" / "kept.xml").is_file())
+        self.assertTrue((kept / "credentials.txt").is_file())
+
+    def test_a_profile_made_and_dropped_before_saving_leaves_nothing(self):
+        form = self.form(entry("keep"))
+        form.zone = "profile"
+        keys(form, "n", *typing("scratch"), "tab", "tab", "enter")
+        form.press("delete")
+        self.save(form)
+        self.assertNotIn("scratch", profiles.names())
+
+    def test_the_environment_choice_sets_the_user_variable_and_stops_remembering_in_the_file(self):
+        lab = self.profile()
+        profiles.remember("lab")
+        form = self.form(authform.Entry("lab", lab.address, {}, "", "", lab.creds_file), active="lab", store="env")
         set_var, delete_var = mock.Mock(), mock.Mock()
-        message = authform.save_all(form, set_user_env=set_var, delete_user_env=delete_var)
-        set_var.assert_called_once_with("PANUPGRADE_ACCOUNT", "a")
-        delete_var.assert_called_once_with("PANUPGRADE_WORK_ACCOUNT")
-        self.assertEqual(json.loads((self.home / "auth.json").read_text(encoding="utf-8")), {"creds_file": "keep.txt"})
+        message = self.save(form, set=set_var, delete=delete_var)
+        set_var.assert_called_once_with("PANUPGRADE_PROFILE", "lab")
+        self.assertEqual(profiles.remembered(), "")
         self.assertIn("new terminal", message)
 
-    def test_switching_back_to_the_settings_file_clears_the_user_variables_that_would_override_it(self):
-        form = self.form({"a": "pw"}, reading="a", store="config")
+    def test_switching_back_to_remembering_clears_the_user_variable_that_would_override_it(self):
+        lab = self.profile()
+        form = self.form(authform.Entry("lab", lab.address, {}, "", "", lab.creds_file), active="lab", store="state")
         deleted = []
-        with mock.patch("panupgrade.userenv.supported", return_value=True), mock.patch("panupgrade.userenv.get", return_value="a"):
-            authform.save_all(form, set_user_env=mock.Mock(), delete_user_env=deleted.append)
-        self.assertEqual(sorted(deleted), ["PANUPGRADE_ACCOUNT", "PANUPGRADE_WORK_ACCOUNT"])
+        with mock.patch("panupgrade.userenv.supported", return_value=True), mock.patch("panupgrade.userenv.get", return_value="lab"):
+            self.save(form, delete=deleted.append)
+        self.assertEqual(deleted, ["PANUPGRADE_PROFILE"])
+        self.assertEqual(profiles.remembered(), "lab")
 
     def test_the_form_saves_through_its_services_and_marks_itself_clean(self):
-        form = self.form({"a": "pw"})
+        form = self.form(entry(accounts={"a": "pw"}))
         form.zone = "accounts"
-        keys(form, "r", "tab", "tab")                                 # accounts -> actions -> buttons
+        keys(form, "r", "tab", "tab", "tab")                          # accounts -> actions -> store -> buttons
         self.assertEqual(form.zone, "buttons")
         self.assertEqual(form.press("enter"), "accept")               # Save & Exit
         self.assertFalse(form.dirty())
         self.assertTrue(form.ever_saved)
-        self.assertEqual(site.account()[0], "a")
+        self.assertEqual(profiles.load("lab").account, "a")
 
     def test_a_failed_save_says_why_and_stays_open(self):
         class Broken(FakeServices):
             def save(self, form):
                 raise PermissionError(13, "Permission denied")
-        form = self.form({"a": "pw"}, services=Broken())
+        form = self.form(entry(accounts={"a": "pw"}), services=Broken())
         form.zone = "accounts"
         keys(form, "r")
         self.assertIsNone(form.press("ctrl-d"))
@@ -324,29 +540,117 @@ class Saving(Home):
         self.assertTrue(form.dirty())
 
     def test_environment_variables_are_not_offered_where_there_are_none(self):
-        form = self.form({"a": "pw"})
+        form = self.form(entry())
         form.zone = "store"
         with mock.patch("panupgrade.userenv.supported", return_value=False):
             form.press("right")
-        self.assertEqual(form.store, "config")
+        self.assertEqual(form.store, "state")
         self.assertIn("no user-level environment variables", form.message)
+
+
+class WorkingInAProfile(Home):
+    """The profile in use decides where the list, settings, release table, records and backups live."""
+
+    def test_a_command_with_a_profile_name_works_in_that_workspace_and_takes_its_address(self):
+        lab = self.profile(address="192.0.2.5")
+        args = cli.parse_args(["report", "--profile", "lab"])
+        self.assertEqual(args._profile.name, "lab")
+        self.assertEqual(args.source, "panorama:192.0.2.5")
+        self.assertEqual(cli._ws(args, "upgradeList.txt"), lab.path("upgradeList.txt"))
+
+    def test_naming_a_panorama_that_has_a_profile_uses_that_profile(self):
+        self.profile(address="192.0.2.5")
+        args = cli.parse_args(["report", "--panorama", "192.0.2.5"])
+        self.assertEqual(args._profile.name, "lab")
+
+    def test_a_panorama_with_no_profile_is_used_as_it_is_in_the_current_folder(self):
+        self.profile(address="192.0.2.5")
+        args = cli.parse_args(["report", "--panorama", "192.0.2.99"])
+        self.assertIsNone(args._profile)
+        self.assertEqual(cli._ws(args, "upgradeList.txt"), Path("upgradeList.txt"))
+
+    def test_an_invented_fleet_never_uses_a_profile(self):
+        self.profile()
+        fleet = self.home / "fleet.json"
+        fleet.write_text("{}", encoding="utf-8")
+        self.assertIsNone(cli.parse_args(["report", "--source", f"fake:{fleet}"])._profile)
+
+    def test_naming_no_panorama_and_having_no_profile_is_an_error_that_says_what_to_do(self):
+        with mock.patch("sys.stderr", io.StringIO()) as err, self.assertRaises(SystemExit):
+            cli.parse_args(["report"])
+        self.assertIn("--panorama ADDRESS, or --profile NAME", err.getvalue())
+
+    def test_an_unknown_profile_is_an_error_that_lists_the_ones_there_are(self):
+        self.profile()
+        with mock.patch("sys.stderr", io.StringIO()) as err, self.assertRaises(SystemExit):
+            cli.parse_args(["report", "--profile", "nope"])
+        self.assertIn("no profile called nope", err.getvalue())
+        self.assertIn("lab", err.getvalue())
+
+    def test_the_last_used_profile_is_used_when_no_panorama_is_named(self):
+        self.profile("a", "10.0.0.1")
+        self.profile("b", "10.0.0.2")
+        profiles.remember("b")
+        self.assertEqual(cli.parse_args(["report"])._profile.name, "b")
+
+    def test_the_settings_list_and_release_table_in_the_workspace_are_found_and_pinned(self):
+        lab = self.profile()
+        lab.path("settings.toml").write_text("max_parallel = 2\n", encoding="utf-8")
+        from panupgrade import releases
+        releases.save(lab.path("releases.json"), releases.load())
+        lab.path("upgradeList.txt").write_text("S1\nS2\n", encoding="utf-8")
+        args = cli.parse_args(["plan", "--profile", "lab", "--target", "10.2.2"])
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(cli._load_settings(args).max_parallel, 2)
+            cli._load_releases(args)
+            self.assertEqual(cli._serials(args), ["S1", "S2"])
+        text = out.getvalue()
+        self.assertIn("found in the profile lab", text)
+        self.assertEqual(Path(args.settings), lab.path("settings.toml").resolve())
+        self.assertEqual(Path(args.releases), lab.path("releases.json").resolve())
+
+    def test_backups_run_records_and_upgrade_kits_belong_with_the_profile(self):
+        lab = self.profile()
+        args = cli.parse_args(["plan", "--profile", "lab", "--target", "10.2.2"])
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(Path(cli._load_settings(args).backup_dir), lab.path("backups"))
+        prep = cli.parse_args(["prepare", "--profile", "lab", "--target", "10.2.2"])
+        self.assertIsNone(prep.kit_dir)                                       # resolved to the workspace when it runs
+        self.assertEqual(cli._ws(prep, "prepared"), lab.path("prepared"))
+        other = cli.parse_args(["plan", "--panorama", "192.0.2.99", "--target", "10.2.2"])
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(cli._load_settings(other).backup_dir, "backups")
+
+    def test_the_upgrade_script_runs_in_the_same_workspace(self):
+        from panupgrade import kit
+        lab = self.profile(accounts={"a": "pw"})
+        args = cli.parse_args(["prepare", "--profile", "lab", "--target", "10.2.2"])
+        args._login = {"reading": "a", "changes": "a", "ask": None}
+        argv = kit.upgrade_argv(args, "s.txt", "a.json", "j.jsonl")
+        self.assertEqual(argv[argv.index("--profile") + 1], "lab")
+        self.assertEqual(Path(argv[argv.index("--creds-file") + 1]), Path(lab.creds_file).resolve())
 
 
 class WhenCredentialsAreMissing(Home):
     def args(self, **over):
-        base = dict(source="panorama:192.0.2.1", creds_file=None, account=None, work_account=None, ask_credentials=None, color="never", ascii=True)
+        base = dict(source="panorama:192.0.2.1", creds_file=None, account=None, work_account=None, ask_credentials=None, color="never", ascii=True,
+                    _profile=None)
         base.update(over)
         return argparse.Namespace(**base)
 
-    def test_on_a_terminal_the_sign_in_screen_opens_and_the_command_carries_on_once_it_has_saved(self):
+    def test_on_a_terminal_the_sign_in_screen_opens_and_the_command_carries_on_in_the_profile_it_made(self):
         def fix(args):
-            credstore.write(self.home / "credentials.txt", {"tool": "pw"})
+            lab = profiles.create("lab", "192.0.2.1")
+            credstore.write(lab.creds_file, {"tool": "pw"})
             return True
         out = io.StringIO()
+        args = self.args()
         with redirect_stdout(out), mock.patch("sys.stdin.isatty", return_value=True), mock.patch("sys.stdout.isatty", return_value=True), \
                 mock.patch("panupgrade.cli._run_auth_screen", side_effect=fix) as screen_:
-            login = cli._login(self.args())
+            login = cli._login(args)
         self.assertEqual(login["reading"], "tool")
+        self.assertEqual(args._profile.name, "lab")
         screen_.assert_called_once()
         self.assertIn("Cannot sign in yet: there is no credentials file at", out.getvalue())
 
@@ -365,11 +669,12 @@ class WhenCredentialsAreMissing(Home):
     def test_several_accounts_and_none_chosen_also_opens_the_screen_and_it_is_offered_only_once(self):
         self.creds("{'a': 'x', 'b': 'y'}")
         calls = []
+        args = self.args(creds_file=str(self.home / "credentials.txt"))
         with redirect_stdout(io.StringIO()), mock.patch("sys.stdin.isatty", return_value=True), mock.patch("sys.stdout.isatty", return_value=True), \
                 mock.patch("panupgrade.cli._run_auth_screen", side_effect=lambda a: calls.append(1) or False):
             for _ in range(2):
                 with self.assertRaisesRegex(credstore.NeedsSignIn, "none is chosen"):
-                    cli._login(self.args())
+                    cli._login(args)
         self.assertEqual(len(calls), 1)
 
     def test_an_account_missing_from_the_file_is_offered_the_screen_too(self):
@@ -377,62 +682,82 @@ class WhenCredentialsAreMissing(Home):
         with redirect_stdout(io.StringIO()), mock.patch("sys.stdin.isatty", return_value=True), mock.patch("sys.stdout.isatty", return_value=True), \
                 mock.patch("panupgrade.cli._run_auth_screen", return_value=False) as screen_:
             with self.assertRaises(credstore.NeedsSignIn):
-                cli._key_for(self.args(account="ghost"), "192.0.2.1", "reading")
+                cli._key_for(self.args(account="ghost", creds_file=str(self.home / "credentials.txt")), "192.0.2.1", "reading")
         screen_.assert_called_once()
+
+    def test_a_profile_supplies_the_account_to_read_with(self):
+        lab = self.profile(accounts={"a": "x", "b": "y"}, account="b", work_account="a")
+        login = cli._login(self.args(_profile=lab))
+        self.assertEqual((login["reading"], login["changes"]), ("b", "a"))
+        self.assertIn("from the profile lab", login["how"])
 
 
 class TheAuthCommand(Home):
-    def test_without_a_terminal_it_prints_a_summary_with_no_secrets(self):
-        self.creds("{'person': '" + SECRET + "', 'service': {'api_key': 'KEY-VALUE'}}")
+    def test_without_a_terminal_it_prints_the_profiles_and_their_accounts_with_no_secrets(self):
+        self.profile("east", "10.0.0.1", {"person": SECRET, "service": {"api_key": "KEY-VALUE"}}, account="person")
+        self.profile("west", "10.0.0.2")
         out = io.StringIO()
         with redirect_stdout(out), mock.patch("sys.stdin.isatty", return_value=False):
             self.assertEqual(cli.main(["auth", "--color", "never", "--ascii"]), 0)
         text = out.getvalue()
-        self.assertIn("account person: password", text)
+        self.assertIn("east", text)
+        self.assertIn("10.0.0.1", text)
+        self.assertIn("account person: password (reads)", text)
         self.assertIn("account service: API key", text)
+        self.assertIn("west", text)
+        self.assertIn("no accounts yet", text)
         self.assertNotIn(SECRET, text)
         self.assertNotIn("KEY-VALUE", text)
 
-    def test_the_summary_does_not_claim_an_account_is_chosen_when_none_is(self):
-        self.creds("{'a': 'x', 'b': 'y'}")
-        out = io.StringIO()
-        with redirect_stdout(out), mock.patch("sys.stdin.isatty", return_value=False):
-            cli.main(["auth", "--color", "never", "--ascii"])
-        self.assertIn("none chosen yet", out.getvalue())
-        self.assertNotIn("only account", out.getvalue())
-        os.environ["PANUPGRADE_ACCOUNT"] = "a"
-        out = io.StringIO()
-        with redirect_stdout(out), mock.patch("sys.stdin.isatty", return_value=False):
-            cli.main(["auth", "--color", "never", "--ascii"])
-        self.assertIn("reading account: a (from PANUPGRADE_ACCOUNT)", out.getvalue())
-
-    def test_without_a_file_it_says_how_to_make_one(self):
+    def test_without_any_profile_it_says_how_to_make_one(self):
         out = io.StringIO()
         with redirect_stdout(out), mock.patch("sys.stdin.isatty", return_value=False):
             self.assertEqual(cli.main(["auth", "--color", "never", "--ascii"]), 0)
-        self.assertIn("no credentials file there yet", out.getvalue())
+        self.assertIn("none yet", out.getvalue())
 
-    def test_on_a_terminal_it_opens_the_screen_with_the_panorama_address_filled_in(self):
+    def test_on_a_terminal_it_opens_the_screen_on_the_profile_for_the_panorama_named(self):
+        self.profile("east", "10.0.0.1")
+        self.profile("west", "10.0.0.2")
         seen = {}
 
         def fake_show(form, title=""):
-            seen["address"], seen["accounts"] = form.address, dict(form.accounts)
+            seen["active"], seen["modal"] = form.active, form.modal
             return False
         with redirect_stdout(io.StringIO()), mock.patch("sys.stdin.isatty", return_value=True), mock.patch("sys.stdout.isatty", return_value=True), \
                 mock.patch("panupgrade.tui.show", side_effect=fake_show):
-            code = cli.main(["auth", "--panorama", "192.0.2.1", "--color", "never", "--ascii"])
+            code = cli.main(["auth", "--panorama", "10.0.0.2", "--color", "never", "--ascii"])
         self.assertEqual(code, 1)
-        self.assertEqual(seen, {"address": "192.0.2.1", "accounts": {}})
+        self.assertEqual((seen["active"], seen["modal"]), ("west", None))
+
+    def test_a_panorama_with_no_profile_opens_the_new_profile_dialog_with_the_address_filled_in(self):
+        seen = {}
+
+        def fake_show(form, title=""):
+            seen["modal"] = form.modal
+            return False
+        with redirect_stdout(io.StringIO()), mock.patch("sys.stdin.isatty", return_value=True), mock.patch("sys.stdout.isatty", return_value=True), \
+                mock.patch("panupgrade.tui.show", side_effect=fake_show):
+            cli.main(["auth", "--panorama", "192.0.2.1", "--color", "never", "--ascii"])
+        self.assertEqual((seen["modal"]["type"], seen["modal"]["address"]), ("profile", "192.0.2.1"))
 
     def test_a_credentials_file_it_cannot_read_is_never_overwritten(self):
-        bad = self.creds("{'a': 5}")
+        lab = self.profile()
+        lab_creds = Path(lab.creds_file)
+        lab_creds.write_text("{'a': 5}", encoding="utf-8")
         out = io.StringIO()
         with redirect_stdout(out), mock.patch("sys.stdin.isatty", return_value=True), mock.patch("sys.stdout.isatty", return_value=True), \
                 mock.patch("panupgrade.tui.show") as shown:
             cli.main(["auth", "--color", "never", "--ascii"])
         shown.assert_not_called()
         self.assertIn("will not overwrite", " ".join(out.getvalue().split()))
-        self.assertEqual(bad.read_text(encoding="utf-8"), "{'a': 5}")
+        self.assertEqual(lab_creds.read_text(encoding="utf-8"), "{'a': 5}")
+
+    def test_the_screen_warns_about_variables_that_would_override_the_profile(self):
+        self.profile()
+        os.environ["PANUPGRADE_ACCOUNT"] = "x"
+        form, _ = cli._auth_form(cli.parse_args(["auth"]))
+        self.assertEqual(form.overrides, ["PANUPGRADE_ACCOUNT"])
+        self.assertIn("PANUPGRADE_ACCOUNT", screen(form))
 
 
 if __name__ == "__main__":

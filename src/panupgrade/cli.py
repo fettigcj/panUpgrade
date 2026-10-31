@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import (approval as approval_mod, fleetreport, console, executor, paths, prepare as prepare_mod, releases as releases_mod, report,
                settings as settings_mod, xlsxout)
-from . import credstore, site, trust
+from . import credstore, profiles, site, trust
 from .credstore import NeedsSignIn
 from .trust import CertificateProblem
 from .journal import Journal, JournalError
@@ -42,19 +42,34 @@ def _tilde(path):
 
 
 def _where_from(origin, flag=None):
-    """Words for where a sign-in value came from: a flag, an environment variable, the sign-in settings file, or the default."""
+    """Words for where a sign-in value came from: a flag, an environment variable, the Panorama profile, or the default."""
     if flag:
         return f"set with {flag}"
-    if origin == site.CONFIG_NAME:
-        return f"from your sign-in settings, {_tilde(site.config_path())}"
+    if origin.startswith("profile:"):
+        return f"from the profile {origin[len('profile:'):]}"
     return "default location" if origin == "default" else f"from {origin}"
+
+
+def _profile(args):
+    """The Panorama profile in use, or None."""
+    return getattr(args, "_profile", None)
+
+
+def _ws(args, name):
+    """A file or folder in the working place: the profile's workspace, or the current folder when no profile is in use."""
+    profile = _profile(args)
+    return profile.path(name) if profile else Path(name)
+
+
+def _found_in(args):
+    return f"found in the profile {_profile(args).name}" if _profile(args) else "found in this folder"
 
 
 def _creds(args):
     """(credentials file path, where that choice came from)."""
     if args.creds_file:
         return args.creds_file, _where_from(None, "--creds-file")
-    path, origin = site.creds_path()
+    path, origin = site.creds_path(_profile(args))
     return path, _where_from(origin)
 
 
@@ -84,8 +99,8 @@ def _settle_login(args):
     if ask != "all":
         if args.account:
             reading, how = args.account, _where_from(None, "--account")
-        elif site.account()[0]:
-            reading, how = site.account()[0], _where_from(site.account()[1])
+        elif site.account(_profile(args))[0]:
+            reading, how = site.account(_profile(args))[0], _where_from(site.account(_profile(args))[1])
         else:
             path, _origin = _creds(args)
             names = sorted(credstore.read(path))
@@ -96,10 +111,10 @@ def _settle_login(args):
                                   f"say which with --account NAME (or PANUPGRADE_ACCOUNT), or use --ask-credentials to type a login instead")
             reading, how = names[0], "the only account in that file"
     if ask not in ("changes", "all"):
-        changes = getattr(args, "work_account", None) or site.work_account()[0] or reading
+        changes = getattr(args, "work_account", None) or site.work_account(_profile(args))[0] or reading
     args._login = {"reading": reading, "changes": changes, "ask": ask, "how": how,
                    "changes_how": (_where_from(None, "--work-account") if getattr(args, "work_account", None)
-                                   else _where_from(site.work_account()[1]) if site.work_account()[0] else "")}
+                                   else _where_from(site.work_account(_profile(args))[1]) if site.work_account(_profile(args))[0] else "")}
     return args._login
 
 
@@ -114,7 +129,13 @@ def _offer_sign_in_screen(args, problem):
     style = _style(args)
     print(style.line("warn", f"Cannot sign in yet: {problem}."))
     print(style.line("info", "Opening the sign-in screen so you can fix that here. Quit it to stop."))
-    return _run_auth_screen(args)
+    saved = _run_auth_screen(args)
+    if saved:
+        try:
+            args._profile = _resolve_profile(args)                 # the screen may have made the profile for this Panorama
+        except profiles.ProfileError:
+            pass
+    return saved
 
 
 def _typed(args, address):
@@ -231,9 +252,11 @@ def _announce_connection(args, writing=False):
 def _load_settings(args):
     """Load the settings and say, once, where they came from."""
     found = ""
-    if not args.settings and Path(DEFAULT_SETTINGS).is_file():
-        args.settings, found = str(Path(DEFAULT_SETTINGS).resolve()), " (found in this folder)"     # the kit script then pins this exact file
+    if not args.settings and _ws(args, DEFAULT_SETTINGS).is_file():
+        args.settings, found = str(_ws(args, DEFAULT_SETTINGS).resolve()), f" ({_found_in(args)})"     # the kit script then pins this exact file
     settings = settings_mod.load(args.settings, args.set)
+    if _profile(args) and not os.path.isabs(settings.backup_dir):
+        settings.backup_dir = str(_profile(args).path(settings.backup_dir))       # backups belong with the Panorama they came from
     if ("settings", args.settings) not in _SAID:
         _SAID.add(("settings", args.settings))
         style = _style(args)
@@ -265,7 +288,7 @@ def _source(args):
 def _read_list(path):
     """The serial numbers in a list file: one per line, '#' starts a note."""
     serials = []
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
+    for line in Path(path).expanduser().read_text(encoding="utf-8").splitlines():
         line = line.split("#", 1)[0].strip()      # 'SERIAL   # a note' is fine
         if line:
             serials.append(line.split()[0])
@@ -278,7 +301,7 @@ def _default_list(args):
         return None
     if args.serial or args.serials_file or any(getattr(args, f, None) for f in _FILTERS):
         return None
-    return Path(DEFAULT_LIST) if Path(DEFAULT_LIST).is_file() else None
+    return _ws(args, DEFAULT_LIST) if _ws(args, DEFAULT_LIST).is_file() else None
 
 
 def _serials(args):
@@ -315,8 +338,8 @@ def _load_releases(args):
     Says which, once. A table found in the folder is recorded in ``args.releases`` so the upgrade script pins that exact file.
     """
     found = ""
-    if not args.releases and Path(DEFAULT_RELEASES).is_file():
-        args.releases, found = str(Path(DEFAULT_RELEASES).resolve()), " (found in this folder)"
+    if not args.releases and _ws(args, DEFAULT_RELEASES).is_file():
+        args.releases, found = str(_ws(args, DEFAULT_RELEASES).resolve()), f" ({_found_in(args)})"
     table = releases_mod.load(args.releases)
     if ("releases", args.releases) not in _SAID:
         _SAID.add(("releases", args.releases))
@@ -397,19 +420,25 @@ def _repeat_hint(args, flags):
 
 
 def _write_list(path, chosen, criteria):
+    path = Path(path).expanduser()
     lines = [f"# panupgrade device list - criteria: {criteria}",
              "# One serial per line; text after # is ignored. Delete a line to drop a device; the file is the list that is used."]
     lines += [f"{r.serial}   # {r.hostname}  {r.sw_version}  {r.ha_state or '-'}" for r in chosen]
     Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _default_list_text(args):
+    """Where the list is kept by default, as the person would type it: a plain file name, or the path in the profile's workspace."""
+    return _tilde(_ws(args, DEFAULT_LIST)) if _profile(args) else DEFAULT_LIST
+
+
 def _select_form(args, refs):
     """The select form for these firewalls, starting from the list saved last time when no firewalls were named."""
     from . import selectform
     selection = _selection(args)
-    saved = args.out or DEFAULT_LIST
+    saved = args.out or _default_list_text(args)
     notice = ""
-    if not selection.serials and Path(saved).is_file():           # come back to the list you made last time
+    if not selection.serials and Path(saved).expanduser().is_file():           # come back to the list you made last time
         selection.serials = _read_list(saved)
         notice = f"Started with the {len(selection.serials)} firewalls already in {saved}."
 
@@ -445,12 +474,14 @@ def _select(args):
     print(style.bold(f"Criteria: {criteria}"))
     sys.stdout.write(console.render_table(["#", "hostname", "serial", "model", "PAN-OS", "HA", "device group", "online"], rows, style))
     print(style.line("info", f"{len(chosen)} of {len(refs)} devices match."))
+    home_list = _ws(args, DEFAULT_LIST)
+    where = f"for the profile {_profile(args).name}" if _profile(args) else "when you run them from this folder"
     if args.out:
         print(style.line("info", f"Saving the list to {args.out}. Check it and edit it if needed; " + (
-            "plan, prepare and upgrade use it automatically when you run them from this folder." if Path(args.out).name == DEFAULT_LIST
+            f"plan, prepare and upgrade use it automatically {where}." if Path(args.out).expanduser().resolve() == home_list.resolve()
             else f"pass it to the later commands with --serials-file {args.out}.")))
     else:
-        print(style.line("info", f"To keep this list, add --out {DEFAULT_LIST}; plan, prepare and upgrade then use it automatically."))
+        print(style.line("info", f"To keep this list, add --out {_default_list_text(args)}; plan, prepare and upgrade then use it automatically {where}."))
     if args.out:
         _write_list(args.out, chosen, criteria)
         print(f"Wrote {args.out}")
@@ -532,7 +563,7 @@ def _choose_journal(args, plan, verb, style, input_fn=None, tty=None):
             n += 1
             path = named.with_name(f"{named.stem}-{n}{named.suffix}")
         return str(path), False
-    runs = Path(args.runs_dir)
+    runs = Path(args.runs_dir) if args.runs_dir else _ws(args, "runs")
     previous = _unfinished_run(runs, verb, plan) if (args.resume or verb == "upgrade") and not args.dry_run else None
     if args.resume:
         if previous is None:
@@ -853,6 +884,7 @@ def _issue_kit(args, style, label):
     for note in plan.get("advice", []):
         print(style.line("info", f"{note['scope']}: {note['text']}", 2))
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    args.kit_dir = args.kit_dir or str(_ws(args, "prepared"))
     kit_dir = Path(args.kit_dir)
     kit_dir.mkdir(parents=True, exist_ok=True)
     stem = kit_dir / f"report-{args.target}-{stamp}"
@@ -897,8 +929,8 @@ def _wants_settings_form(args):
 def _settings_form(args):
     """The settings form, on the settings file in use (or the one it would create), with any --set values applied on top."""
     from . import settingsform
-    target = args.settings or DEFAULT_SETTINGS
-    file = args.settings or (DEFAULT_SETTINGS if Path(DEFAULT_SETTINGS).is_file() else None)
+    target = args.settings or str(_ws(args, DEFAULT_SETTINGS))
+    file = args.settings or (target if Path(target).is_file() else None)
     on_disk, current = settings_mod.load(file), settings_mod.load(file, args.set)
     notice = (f"Editing {_tilde(Path(target).resolve())}. Saving rewrites it with only the settings that differ from the defaults; comments are not kept."
               if Path(target).is_file() else
@@ -914,8 +946,8 @@ def _settings(args):
     style = _style(args)
     try:
         use_form = _wants_settings_form(args)
-        target = args.settings or DEFAULT_SETTINGS
-        file = args.settings or (DEFAULT_SETTINGS if Path(DEFAULT_SETTINGS).is_file() else None)
+        target = args.settings or str(_ws(args, DEFAULT_SETTINGS))
+        file = args.settings or (target if Path(target).is_file() else None)
         on_disk = settings_mod.load(file)
         current = settings_mod.load(file, args.set)
     except (settings_mod.SettingsError, SourceError, OSError) as exc:
@@ -944,7 +976,7 @@ def _releases(args):
     """Show the PAN-OS release table in use, or (--update) download a fresh one into a file you own."""
     from panupgrade_live import releasefeed
     style = _style(args)
-    target = args.file or DEFAULT_RELEASES
+    target = args.file or str(_ws(args, DEFAULT_RELEASES))
     try:
         if args.update:
             try:
@@ -958,7 +990,7 @@ def _releases(args):
             print(style.line("info", ("New since the table you had: " + ", ".join(added) + ".") if before and added else
                              "Nothing new since the table you had." if before else "That is now the table every command run from this folder uses."))
             return 0
-        path = args.file or (DEFAULT_RELEASES if Path(DEFAULT_RELEASES).is_file() else None)
+        path = args.file or (target if Path(target).is_file() else None)
         table = releases_mod.load(path)
     except (releases_mod.ReleaseError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -1005,72 +1037,65 @@ class _AuthServices:
         return trust.record(address)
 
 
-def _saved_choices():
-    """(store, reading, changes) as they are kept now: user-level environment variables if any are set there, else the settings file."""
-    from . import authform, userenv
-    if userenv.supported() and any(userenv.get(name) for name in (authform.ENV_NAMES["account"], authform.ENV_NAMES["work_account"])):
-        return "env", userenv.get(authform.ENV_NAMES["account"]) or "", userenv.get(authform.ENV_NAMES["work_account"]) or ""
-    config = site.read_config()
-    return "config", config.get("account") or "", config.get("work_account") or ""
-
-
 def _auth_form(args):
-    """(form, None) for the credentials file in use, or (None, why) when that file exists but cannot be understood."""
-    from . import authform
-    path, origin = _creds(args)
-    exists = Path(path).is_file()
-    try:
-        accounts = credstore.read(path) if exists else {}
-    except SourceError as exc:
-        return None, f"{exc}. Fix or remove that file by hand; the sign-in screen will not overwrite what it cannot read."
-    store, reading, changes = _saved_choices()
-    overrides = [name for key, name in authform.ENV_NAMES.items() if key != "creds_file" and os.environ.get(name)
-                 and os.environ[name] != {"account": reading, "work_account": changes}[key]]
+    """(form, None) for all the profiles, opened on the one in use, or (None, why) when a credentials file exists but cannot be understood."""
+    from . import authform, userenv
+    entries = []
+    for name in profiles.names():
+        profile = profiles.load(name)
+        path = profile.creds_file
+        try:
+            accounts = credstore.read(path) if Path(path).is_file() else {}
+        except SourceError as exc:
+            return None, f"{exc}. Fix or remove that file by hand; the sign-in screen will not overwrite what it cannot read."
+        entries.append(authform.Entry(name, profile.address, accounts, profile.account, profile.work_account, path))
+    store = "env" if userenv.supported() and userenv.get("PANUPGRADE_PROFILE") else "state"
+    overrides = [name for name in authform.ACCOUNT_ENV if os.environ.get(name)]
+    active = _profile(args).name if _profile(args) else (profiles.remembered() or "")
     source = getattr(args, "source", None) or ""
     address = source[len("panorama:"):] if source.startswith("panorama:") else ""
-    notice = "" if exists else f"There is no credentials file yet. Add an account and Save, and it is created at {authform.site_tilde(path)}."
-    form = authform.Form(accounts, path, origin, reading, changes, store, address, notice, _AuthServices(), overrides)
-    form.creds_exists = exists
+    if os.environ.get("PANUPGRADE_PROFILE") and os.environ["PANUPGRADE_PROFILE"] != active:
+        overrides.append("PANUPGRADE_PROFILE")
+    form = authform.Form(entries, active, store, "", _AuthServices(), overrides, address)
     return form, None
 
 
 def _run_auth_screen(args):
-    """Open the sign-in screen on the credentials file in use. True when something was saved."""
+    """Open the sign-in screen. True when something was saved."""
     from . import tui
     form, problem = _auth_form(args)
     if form is None:
         print(_style(args).line("fail", problem))
         return False
-    accepted = tui.show(form, "panupgrade auth - how this tool signs in to Panorama")
+    accepted = tui.show(form, "panupgrade auth - Panorama profiles and their admin accounts")
     return accepted or form.ever_saved
 
 
 def _auth(args):
-    """Set up how the tool signs in: a form on a terminal, a plain summary otherwise. Changes nothing but the sign-in files."""
+    """Set up Panorama profiles and their admin accounts: a form on a terminal, a plain summary otherwise."""
     style = _style(args)
     if sys.stdin.isatty() and sys.stdout.isatty():
         saved = _run_auth_screen(args)
         print(style.line("ok" if saved else "info", "Sign-in settings saved." if saved else "Nothing was saved."))
         return 0 if saved else 1
-    path, origin = _creds(args)
-    print(style.bold("Sign-in settings"))
-    print(f"  credentials file: {_tilde(path)} ({origin})")
-    try:
-        accounts = credstore.read(path)
-    except NeedsSignIn:
-        print("  no credentials file there yet; run `panupgrade auth` at a terminal to create one")
-        return 0
-    except SourceError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-    for name in sorted(accounts):
-        print(f"  account {name}: {credstore.kind(accounts[name])}")
-    reading, changes = site.account(), site.work_account()
-    if reading[0]:
-        print(f"  reading account: {reading[0]} ({_where_from(reading[1])})")
-    else:
-        print("  reading account: " + ("the only account in the file" if len(accounts) == 1 else "none chosen yet; run `panupgrade auth` or use --account"))
-    print(f"  changes account: {changes[0] or 'the same as reading'}" + (f" ({_where_from(changes[1])})" if changes[0] else ""))
+    print(style.bold("Panorama profiles"))
+    names = profiles.names()
+    if not names:
+        print("  none yet; run `panupgrade auth` at a terminal to make one")
+    current = _profile(args)
+    for name in names:
+        profile = profiles.load(name)
+        print(f"  {name}{' (in use)' if current and current.name == name else ''}: {profile.address or 'no address yet'}")
+        try:
+            accounts = credstore.read(profile.creds_file) if Path(profile.creds_file).is_file() else {}
+        except SourceError as exc:
+            print(f"    error: {exc}", file=sys.stderr)
+            return 2
+        for account in sorted(accounts):
+            roles = [w for w, n in (("reads", profile.account), ("changes", profile.work_account)) if n == account]
+            print(f"    account {account}: {credstore.kind(accounts[account])}" + (f" ({', '.join(roles)})" if roles else ""))
+        if not accounts:
+            print("    no accounts yet")
     return 0
 
 
@@ -1080,11 +1105,19 @@ def _shell(args):
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         print("error: the shell needs a terminal; use the commands (see `panupgrade help`) in a script", file=sys.stderr)
         return 2
+    try:
+        profile = _resolve_profile(args)
+    except profiles.ProfileError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     remembered = site.read_state()
-    session = shell.Session(args, getattr(args, "panorama", None) or remembered.get("panorama", ""),
-                            getattr(args, "target", None) or remembered.get("target", ""))
+    address = getattr(args, "panorama", None) or (profile.address if profile else remembered.get("panorama", ""))
+    target = getattr(args, "target", None) or (profile.target if profile else remembered.get("target", ""))
+    session = shell.Session(args, address, target, profile)
     tui.show(shell.Shell(session), "panupgrade")
-    site.write_state(panorama=session.address.strip(), target=session.target.strip())
+    session.persist()
+    if session.profile:
+        profiles.remember(session.profile.name)
     print(_style(args).line("info", "Closed the panupgrade screen. Nothing was changed on any firewall."))
     return 0
 
@@ -1092,8 +1125,11 @@ def _shell(args):
 def _selection_args(p):
     """Connection options and the filters that choose which firewalls a command looks at (all of them by default)."""
     conn = p.add_argument_group("connect to Panorama")
-    where = conn.add_mutually_exclusive_group(required=True)
-    where.add_argument("--panorama", metavar="ADDRESS", help="the Panorama that manages your firewalls (name or IP address)")
+    where = conn.add_mutually_exclusive_group()
+    where.add_argument("--panorama", metavar="ADDRESS", help="the Panorama that manages your firewalls (name or IP address); "
+                                                           "optional when a profile names it")
+    conn.add_argument("--profile", metavar="NAME", help="the Panorama profile to work in: its address, accounts, firewall list, settings and "
+                                                       "records (or PANUPGRADE_PROFILE; see `panupgrade auth`)")
     where.add_argument("--source", help="fake:<fleet.json> to try the tool on an invented fleet, with no firewall involved")
     conn.add_argument("--creds-file", help="credentials file: accounts with a password or API key each (default: ~/.panupgrade/credentials.txt, "
                                            "or PANUPGRADE_CREDS, or the choice made in `panupgrade auth`); never printed")
@@ -1172,7 +1208,7 @@ def _plan_args(p):
 def _run_args(p, journal_required=False):
     p.add_argument("--journal", required=journal_required,
                    help="override the run file; by default a new, time-stamped one is named for you under --runs-dir and never overwritten")
-    p.add_argument("--runs-dir", default="runs", help="where run journals are kept (default runs)")
+    p.add_argument("--runs-dir", help="where run journals are kept (default: runs, in the profile's workspace or the current folder)")
     p.add_argument("--resume", action="store_true", help="continue the unfinished earlier run of this exact plan (or the file named by --journal)")
     p.add_argument("--fresh", action="store_true", help="start a new run even if an unfinished earlier run of this plan exists")
     p.add_argument("--work-account", metavar="NAME",
@@ -1226,7 +1262,7 @@ def build_parser():
     prep.add_argument("--set", action="append", help="override a setting: name=value")
     prep.add_argument("--approval", help="approval JSON for the preparation tasks themselves; without it you are asked to type APPROVE "
                                          "(a --dry-run asks nothing)")
-    prep.add_argument("--kit-dir", default="prepared",
+    prep.add_argument("--kit-dir",
                       help="where the upgrade kit (firewall list, approval, run script) is written after a real prepare (default prepared)")
     prep.add_argument("--target", help="the version you are about to upgrade to: pre-download its images, and only touch firewalls it would change")
     prep.add_argument("--path-rules", help="path rules JSON (default: the packaged rules)")
@@ -1236,13 +1272,15 @@ def build_parser():
 
     sh = sub.add_parser("shell", help="the whole workflow on one screen (this is also what plain `panupgrade` opens at a terminal)")
     sh.add_argument("--panorama", metavar="ADDRESS", help="the Panorama to work with (remembered from last time when left out)")
-    sh.add_argument("--target", help="the PAN-OS version to upgrade to (remembered from last time when left out)")
+    sh.add_argument("--target", help="the PAN-OS version to upgrade to (remembered with the profile when left out)")
+    sh.add_argument("--profile", metavar="NAME", help="the Panorama profile to start in (the one used last, when left out)")
     sh.add_argument("--creds-file", help="the credentials file to use (default ~/.panupgrade/credentials.txt, or PANUPGRADE_CREDS)")
     sh.add_argument("--insecure-tls", action="store_true", help="do not verify Panorama's TLS certificate (lab use only)")
     sh.set_defaults(func=_shell)
 
     au = sub.add_parser("auth", help="set up how the tool signs in to Panorama: accounts, API keys, which account reads and which changes")
     au.add_argument("--panorama", metavar="ADDRESS", help="the Panorama to test a sign-in against, or to obtain an API key from")
+    au.add_argument("--profile", metavar="NAME", help="the Panorama profile to open on")
     au.add_argument("--creds-file", help="the credentials file to edit (default ~/.panupgrade/credentials.txt, or PANUPGRADE_CREDS)")
     au.add_argument("--insecure-tls", action="store_true", help="do not verify Panorama's TLS certificate (lab use only)")
     au.add_argument("--color", choices=["auto", "always", "never"], default="auto", help=argparse.SUPPRESS)
@@ -1251,13 +1289,15 @@ def build_parser():
 
     rl = sub.add_parser("releases", help="show the PAN-OS release table used to count minor versions, or download a fresh one")
     rl.add_argument("--update", action="store_true", help=f"download the vendor's list of PAN-OS releases and save it as ./{DEFAULT_RELEASES}")
-    rl.add_argument("--file", help=f"the table to show, or to save to with --update (default ./{DEFAULT_RELEASES})")
+    rl.add_argument("--file", help=f"the table to show, or to save to with --update (default {DEFAULT_RELEASES} in the profile's workspace or the current folder)")
+    rl.add_argument("--profile", metavar="NAME", help="the Panorama profile whose release table to show or update")
     rl.add_argument("--color", choices=["auto", "always", "never"], default="auto", help=argparse.SUPPRESS)
     rl.add_argument("--ascii", action="store_true", help=argparse.SUPPRESS)
     rl.set_defaults(func=_releases)
 
     st = sub.add_parser("settings", help="change the settings on a form (or print them when there is no terminal); changes nothing else")
-    st.add_argument("--settings", help=f"the settings file to edit (default ./{DEFAULT_SETTINGS})")
+    st.add_argument("--settings", help=f"the settings file to edit (default {DEFAULT_SETTINGS} in the profile's workspace or the current folder)")
+    st.add_argument("--profile", metavar="NAME", help="the Panorama profile whose settings to edit")
     st.add_argument("--set", action="append", help="try a one-off value: name=value. With this, the settings are printed instead of editing a file")
     st.add_argument("-i", "--interactive", action=argparse.BooleanOptionalAction, default=None,
                     help="edit the settings on a form. Opens by itself when you run `settings` at a terminal; --no-interactive prints the values instead")
@@ -1268,14 +1308,39 @@ def build_parser():
     return parser
 
 
+def _resolve_profile(args):
+    """The Panorama profile this command works in (see ``profiles``), or None."""
+    source = getattr(args, "source", None) or ""
+    fake = source.startswith("fake:")
+    address = getattr(args, "panorama", None) or (source[len("panorama:"):] if source.startswith("panorama:") else None)
+    if fake and not getattr(args, "profile", None):
+        return None
+    return profiles.choose(getattr(args, "profile", None), address, use_remembered=not address)
+
+
+def _use_profile(parser, args):
+    """Settle which Panorama profile this command works in and let it supply the address when none was given."""
+    address = getattr(args, "panorama", None)
+    try:
+        profile = _resolve_profile(args)
+    except profiles.ProfileError as exc:
+        parser.error(str(exc))
+    args._profile = profile
+    if profile is not None and hasattr(args, "panorama") and not address and not getattr(args, "source", None) and profile.address:
+        args.panorama = profile.address
+
+
 def parse_args(argv):
     """argv parsed as the command line would be, with --panorama folded into the source and --insecure-tls applied."""
     parser = build_parser()
     args = parser.parse_args(argv)
     if getattr(args, "source", None) and not args.source.startswith("fake:"):
         parser.error("--source takes fake:<fleet.json>; use --panorama ADDRESS for a real Panorama")
+    _use_profile(parser, args)
     if getattr(args, "panorama", None):
         args.source = "panorama:" + args.panorama
+    if hasattr(args, "source") and not args.source:
+        parser.error("name a Panorama: --panorama ADDRESS, or --profile NAME (or make a profile with `panupgrade auth`)")
     if getattr(args, "insecure_tls", False):
         os.environ["PANUPGRADE_INSECURE_TLS"] = "1"
     return args

@@ -36,6 +36,8 @@ def upgrade_argv(args, serials_file, approval_file, journal_file):
     where = ["--panorama", args.source[len("panorama:"):]] if args.source.startswith("panorama:") else ["--source", args.source]
     argv = ["python", "-m", "panupgrade", "upgrade", *where, "--serials-file", str(serials_file),
             "--target", args.target, "--approval", str(approval_file), "--journal", str(journal_file)]
+    if getattr(args, "_profile", None):
+        argv += ["--profile", args._profile.name]                        # the same workspace when the script runs
     for flag, value in (("--settings", args.settings), ("--creds-file", args.creds_file),
                         ("--path-rules", args.path_rules),
                         ("--releases", getattr(args, "releases", None))):
@@ -44,7 +46,7 @@ def upgrade_argv(args, serials_file, approval_file, journal_file):
     login = getattr(args, "_login", None) or {"reading": args.account, "changes": args.work_account, "ask": getattr(args, "ask_credentials", None)}
     if login["ask"] != "all":
         if not args.creds_file:                  # the script must not depend on the environment variables it is later run under
-            argv += ["--creds-file", str(Path(site.creds_path()[0]).resolve())]
+            argv += ["--creds-file", str(Path(site.creds_path(getattr(args, "_profile", None))[0]).resolve())]
         if login["reading"]:
             argv += ["--account", login["reading"]]
     if login["ask"]:

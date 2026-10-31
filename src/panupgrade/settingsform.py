@@ -48,9 +48,12 @@ INFO = {
                               "itself, just before the passive member is touched, for each pair that still needs it.",
                       "UpgradeOnly": "force the sync only during the upgrade itself. `prepare` leaves the pair alone."}),
     "sync_timeout_s": ("How long to wait for a configuration sync to finish, in seconds.", {}),
-    "ha_config_unsynced": ("What to do about a pair whose passive member's configuration is not synchronized, when sync_to_peer is "
-                           "Disable (with Both or UpgradeOnly the tool syncs the pair itself and this is not used). The risk is one moment: "
-                           "the active member suspends and the upgraded passive takes over running its own, different configuration.",
+    "ha_config_unsynced": ("Whether un-synchronized config should block upgrades or raise warnings.\n\n"
+                           "If the passive node is upgraded while out-of-sync the active node may no longer be able to synchronize its "
+                           "config to the higher-versioned peer. When the active node is upgraded and that peer becomes active whatever "
+                           "config differences exist will go live. REVIEW CAREFULLY as interface address changes, Security or NAT policy "
+                           "differences could cause catastrophic network changes.\n\n"
+                           "Only used when sync_to_peer is Disable; with Both or UpgradeOnly the tool syncs the pair itself.",
                            {"block": "refuse to plan such a pair at all, so nobody runs into it unread",
                             "caution": "plan it anyway, flag that moment on the active member, and accept it when the batch is prepared"}),
     "sync_content": ("Dynamic content (applications and threats, antivirus, WildFire). HA members should run the same versions, "
@@ -101,6 +104,8 @@ HELP = {
 }
 ALWAYS = "Shortcuts: Ctrl-D = Save & Exit   Esc = Quit without saving (asks first if there are unsaved changes)"
 NAME_WIDTH, VALUE_WIDTH = 30, 14
+LEFT_WIDTH = 4 + NAME_WIDTH + 2 + VALUE_WIDTH + 2 + 10      # the list on the left; the explanation goes to its right when there is room
+SIDE_MIN = 44                                               # the least width the explanation needs beside the list
 
 
 def _fmt(value):
@@ -131,7 +136,7 @@ def shown_names():
 
 def _short(name):
     """The first sentence of a setting's description, for the comment on its line in the file."""
-    return INFO[name][0].split(". ")[0].rstrip(".") if name in INFO else ""
+    return INFO[name][0].split("\n")[0].split(". ")[0].rstrip(".") if name in INFO else ""
 
 
 def _toml(value):
@@ -265,6 +270,8 @@ class Form:
             self.button = min(self.button + 1, len(BUTTON_LABELS) - 1)
         elif key == "up":
             self.zone = ROWS
+        elif key == "down":
+            self.zone, self.focus = ROWS, 0                                   # round the ring to the first setting
         elif key in ("enter", " "):
             if self.button == SAVE_ONLY:
                 self._save()
@@ -312,19 +319,35 @@ class Form:
                     focus_line = len(body)
                 body.append(self._row(n, n == name and self.zone == ROWS, n in problems))
 
-        detail = self._detail(name, current, width, max((height - len(lines)) // 2, 6))
-        room = max(height - len(lines) - len(detail) - 3, 5)
+        side = self.side_by_side(width)
+        if side:
+            detail = self._detail(name, current, width - LEFT_WIDTH - 4, 10 ** 6)
+            room = max(height - len(lines) - 3, 5)                          # rows beside the explanation; the header row is one more
+            if len(detail) > room + 1:
+                detail = detail[:room] + [[("dim", "(a taller window shows the rest)")]]
+        else:
+            detail = self._detail(name, current, width, max((height - len(lines)) // 2, 6))
+            room = max(height - len(lines) - len(detail) - 3, 5)
         self.page = max(room - 2, 1)
         if focus_line < self.offset + 1:
             self.offset = max(focus_line - 1, 0)
         if focus_line >= self.offset + room:
             self.offset = focus_line - room + 1
         self.offset = max(0, min(self.offset, max(len(body) - room, 0)))
-        lines += body[self.offset:self.offset + room]
+        shown = body[self.offset:self.offset + room]
+        if side:
+            header = lines.pop()                                            # the explanation starts level with the column headings
+            table = [header] + shown
+            for i, left in enumerate(table):
+                right = detail[i] if i < len(detail) else []
+                lines.append(self._pad(left, LEFT_WIDTH) + [("dim", " | ")] + right)
+        else:
+            lines += shown
         count = f"{self.changed_count()} setting{'s' if self.changed_count() != 1 else ''} differ from the defaults (marked *)"
         lines.append([("dim", f"   showing lines {self.offset + 1}-{min(self.offset + room, len(body))} of {len(body)}; {count}"
                               if len(body) > room else f"   {count}")])
-        lines += detail
+        if not side:
+            lines += detail
         lines.append([])
         buttons = [("", "   ")]
         for n, label in enumerate(BUTTON_LABELS):
@@ -334,6 +357,17 @@ class Form:
             buttons.append(("warn", "unsaved changes"))
         lines.append(buttons)
         return [self._cut(line, width - 1) for line in lines[:height]]
+
+    @staticmethod
+    def side_by_side(width):
+        """True when the window is wide enough to put the explanation to the right of the list."""
+        return width - 1 - LEFT_WIDTH - 3 >= SIDE_MIN
+
+    @classmethod
+    def _pad(cls, line, n):
+        line = cls._cut(line, n)
+        used = sum(len(text) for _style, text in line)
+        return line + ([("", " " * (n - used))] if used < n else [])
 
     def _row(self, name, here, wrong):
         kind, text = self.kinds[name], self.text[name]
@@ -348,10 +382,18 @@ class Form:
 
     @staticmethod
     def _wrapped(style, text, width, indent="   ", first=None):
-        """``text`` broken into lines that fit ``width``, each a one-piece line; the first starts with ``first`` (default ``indent``)."""
-        lead = indent if first is None else first
-        wrapped = textwrap.wrap(text, max(width - 2, len(lead) + 20), initial_indent=lead, subsequent_indent=indent, break_on_hyphens=False) or [lead]
-        return [[(style, line)] for line in wrapped]
+        """``text`` broken into lines that fit ``width``, each a one-piece line. A newline in ``text`` starts a new paragraph (a blank
+        line between paragraphs is written as two newlines). The first line starts with ``first`` (default ``indent``)."""
+        out = []
+        for n, paragraph in enumerate(text.split("\n")):
+            if not paragraph.strip():
+                out.append([(style, "")])
+                continue
+            lead = (indent if first is None else first) if n == 0 else indent
+            wrapped = textwrap.wrap(paragraph, max(width - 2, len(lead) + 20), initial_indent=lead, subsequent_indent=indent,
+                                    break_on_hyphens=False)
+            out += [[(style, line)] for line in wrapped]
+        return out
 
     def _detail(self, name, current, width, limit):
         """What the setting under the cursor is, what its value means, and a caution for every risky setting in force. All of it

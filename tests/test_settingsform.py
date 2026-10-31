@@ -34,6 +34,17 @@ def screen(form, width=120, height=40):
     return tui.plain(form.render(width, height, "title here"))
 
 
+def explanation(form, width=120, height=40):
+    """Only the explanation of the setting under the cursor: the right-hand pane when there is one, the whole screen when stacked."""
+    if not form.side_by_side(width):
+        return screen(form, width, height)
+    out = []
+    for line in form.render(width, height, "title here"):
+        pieces = [text for _style, text in line]
+        out.append("".join(pieces[pieces.index(" | ") + 1:]) if " | " in pieces else "")
+    return "\n".join(out)
+
+
 def fresh(**over):
     return settingsform.Form(settings.load(None, [f"{k}={v}" for k, v in over.items()]), "settings.toml", saver=lambda f, c: "saved")
 
@@ -80,6 +91,24 @@ class Editing(unittest.TestCase):
         self.assertEqual(form.text["sync_to_peer"], "Disable")
         keys(form, "left")
         self.assertEqual(form.text["sync_to_peer"], "UpgradeOnly")
+
+    def test_up_and_down_both_wrap_round_the_ring_of_settings_and_buttons(self):
+        form = fresh()
+        total = len(form.names)
+        for _ in range(total):
+            form.press("down")
+        self.assertEqual(form.zone, "buttons")                   # down past the last setting reaches the buttons ...
+        form.press("down")
+        self.assertEqual((form.zone, form.focus), ("rows", 0))   # ... and down again wraps to the top
+        form.press("up")
+        self.assertEqual(form.zone, "buttons")                   # up from the top reaches the buttons ...
+        form.press("up")
+        self.assertEqual((form.zone, form.focus), ("rows", total - 1))        # ... and up again goes back to the last setting
+        seen = set()
+        for _ in range(total + 1):
+            form.press("down")
+            seen.add((form.zone, form.focus))
+        self.assertEqual(len(seen), total + 1)                   # holding the key visits every stop exactly once per lap
 
     def test_a_yes_no_setting_toggles(self):
         form = fresh()
@@ -145,13 +174,13 @@ class Editing(unittest.TestCase):
     def test_the_detail_explains_the_setting_and_the_value_it_has(self):
         form = fresh()
         goto(form, "sync_to_peer")
-        text = screen(form)
+        text = explanation(form)
         self.assertIn("one of: Disable, Both, UpgradeOnly", text)
         flat = " ".join(text.split())
         self.assertIn("Both: the default. Force the sync when preparing for the upgrade cycle (`prepare`) AND again during the upgrade "
                       "itself", flat)
         keys(form, "right")
-        self.assertIn("UpgradeOnly: force the sync only during the upgrade itself", " ".join(screen(form).split()))
+        self.assertIn("UpgradeOnly: force the sync only during the upgrade itself", " ".join(explanation(form).split()))
 
     def test_nothing_is_cut_off_with_dots_every_word_of_the_explanation_is_on_screen(self):
         import re
@@ -159,16 +188,48 @@ class Editing(unittest.TestCase):
             for name in settingsform.shown_names():
                 form = fresh(pending_changes="ignore", allow_downgrade="true", max_parallel=3)
                 goto(form, name)
-                text = " ".join(screen(form, width, 60).split())
+                text = " ".join(explanation(form, width, 60).split())
                 description, meanings = settingsform.INFO[name]
                 for passage in [description] + ([meanings[form.text[name]]] if form.text[name] in meanings else []):
                     self.assertIn(" ".join(passage.split()), text, f"{name} at width {width}")
                 self.assertNotIn("...", re.sub(r"\.\.\. and \d+ more", "", text.replace("(...)", "")), f"{name} at width {width}")
 
+    def test_a_wide_window_puts_the_explanation_beside_the_list_and_a_narrow_one_below_it(self):
+        form = fresh()
+        goto(form, "sync_to_peer")
+        wide = form.render(150, 40)
+        header = "".join(t for _s, t in wide[5])
+        self.assertIn("setting", header)
+        self.assertIn("sync_to_peer   (one of: Disable, Both, UpgradeOnly", header)      # level with the column headings
+        row = next("".join(t for _s, t in line) for line in wide if "sync_timeout_s" in "".join(t for _s, t in line))
+        self.assertIn(" | ", row)                                                         # a rule between the list and the explanation
+        self.assertTrue(form.side_by_side(150))
+        self.assertFalse(form.side_by_side(100))
+        narrow = tui.plain(form.render(100, 60))
+        self.assertNotIn(" | ", narrow)
+        self.assertIn("Whether the tool forces the passive member", narrow)
+
+    def test_no_line_of_the_side_by_side_layout_is_wider_than_the_window(self):
+        for width in (110, 130, 200):
+            self.assertTrue(fresh().side_by_side(width))
+            for line in fresh(pending_changes="ignore", allow_downgrade="true", max_parallel=3).render(width, 40):
+                self.assertLess(len("".join(t for _s, t in line)), width)
+
+    def test_ha_config_unsynced_reads_as_the_owner_wrote_it_with_its_paragraphs(self):
+        form = fresh()
+        goto(form, "ha_config_unsynced")
+        lines = [line.strip() for line in explanation(form, 150, 40).split("\n")]
+        flat = " ".join(" ".join(lines).split())
+        self.assertIn("Whether un-synchronized config should block upgrades or raise warnings.", flat)
+        self.assertIn("REVIEW CAREFULLY as interface address changes, Security or NAT policy differences could cause catastrophic "
+                      "network changes.", flat)
+        first = next(i for i, line in enumerate(lines) if line.startswith("Whether un-synchronized"))
+        self.assertEqual(lines[first + 1], "")                                           # a blank line between the paragraphs
+
     def test_a_long_value_is_shown_in_full_below_the_list(self):
         form = fresh(backup_dir="D:/a/very/long/folder/name/for/backups")
         goto(form, "backup_dir")
-        self.assertIn("Value: D:/a/very/long/folder/name/for/backups", " ".join(screen(form).split()))
+        self.assertIn("Value: D:/a/very/long/folder/name/for/backups", " ".join(explanation(form).split()))
 
     def test_risky_settings_show_a_caution_wherever_the_cursor_is(self):
         form = fresh(pending_changes="ignore")

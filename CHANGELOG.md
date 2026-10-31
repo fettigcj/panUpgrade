@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- A Panorama whose certificate cannot be verified (a self-signed one, usually) no longer ends in a dead-end error. Adding an account with "sign in now", Test sign-in, and every step in the shell now show the reason and the certificate's SHA-256 fingerprint and ask **Accept risk & continue?**; on a plain terminal it is a `[y/N]` question. Accepting pins exactly that certificate for that address (`trusted_certs.json`), so later connections need the same certificate and a different one is refused. **Forget certificate** on the sign-in screen undoes it.
 - `panupgrade` with no arguments (or `panupgrade shell`) opens one screen for the whole workflow: Panorama address and target version, then sign in, fleet report, choose firewalls, plan, prepare, upgrade, settings and the release table, each with its status and reachable with Alt-letters or Alt-1..8 from anywhere. Report and plan run in the background; a step that cannot sign in takes you to the sign-in screen and back. Prepare and upgrade show the command to run for now.
 - Terminal layer: screens can poll background work, Alt hotkeys work on Windows and Unix terminals, and Ctrl-C now reaches every screen on Windows (before, it was ignored until another key was pressed).
 - `cli` now has `build_parser`/`parse_args`; the select, settings and sign-in forms are built by functions the shell shares.

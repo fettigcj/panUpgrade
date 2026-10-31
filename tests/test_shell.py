@@ -11,7 +11,8 @@ import unittest
 from contextlib import redirect_stdout
 from unittest import mock
 
-from panupgrade import cli, credstore, shell, site, tui
+from panupgrade import cli, credstore, shell, site, trust, tui
+from panupgrade.trust import CertificateProblem
 from panupgrade.model import DeviceRef
 from panupgrade.sources import SourceError
 from tests.test_auth import Home
@@ -295,6 +296,53 @@ class SigningInAgain(ShellCase):
             self.assertFalse(cli._offer_sign_in_screen(args, credstore.NeedsSignIn("no file")))
         screen.assert_not_called()
         self.assertEqual(args._sign_in_problem, "no file")
+
+
+class AnUnverifiableCertificate(ShellCase):
+    problem = CertificateProblem("192.0.2.1", "self-signed certificate", "ab" * 32)
+
+    def test_a_step_that_meets_one_asks_on_the_sign_in_screen_and_reads_again_once_it_is_trusted(self):
+        calls = []
+
+        def run(args):
+            calls.append(1)
+            if len(calls) == 1:
+                args._certificate_problem = self.problem
+                return 2
+            print("report after trusting")
+            return 0
+        ui = self.make(run=run)
+        ui.press("alt-r"); wait(ui)
+        self.assertEqual(ui.screen.name, "auth")
+        text = self.text(ui)
+        self.assertIn("Cannot verify Panorama's certificate", text)
+        self.assertIn("[ Accept risk & continue ]", text)
+        self.assertIn(trust.pretty("ab" * 32)[:20], text)
+        ui.press("enter")                                    # accept
+        self.assertEqual(ui.screen.name, "report")
+        wait(ui)
+        self.assertEqual(trust.pinned("192.0.2.1"), "ab" * 32)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("report after trusting", self.text(ui))
+
+    def test_declining_trusts_nothing_and_does_not_loop(self):
+        ui = self.make(run=lambda args: setattr(args, "_certificate_problem", self.problem) or 2)
+        ui.press("alt-r"); wait(ui)
+        ui.press("right"); ui.press("enter")                 # Cancel
+        self.assertEqual(ui.screen.name, "auth")             # still on the sign-in screen, no certificate pinned
+        self.assertIsNone(trust.pinned("192.0.2.1"))
+        ui.press("alt-h")
+        self.assertEqual(ui.screen.name, "home")
+
+    def test_choosing_firewalls_gets_the_same_recovery(self):
+        def read(args):
+            args._certificate_problem = self.problem
+            raise SourceError("certificate")
+        ui = self.make(read=read)
+        ui.press("alt-f"); wait(ui)
+        self.assertEqual(ui.screen.name, "auth")
+        self.assertEqual(ui.after_sign_in, "select")
+        self.assertIn("Accept risk & continue", self.text(ui))
 
 
 class ChoosingFirewalls(ShellCase):

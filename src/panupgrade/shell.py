@@ -195,7 +195,9 @@ class JobScreen(Screen):
         if job.text is not None and not self.lines:
             self.lines = job.text.rstrip("\n").split("\n")
             self.shell.session.results[self.name] = (time.strftime("%H:%M"), job.text, job.code)
-            if getattr(self.args, "_sign_in_problem", ""):
+            if getattr(self.args, "_certificate_problem", None):
+                self.shell.need_certificate(self, self.args._certificate_problem)
+            elif getattr(self.args, "_sign_in_problem", ""):
                 self.shell.need_sign_in(self, self.args._sign_in_problem)
             return True
         return False
@@ -298,7 +300,9 @@ class SelectScreen(Screen):
         if job.running:
             return True
         self.job = None
-        if getattr(self.args, "_sign_in_problem", ""):
+        if getattr(self.args, "_certificate_problem", None):
+            self.shell.need_certificate(self, self.args._certificate_problem)
+        elif getattr(self.args, "_sign_in_problem", ""):
             self.shell.need_sign_in(self, self.args._sign_in_problem)
         elif job.code or not isinstance(job.value, list):
             self.note = (job.text or "could not read the firewall list").strip()
@@ -512,6 +516,15 @@ class Shell:
         self.after_sign_in = screen.name
         self.goto("auth")
         self.screens["auth"].form.message = "!" + problem if self.screens["auth"].form else ""
+
+    def need_certificate(self, screen, problem):
+        """A step met a certificate it cannot verify: ask, on the sign-in screen, whether to trust it, then go back and read again."""
+        self.after_sign_in = screen.name
+        self.goto("auth")
+        form = self.screens["auth"].form
+        if form is not None:
+            form.exit_after_trust = True
+            form.ask_about_certificate(problem, lambda: None)
 
     # -- what each step can say about itself without touching the network
     def status(self, name):

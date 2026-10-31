@@ -17,13 +17,14 @@ import json
 import os
 import textwrap
 
-from . import credstore, site, userenv
+from . import credstore, site, trust, userenv
 from .sources import SourceError
+from .trust import CertificateProblem
 
-ADDRESS, STORE, ACCOUNTS, ACTIONS, BUTTONS, ADD = "address", "store", "accounts", "actions", "buttons", "add"
+ADDRESS, STORE, ACCOUNTS, ACTIONS, BUTTONS, ADD, PROMPT = "address", "store", "accounts", "actions", "buttons", "add", "prompt"
 RING = [ADDRESS, STORE, ACCOUNTS, ACTIONS, BUTTONS]
-ACTION_LABELS = ["Add account", "Remove", "Use for reading", "Use for changes", "Test sign-in"]
-ADD_ACCOUNT, REMOVE, FOR_READING, FOR_CHANGES, TEST = range(5)
+ACTION_LABELS = ["Add account", "Remove", "Use for reading", "Use for changes", "Test sign-in", "Forget certificate"]
+ADD_ACCOUNT, REMOVE, FOR_READING, FOR_CHANGES, TEST, FORGET = range(6)
 BUTTON_LABELS = ["Save", "Save & Exit", "Quit without saving"]
 SAVE_ONLY, SAVE_EXIT, QUIT = 0, 1, 2
 STORES = {"config": "the sign-in settings file in your home folder", "env": "user environment variables (this Windows account)"}
@@ -41,6 +42,7 @@ HELP = {
     ACTIONS: "Left / Right: choose an action   Enter: do it   Tab: next",
     BUTTONS: "Left / Right: choose a button   Enter or Space: press it   Tab: next",
     ADD: "Tab: next field   Left / Right: change the kind   Enter: next / press   Esc: cancel adding",
+    PROMPT: "Left / Right: choose   Enter: press it   Esc: do not trust it",
 }
 ALWAYS = "Ctrl-D = Save & Exit   Esc = Quit without saving (asks first if there are unsaved changes)"
 ENV_NAMES = {"creds_file": "PANUPGRADE_CREDS", "account": "PANUPGRADE_ACCOUNT", "work_account": "PANUPGRADE_WORK_ACCOUNT"}
@@ -61,6 +63,8 @@ class Form:
         self.services, self.overrides = services, list(overrides)
         self.zone, self.cursor, self.action, self.button = ADDRESS if not address else ACCOUNTS, 0, ADD_ACCOUNT, SAVE_EXIT
         self.modal = None                                     # the add-an-account fields while they are open
+        self.prompt = None                                    # "accept this certificate?" while it is being asked
+        self.exit_after_trust = False                         # opened because a step hit a certificate problem: finish once it is settled
         self.message, self.armed = notice, False
         self.creds_exists = None                              # set by the caller: does the credentials file exist yet?
         self.ever_saved = False                               # True once a Save has worked, even if the form is quit afterwards
@@ -94,6 +98,8 @@ class Form:
         was_armed, self.armed, self.message = self.armed, False, ""
         if key == "ctrl-c":
             return "cancel"
+        if self.prompt is not None:
+            return self._prompt_key(key)
         if self.modal is not None:
             self._modal_key(key)
             return None
@@ -202,7 +208,9 @@ class Form:
     # ---- actions
     def _do(self, action):
         name = self.current()
-        if action == ADD_ACCOUNT:
+        if action == FORGET:
+            self._forget()
+        elif action == ADD_ACCOUNT:
             self.modal = {"field": 0, "name": "", "kind": 0, "secret": ""}
         elif name is None:
             self.message = "!There are no accounts yet. Add one first."
@@ -230,6 +238,9 @@ class Form:
         else:
             try:
                 ok, text = self.services.test(self.address.strip(), name, self.accounts[name])
+            except CertificateProblem as problem:
+                self.ask_about_certificate(problem, lambda: self._test(name))
+                return
             except SourceError as exc:
                 ok, text = False, str(exc)
             self.message = ("" if ok else "!") + text
@@ -280,6 +291,9 @@ class Form:
                 return
             try:
                 key = self.services.sign_in(self.address.strip(), name, secret)
+            except CertificateProblem as problem:
+                self.ask_about_certificate(problem, self._add)
+                return
             except SourceError as exc:
                 self.message = "!" + str(exc)
                 return
@@ -292,6 +306,48 @@ class Form:
         self.modal = None
         self.message = f"{'Replaced' if replaced else 'Added'} {name}, signing in with " + (
             "a stored API key" if isinstance(stored, dict) else "its password") + " (written to the file when you save)."
+
+    def trusted(self):
+        """The certificate accepted for the address typed above (or None), for showing."""
+        if not self.address.strip() or self.services is None or not hasattr(self.services, "trusted"):
+            return None
+        return self.services.trusted(self.address.strip())
+
+    def _forget(self):
+        if not self.address.strip():
+            self.message, self.zone = "!Type the Panorama address first (the first field).", ADDRESS
+        elif self.services is None or not hasattr(self.services, "forget"):
+            self.message = "!Not available here."
+        elif self.services.forget(self.address.strip()):
+            self.message = f"Forgot the certificate accepted for {self.address.strip()}. The next connection will ask again."
+        else:
+            self.message = f"No certificate had been accepted for {self.address.strip()}."
+
+    def ask_about_certificate(self, problem, retry):
+        """Ask whether to trust the certificate Panorama presented. ``retry`` runs again, once it is trusted."""
+        self.prompt = {"problem": problem, "retry": retry, "choice": 0 if problem.sha256 else 1}
+
+    def _prompt_key(self, key):
+        prompt = self.prompt
+        can_accept = bool(prompt["problem"].sha256)
+        if key in ("left", "right", "tab", "shift-tab") and can_accept:
+            prompt["choice"] = 1 - prompt["choice"]
+        elif key == "esc" or (key in ("enter", " ") and prompt["choice"] == 1):
+            self.prompt = None
+            self.message = "Not trusted, so nothing was sent to that Panorama."
+        elif key in ("enter", " ") and can_accept:
+            problem, retry = prompt["problem"], prompt["retry"]
+            self.prompt = None
+            try:
+                self.services.trust(problem.address, problem.sha256, problem.reason)
+            except OSError as exc:
+                self.message = f"!Could not remember the certificate: {exc.strerror or exc}"
+                return None
+            self.message = f"Trusting exactly that certificate for {problem.address} from now on."
+            if self.exit_after_trust:
+                return "accept"
+            retry()
+        return None
 
     def _save(self):
         if self.services is None:
@@ -310,8 +366,8 @@ class Form:
     def render(self, width, height, title=""):
         """The screen as a list of lines; each line is a list of (style, text) pieces. Fits width x height. Long text wraps."""
         lines = [[("bold", f" {title}".rstrip() or " panupgrade auth")]]
-        lines += _wrapped("dim", HELP[ADD if self.modal is not None else self.zone], width)
-        if height >= 24 and self.modal is None:
+        lines += _wrapped("dim", HELP[PROMPT if self.prompt is not None else ADD if self.modal is not None else self.zone], width)
+        if height >= 24 and self.modal is None and self.prompt is None:
             lines += _wrapped("dim", ALWAYS, width)
         status = self.message
         lines += _wrapped("error" if status.startswith("!") else "dim", status.lstrip("!"), width) if status else [[]]
@@ -320,6 +376,9 @@ class Form:
         lines.append([("focus" if here else "bold", f" {'>' if here else ' '} Panorama address  "),
                       ("focus" if here else "", f"[{self.address}{'_' if here else ''}]".ljust(26)),
                       ("dim", "  for testing a sign-in or obtaining an API key")])
+        known = self.trusted()
+        if known:
+            lines.append([("dim", f"   Trusted certificate  SHA-256 {trust.pretty(known['sha256'])[:47]}...  (accepted {known.get('accepted', '?')})")])
         count = len(self.accounts)
         lines.append([("bold", "   Credentials file   "), ("", site_tilde(self.creds_path)),
                       ("dim", f"  ({self.creds_origin}; " + ("not created yet" if self.creds_exists is False else
@@ -332,7 +391,9 @@ class Form:
                                       f"terminal.", width, "     ")
         lines.append([])
         footer = self._buttons_line()
-        if self.modal is not None:
+        if self.prompt is not None:
+            lines += self._prompt_lines(width)
+        elif self.modal is not None:
             lines += self._modal_lines(width)
         else:
             room = max(height - len(lines) - 6, 2)
@@ -375,6 +436,25 @@ class Form:
         if self.dirty():
             line.append(("warn", "unsaved changes"))
         return line
+
+    def _prompt_lines(self, width):
+        prompt = self.prompt
+        problem = prompt["problem"]
+        out = [[("warn", "   Cannot verify Panorama's certificate")]]
+        out += _wrapped("", f"{problem.address} presented a certificate that failed the normal check: {problem.reason}.", width, "     ")
+        if problem.sha256:
+            out.append([("", "     SHA-256 fingerprint:")])
+            out += _wrapped("bold", trust.pretty(problem.sha256), width, "       ")
+            out += _wrapped("dim", "Compare it with the fingerprint Panorama shows for its own certificate (Device > Certificate Management > "
+                                   "Certificates) before accepting. Accepting makes this tool trust exactly this certificate for this address and "
+                                   "refuse any other, so a replaced certificate or an interceptor is caught.", width, "     ")
+        else:
+            out += _wrapped("error", "Its certificate could not be read at all, so there is nothing to accept. Check the address and that "
+                                     "Panorama is reachable.", width, "     ")
+        accept_on, cancel_on = prompt["choice"] == 0, prompt["choice"] == 1
+        out.append([("", "   "), ("focus" if accept_on else "bold" if problem.sha256 else "dim", "[ Accept risk & continue ]"), ("", "  "),
+                    ("focus" if cancel_on else "bold", "[ Cancel ]")])
+        return out
 
     def _modal_lines(self, width):
         m = self.modal

@@ -15,8 +15,9 @@ from pathlib import Path
 
 from . import (approval as approval_mod, fleetreport, console, executor, paths, prepare as prepare_mod, releases as releases_mod, report,
                settings as settings_mod, xlsxout)
-from . import credstore, site
+from . import credstore, site, trust
 from .credstore import NeedsSignIn
+from .trust import CertificateProblem
 from .journal import Journal, JournalError
 from .planner import PlanError, Selection, build_plan
 from .simulator import SimBackend
@@ -140,13 +141,46 @@ def _key_for(args, address, role):
     if (address, account) not in _KEYS:
         from panupgrade_live.panorama import key_from_account
         try:
-            key = key_from_account(address, _creds(args)[0], account)
+            key = _trusting(args, lambda: key_from_account(address, _creds(args)[0], account))
         except NeedsSignIn as exc:
             if not _offer_sign_in_screen(args, exc):
                 raise
-            key = key_from_account(address, _creds(args)[0], account)
+            key = _trusting(args, lambda: key_from_account(address, _creds(args)[0], account))
         _KEYS[(address, account)] = (account, key)
     return _KEYS[(address, account)][1]
+
+
+def _ask_to_trust(args, problem):
+    """At a terminal, show the certificate's fingerprint and ask whether to trust exactly it. True when the person said yes."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()) or not problem.sha256:
+        return False
+    style = _style(args)
+    print(style.line("warn", f"Cannot verify {problem.address}'s certificate: {problem.reason}."))
+    print(f"  SHA-256 fingerprint: {trust.pretty(problem.sha256)}")
+    print("  Compare it with the one Panorama shows (Device > Certificate Management > Certificates).")
+    try:
+        answer = input(f"Accept the risk and trust exactly this certificate for {problem.address} from now on? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    if answer not in ("y", "yes"):
+        return False
+    trust.pin(problem.address, problem.sha256, problem.reason)
+    print(style.line("ok", f"Trusting that certificate for {problem.address}. `panupgrade auth` can forget it."))
+    return True
+
+
+def _trusting(args, connect):
+    """Run ``connect``. When Panorama's certificate cannot be verified, offer to accept it and try once more: at a terminal by asking,
+    in the shell by handing the problem to the shell's sign-in screen. Anywhere else the error just goes through."""
+    try:
+        return connect()
+    except CertificateProblem as problem:
+        if getattr(args, "_in_shell", False):
+            args._certificate_problem = problem
+            raise
+        if not _ask_to_trust(args, problem):
+            raise
+        return connect()
 
 
 def _with_key(args, account):
@@ -223,7 +257,8 @@ def _source(args):
             def recorder(target, command, raw):
                 (Path(record) / f"{target}__{re.sub('[^A-Za-z0-9_.-]+', '_', command)[:90]}.xml").write_bytes(raw)
         address = spec[len("panorama:"):]
-        return live_source(address, recorder=recorder, key=_key_for(args, address, "reading"))
+        key = _key_for(args, address, "reading")
+        return _trusting(args, lambda: live_source(address, recorder=recorder, key=key))
     raise SystemExit("sources: fake:<file> or panorama:<address> (read-only)")
 
 
@@ -959,6 +994,15 @@ class _AuthServices:
     def save(self, form):
         from . import authform
         return authform.save_all(form)
+
+    def trust(self, address, sha256, reason):
+        trust.pin(address, sha256, reason)
+
+    def forget(self, address):
+        return trust.forget(address)
+
+    def trusted(self, address):
+        return trust.record(address)
 
 
 def _saved_choices():

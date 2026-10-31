@@ -8,7 +8,11 @@ The server's TLS certificate is verified. A lab Panorama with a self-signed cert
 (``--insecure-tls`` or ``PANUPGRADE_INSECURE_TLS=1``), which prints a warning.
 """
 
+import functools
+import hashlib
+import http.client
 import re
+import socket
 import ssl
 import sys
 import threading
@@ -19,7 +23,8 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from panupgrade import credstore, site
+from panupgrade import credstore, site, trust
+from panupgrade.trust import CertificateChanged, CertificateProblem
 from panupgrade.model import DeviceRef
 from panupgrade.sources import SourceError
 from panupgrade.xmlops import OpSource, READ_ONLY_PREFIXES
@@ -70,6 +75,68 @@ def _tls(verify_tls=None):
     return ctx
 
 
+def _host_port(address):
+    host, _, port = address.rpartition(":")
+    return (host, int(port)) if host and port.isdigit() and ":" not in host else (address, 443)
+
+
+def _peer_sha256(address, timeout=10):
+    """The SHA-256 of the certificate the address presents, fetched without trusting it (only to show it to a person, who compares it
+    with what Panorama says). None when it cannot be read at all."""
+    host, port = _host_port(address)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as raw, ctx.wrap_socket(raw, server_hostname=host) as tls:
+            der = tls.getpeercert(binary_form=True)
+    except OSError:
+        return None
+    return hashlib.sha256(der).hexdigest() if der else None
+
+
+class _PinnedConnection(http.client.HTTPSConnection):
+    """A connection that accepts one certificate, identified by fingerprint, instead of asking a CA about it."""
+
+    def __init__(self, *args, pin, address, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._pin, self._address = pin, address
+
+    def connect(self):
+        super().connect()
+        der = self.sock.getpeercert(binary_form=True)
+        seen = hashlib.sha256(der).hexdigest() if der else ""
+        if seen != self._pin:
+            self.close()
+            raise CertificateChanged(self._address, self._pin, seen)
+
+
+class _PinnedHandler(urllib.request.HTTPSHandler):
+    def __init__(self, address, pin):
+        ctx = ssl.create_default_context()
+        ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE        # the fingerprint is the check
+        super().__init__(context=ctx)
+        self._address, self._pin = address, pin
+
+    def https_open(self, req):
+        return self.do_open(functools.partial(_PinnedConnection, pin=self._pin, address=self._address), req, context=self._context)
+
+
+def _urlopen(address, request, verify_tls=None, timeout=60):
+    """Open a request to Panorama. The certificate is checked the normal way, unless a person accepted a certificate for this address:
+    then it must be exactly that one. A certificate that fails the check becomes a CertificateProblem the caller can offer to accept."""
+    if verify_tls is None:
+        verify_tls = site.verify_tls()
+    pin = trust.pinned(address) if verify_tls else None
+    try:
+        if pin:
+            return urllib.request.build_opener(_PinnedHandler(address, pin)).open(request, timeout=timeout)
+        return urllib.request.urlopen(request, context=_tls(verify_tls), timeout=timeout)
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, ssl.SSLCertVerificationError):
+            raise CertificateProblem(address, getattr(exc.reason, "verify_message", None) or str(exc.reason), _peer_sha256(address)) from None
+        raise
+
+
 def load_accounts(path):
     """The accounts in the credentials file (see ``panupgrade.credstore``). Only the names are ever shown."""
     return credstore.read(path)
@@ -84,8 +151,7 @@ def key_from_login(address, user, password, verify_tls=None, timeout=60):
     """Log in as ``user`` and return the API key. The password goes in a POST body, never in a URL."""
     body = urllib.parse.urlencode({"type": "keygen", "user": user, "password": password}).encode()
     try:
-        with urllib.request.urlopen(urllib.request.Request(f"https://{address}/api/", data=body),
-                                    context=_tls(verify_tls), timeout=timeout) as response:
+        with _urlopen(address, urllib.request.Request(f"https://{address}/api/", data=body), verify_tls, timeout) as response:
             root = ET.fromstring(response.read())
     except urllib.error.HTTPError as exc:
         raise SourceError(f"{address}: login as {user} was refused (HTTP {exc.code})") from None
@@ -110,7 +176,8 @@ class PanoramaApi:
     def __init__(self, address, key, verify_tls=None, timeout=60, recorder=None, limiter=None):
         self.address, self.timeout, self._recorder, self._limiter = address, timeout, recorder, limiter
         self._key = key
-        self._ctx = _tls(verify_tls)
+        self._verify = verify_tls
+        _tls(verify_tls)                                   # says once, loudly, if checking is off
 
     def op(self, command, target=None):
         if not command.startswith(READ_ONLY_PREFIXES):
@@ -137,7 +204,7 @@ class PanoramaApi:
         request = urllib.request.Request(f"https://{self.address}/api/", data=urllib.parse.urlencode(params).encode(),
                                          headers={"X-PAN-KEY": self._key})
         try:
-            with urllib.request.urlopen(request, context=self._ctx, timeout=self.timeout) as response:
+            with _urlopen(self.address, request, self._verify, self.timeout) as response:
                 raw = response.read()
         except OSError as exc:
             raise SourceError(f"{self.address}{' via target ' + target if target else ''}: {exc}") from None

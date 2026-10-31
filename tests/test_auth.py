@@ -52,6 +52,14 @@ class Home(unittest.TestCase):
         return profile
 
 
+class TestsStayOutOfTheRealHome(unittest.TestCase):
+    def test_the_process_is_pointed_at_a_throwaway_folder_before_any_test_runs(self):
+        real = Path.home().resolve() / ".panupgrade"
+        self.assertNotEqual(site.home_dir().resolve(), real)
+        self.assertIn("panupgrade-test-home-", str(site.home_dir()))
+        self.assertEqual([n for n in os.environ if n.startswith("PANUPGRADE_") and n != "PANUPGRADE_HOME"], [])
+
+
 class TheProfiles(Home):
     def test_a_profile_is_a_folder_that_lists_itself(self):
         self.assertEqual(profiles.names(), [])
@@ -296,7 +304,7 @@ class TheForm(Home):
         keys(form, "t")
         self.assertIn("Type this profile's Panorama address first", form.message)
         self.assertEqual(form.zone, "address")
-        keys(form, *typing("192.0.2.1"), "tab", "t")
+        keys(form, *typing("192.0.2.1"), "tab", "tab", "t")            # address -> profile in use -> accounts
         self.assertEqual(form.services.tested, [("192.0.2.1", "a")])
         self.assertEqual(form.message, "a signed in to 192.0.2.1.")
 
@@ -407,7 +415,7 @@ class SeveralPanoramas(Home):
         for _ in range(7):
             seen.append(form.zone)
             form.press("tab")
-        self.assertEqual(seen, ["profile", "address", "accounts", "actions", "store", "buttons", "profile"])
+        self.assertEqual(seen, ["profile", "address", "store", "accounts", "actions", "buttons", "profile"])
         form.zone = "profile"
         form.press("shift-tab")
         self.assertEqual(form.zone, "buttons")
@@ -523,7 +531,7 @@ class Saving(Home):
     def test_the_form_saves_through_its_services_and_marks_itself_clean(self):
         form = self.form(entry(accounts={"a": "pw"}))
         form.zone = "accounts"
-        keys(form, "r", "tab", "tab", "tab")                          # accounts -> actions -> store -> buttons
+        keys(form, "r", "tab", "tab")                                 # accounts -> actions -> buttons
         self.assertEqual(form.zone, "buttons")
         self.assertEqual(form.press("enter"), "accept")               # Save & Exit
         self.assertFalse(form.dirty())
@@ -548,6 +556,69 @@ class Saving(Home):
             form.press("right")
         self.assertEqual(form.store, "state")
         self.assertIn("no user-level environment variables", form.message)
+
+
+class MovingAround(Home):
+    """Up and Down follow what is drawn: top to bottom, and between the lines of wrapped buttons."""
+
+    def form(self):
+        return authform.Form([entry("east", "10.0.0.1", {"a": "1", "b": "2"})], "east", services=FakeServices())
+
+    def test_down_from_every_action_button_reaches_the_save_row_whatever_the_width(self):
+        for width in (160, 100, 70):
+            for action in range(len(authform.ACTION_LABELS)):
+                form = self.form()
+                form.render(width, 40)                               # the buttons are placed on lines when drawn
+                form.zone, form.action = "actions", action
+                for _ in range(len(form.action_rows)):
+                    form.press("down")
+                    if form.zone != "actions":
+                        break
+                self.assertEqual(form.zone, "buttons", (width, action, form.action_rows))
+
+    def test_up_from_the_save_row_lands_on_the_last_line_of_buttons_and_up_again_works_back_to_the_top(self):
+        form = self.form()
+        form.render(70, 40)
+        self.assertGreater(len(form.action_rows), 1)                 # narrow: the buttons wrap onto several lines
+        form.zone = "buttons"
+        form.press("up")
+        self.assertEqual(form.zone, "actions")
+        self.assertIn(form.action, form.action_rows[-1])             # arriving from below lands on the last line of buttons
+        for _ in range(len(form.action_rows) - 1):                   # up through the other lines ...
+            form.press("up")
+            self.assertEqual(form.zone, "actions")
+        form.press("up")                                             # ... and on up to the accounts
+        self.assertEqual(form.zone, "accounts")
+        form.press("down")                                           # coming back down lands on the first line
+        self.assertIn(form.action, form.action_rows[0])
+
+    def test_down_inside_the_buttons_goes_to_the_next_line_first_keeping_its_place_along_the_line(self):
+        form = self.form()
+        form.render(70, 40)
+        first = form.action_rows[0]
+        form.zone, form.action = "actions", first[1]
+        form.press("down")
+        self.assertEqual(form.zone, "actions")
+        self.assertIn(form.action, form.action_rows[1])
+        self.assertEqual(form.action_rows[1].index(form.action), min(1, len(form.action_rows[1]) - 1))
+
+    def test_the_walk_down_the_whole_screen_visits_each_part_once_in_the_order_drawn(self):
+        form = self.form()
+        form.render(160, 40)
+        form.zone = "profile"
+        order = [form.zone]
+        for _ in range(10):
+            form.press("down")
+            if form.zone != order[-1]:
+                order.append(form.zone)
+        self.assertEqual(order[:6], ["profile", "address", "store", "accounts", "actions", "buttons"])
+
+    def test_the_profile_in_use_row_is_drawn_above_the_accounts_and_so_is_reached_before_them(self):
+        lines = [("".join(t for _s, t in l)) for l in self.form().render(120, 40)]
+        at = lambda text: next(i for i, l in enumerate(lines) if text in l)
+        self.assertLess(at("Profile in use is"), at("signs in with"))
+        self.assertLess(at("signs in with"), at("[ Add account ]"))
+        self.assertLess(at("[ Add account ]"), at("[ Save ]"))
 
 
 class WorkingInAProfile(Home):

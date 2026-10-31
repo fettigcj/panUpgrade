@@ -24,7 +24,7 @@ from .trust import CertificateProblem
 
 PROFILE, ADDRESS, ACCOUNTS, ACTIONS, STORE, BUTTONS, MODAL, PROMPT = ("profile", "address", "accounts", "actions", "store", "buttons", "modal",
                                                                       "prompt")
-RING = [PROFILE, ADDRESS, ACCOUNTS, ACTIONS, STORE, BUTTONS]
+RING = [PROFILE, ADDRESS, STORE, ACCOUNTS, ACTIONS, BUTTONS]          # top to bottom, as drawn, so Up and Down go where the eye expects
 ACTION_LABELS = ["Add account", "Remove account", "Use for reading", "Use for changes", "Test sign-in", "New profile", "Remove profile",
                  "Forget certificate"]
 ADD_ACCOUNT, REMOVE_ACCOUNT, FOR_READING, FOR_CHANGES, TEST, NEW_PROFILE, REMOVE_PROFILE, FORGET = range(8)
@@ -42,7 +42,7 @@ HELP = {
     PROFILE: "Left / Right: switch Panorama profile   N: new profile   Delete: remove this profile   Tab: next",
     ADDRESS: "Type this profile's Panorama address (also used to test a sign-in or obtain an API key).   Tab: next",
     ACCOUNTS: "Up / Down: choose an account   A: add   Delete: remove   R: use for reading   C: use for changes   T: test   Tab: next",
-    ACTIONS: "Left / Right: choose an action   Enter: do it   Tab: next",
+    ACTIONS: "Left / Right: choose an action   Up / Down: another line of buttons, or on to the next part   Enter: do it",
     STORE: "Left / Right: choose how the profile in use is remembered.   Tab: next",
     BUTTONS: "Left / Right: choose a button   Enter or Space: press it   Tab: next",
     MODAL: "Tab: next field   Left / Right: change the choice   Enter: next / press   Esc: cancel",
@@ -83,6 +83,7 @@ class Form:
         self.store = store
         self.services, self.overrides = services, list(overrides)
         self.zone, self.cursor, self.action, self.button = PROFILE if not self.active else ACCOUNTS, 0, ADD_ACCOUNT, SAVE_EXIT
+        self.action_rows = [list(range(len(ACTION_LABELS)))]    # which buttons sit on which line (set when drawn), so Up and Down can move between lines
         self.modal = None                                     # the new-account or new-profile fields while they are open
         self.prompt = None                                    # "accept this certificate?" while it is being asked
         self.exit_after_trust = False                         # opened because a step hit a certificate problem: finish once it is settled
@@ -172,6 +173,16 @@ class Form:
 
     def _step(self, delta):
         self.zone = RING[(RING.index(self.zone) + delta) % len(RING)]
+        if self.zone == ACTIONS and abs(delta) == 1:
+            self._enter_actions(delta)
+
+    def _enter_actions(self, delta):
+        """Arriving at the buttons from below lands on their last line, from above on their first, at the same place along the line."""
+        rows = self.action_rows
+        here = next((i for i, row in enumerate(rows) if self.action in row), 0)
+        column = rows[here].index(self.action) if self.action in rows[here] else 0
+        target = rows[-1] if delta < 0 else rows[0]
+        self.action = target[min(column, len(target) - 1)]
 
     def _profile_key(self, key):
         names = self.names()
@@ -240,12 +251,20 @@ class Form:
             self.action = max(self.action - 1, 0)
         elif key == "right":
             self.action = min(self.action + 1, len(ACTION_LABELS) - 1)
-        elif key == "up":
-            self._step(-1)
-        elif key == "down":
-            self._step(1)
+        elif key in ("up", "down"):
+            self._action_line(1 if key == "down" else -1)
         elif key in ("enter", " "):
             self._do(self.action)
+
+    def _action_line(self, step):
+        """Up / Down on the action buttons: to the line above or below (same position along it), then on to the next part of the screen."""
+        rows = self.action_rows
+        at = next(i for i, row in enumerate(rows) if self.action in row)
+        if 0 <= at + step < len(rows):
+            target = rows[at + step]
+            self.action = target[min(rows[at].index(self.action), len(target) - 1)]
+        else:
+            self._step(step)
 
     def _button_key(self, key):
         if key == "left":
@@ -537,15 +556,18 @@ class Form:
 
     def _actions_lines(self, width):
         """The action buttons, wrapped onto as many lines as the window needs."""
-        lines, line, used = [], [("", "   ")], 3
+        lines, line, used, rows, row = [], [("", "   ")], 3, [], []
         for n, label in enumerate(ACTION_LABELS):
             piece = f"[ {label} ]"
             if used + len(piece) + 1 > width - 2 and used > 3:
                 lines.append(line)
-                line, used = [("", "   ")], 3
+                rows.append(row)
+                line, used, row = [("", "   ")], 3, []
             on = self.zone == ACTIONS and self.action == n
             line += [("focus" if on else "bold", piece), ("", " ")]
             used += len(piece) + 1
+            row.append(n)
+        self.action_rows = rows + [row]
         return lines + [line]
 
     def _buttons_line(self):

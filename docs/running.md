@@ -158,6 +158,13 @@ Every setting is on one screen, grouped (HA behaviour, Panorama range, Failure h
 
 Saving writes `settings.toml` in the folder you run it from, containing only the settings that differ from the built-in defaults, so a later, safer default still reaches you. If the file already exists it is rewritten and its comments are not kept. **Every command run from that folder then uses it** and says so (`Using settings file ... (found in this folder)`); name another file with `--settings FILE`, which `settings` edits too. `prepare` pins the file it used into the upgrade script.
 
+**Two settings to know about.**
+
+- `sync_to_peer` is `Disable`, `Both` or `UpgradeOnly`. The default, **Both**, forces the passive member to match the active one when preparing for the upgrade cycle (`prepare`) **and again** during the upgrade itself, just before the passive member is touched, for each pair that still needs it. `UpgradeOnly` leaves `prepare` out of it. `Disable` never forces a sync; an unsynced pair is then refused or flagged according to `ha_config_unsynced`. Because the default syncs during the upgrade, a pair that is out of sync shows as needing acknowledgement (`force_config_sync`) rather than being refused.
+- `panorama_compare` is `minor` (the default) or `major`, and sets the unit for `spread_limit` (default 2) and for "Panorama is older than the target". A version reads major.minor.maintenance.hotfix, so `12.1.10-h2` is major 12, minor 1, maintenance 10, hotfix 2. With `minor`, Panorama should be at most 2 feature releases ahead of a firewall: 12.2, 12.1 and 11.2 are within 2 of each other. Advice only, never a blocker.
+
+PAN-OS numbering has gaps (10.2 was the first release to end in .2, and there is no 12.0), so minor distances are counted along the list of releases that exist, not worked out from the numbers. That list ships with the tool, taken from the vendor's end-of-life summary page, and is shown by `panupgrade releases`. It goes out of date as releases appear: `panupgrade releases --update` downloads a fresh copy into `releases.json` in the folder you run it from (a plain JSON file you may also edit by hand), and every command run from that folder then uses it and says so. `--releases FILE` names another. A release the table does not list is counted in numeric order and the advice says so. Nothing is downloaded unless you run `--update`.
+
 Without a terminal, or with `--set`, `settings` prints the current values instead (`--no-interactive` forces this). `--set name=value` changes one run without touching any file. `settings.example.toml` lists every setting with its default for editing by hand.
 
 ## What to confirm on your first live run

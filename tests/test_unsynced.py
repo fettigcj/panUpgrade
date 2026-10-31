@@ -14,7 +14,7 @@ from panupgrade.sources import FakeFleet
 
 
 def plan_for(data, sel=None, **opts):
-    opts = {"ha_config_unsynced": "caution", **opts}       # the default is block; these tests are about the accepted-risk path
+    opts = {"sync_to_peer": "Disable", "ha_config_unsynced": "caution", **opts}   # without the tool's own sync, this is the accepted-risk path
     s = settings.load(None, [f"{k}={v}" for k, v in opts.items()])
     return build_plan(FakeFleet(data), TARGET, s, sel or Selection(), TEST_RULES), s
 
@@ -32,10 +32,16 @@ class UnsyncedPairs(unittest.TestCase):
     def codes(self, p):
         return [(c["scope"], c["code"]) for c in p["cautions"]]
 
-    def test_the_defaults_refuse_an_unsynced_pair_and_sync_ahead_of_the_window(self):
+    def test_the_defaults_sync_the_pair_themselves_so_there_is_no_failover_risk_to_accept(self):
         s = settings.load(None, [])
-        self.assertEqual((s.ha_config_unsynced, s.sync_to_peer), ("block", "prepare"))
+        self.assertEqual((s.ha_config_unsynced, s.sync_to_peer), ("block", "Both"))
         p = build_plan(FakeFleet(self.data()), TARGET, s, Selection(), TEST_RULES)
+        self.assertEqual(dev(p, "A2")["verdict"], "caution")
+        self.assertIn(("A2", "force_config_sync"), self.codes(p))
+        self.assertNotIn("failover_to_unsynced_passive", [code for _scope, code in self.codes(p)])
+
+    def test_with_the_sync_disabled_the_default_refuses_an_unsynced_pair(self):
+        p = build_plan(FakeFleet(self.data()), TARGET, settings.load(None, ["sync_to_peer=Disable"]), Selection(), TEST_RULES)
         self.assertEqual((dev(p, "A1")["verdict"], dev(p, "A2")["verdict"]), ("blocked", "blocked"))
 
     def test_choosing_caution_prints_a_loosening_warning(self):
@@ -72,7 +78,7 @@ class UnsyncedPairs(unittest.TestCase):
         self.assertEqual(dev(p, "A2")["verdict"], "blocked")
 
     def test_forcing_the_sync_still_wins_when_that_is_what_the_user_chose(self):
-        p, _ = plan_for(self.data(), sync_to_peer="upgrade")
+        p, _ = plan_for(self.data(), sync_to_peer="UpgradeOnly")
         self.assertIn(("A2", "force_config_sync"), self.codes(p))
         self.assertNotIn("failover_to_unsynced_passive", [c for _, c in self.codes(p)])
 

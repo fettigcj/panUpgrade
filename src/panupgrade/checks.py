@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from . import advisories, paths
 from .model import (ERROR, EXCLUDED, FAIL, INFO, NO_DATA, NOT_APPLICABLE, PASS, SKIP, WARN,
                     CheckResult)
+from . import releases as releases_mod
 from .versions import Version, VersionError
 
 
@@ -26,6 +27,7 @@ class Context:
     collect_error: str = ""
     panorama_clock: str = None
     extra: dict = field(default_factory=dict)
+    releases: object = None         # releases.Releases; the table that ships with the tool when None
 
 
 def _skip(name, kind, reason):
@@ -142,8 +144,7 @@ def ha_peer(ctx):
         elif value is False:
             problems.append(label)
     if problems == ["HA1 config sync"] and f.ha_session_sync and f.ha_links_ok is not False:
-        mode = ctx.settings.sync_to_peer
-        if mode == "upgrade":
+        if ctx.settings.sync_to_peer != "Disable":
             return CheckResult("ha_peer", WARN,
                                "the passive member's configuration is not synchronized with the active member; the upgrade run "
                                "will force a sync (active to passive) before touching the passive member",
@@ -156,16 +157,14 @@ def ha_peer(ctx):
                     "FAILOVER RISK. This pair's passive member does not have this member's configuration (HA config sync reads 'not synchronized'). "
                     "When this ACTIVE member suspends so the upgraded passive can take over, the passive runs ITS OWN configuration, so anything that "
                     "differs (rules, routes, objects, VPNs, anything) changes at that moment: traffic can be handled differently, dropped or "
-                    "allowed. The upgrade itself does not fix that. Sync the configuration first if you can (prepare with sync_to_peer). "
+                    "allowed. The upgrade itself does not fix that. Sync the configuration first if you can (sync_to_peer = Both does it). "
                     "Accepting this when you prepare the batch lets the upgrade proceed.", ack="failover_to_unsynced_passive", evidence=marker)
             return CheckResult("ha_peer", INFO,
                                "config not synchronized with the active member. That does not affect this passive member's own upgrade (it carries no "
                                "traffic); the risk is at the later failover and is flagged on the active member.", evidence=marker)
-        if mode == "prepare":
-            return CheckResult("ha_peer", FAIL, "HA1 config sync is not synchronized; run `panupgrade prepare` first "
-                                                "(sync_to_peer=prepare), then plan again, or set ha_config_unsynced=caution to proceed anyway")
-        return CheckResult("ha_peer", FAIL, "not healthy: HA1 config sync (set sync_to_peer to have the tool force the sync, "
-                                            "or ha_config_unsynced=caution to proceed anyway)")
+        return CheckResult("ha_peer", FAIL, "not healthy: HA1 config sync is not synchronized and sync_to_peer is Disable. Sync it yourself, "
+                                            "set sync_to_peer to Both so the tool forces the sync, or set ha_config_unsynced=caution to "
+                                            "proceed anyway")
     if problems:
         return CheckResult("ha_peer", FAIL, "not healthy: " + ", ".join(problems))
     if unknown:
@@ -320,18 +319,20 @@ def panorama_range(ctx):
     if not raw:
         return _no_data("panorama_range", "the running version")
     pano, current = Version.parse(ctx.panorama_version), Version.parse(raw)
-    limit = ctx.settings.spread_limit
-    behind = pano.major - current.major
+    table, unit, limit = ctx.releases or releases_mod.default(), ctx.settings.panorama_compare, ctx.settings.spread_limit
+    behind = table.behind(pano, current, unit)
+    names = _unit_names(unit)
+    stale = _stale_note(table, pano, current, ctx.target)
     if behind > limit:
-        after = pano.major - ctx.target.major
+        after = table.behind(pano, ctx.target, unit)
         tail = ("" if after <= limit else
-                f" The target {ctx.target} would still be {after} major versions behind Panorama; consider a newer target.")
+                f" The target {ctx.target} would still be {after} {names} behind Panorama; consider a newer target.")
         return CheckResult("panorama_range", WARN,
-                           f"advise upgrade: running {current}, {behind} major versions behind Panorama {pano} "
+                           f"advise upgrade: running {current}, {behind} {names} behind Panorama {pano} "
                            f"(limit {limit}). Panorama converts its configuration to each firewall's version, and that is "
-                           f"least trustworthy far back. This does not hold the upgrade; catching up is the fix.{tail}",
-                           evidence={"behind": behind, "limit": limit})
-    return CheckResult("panorama_range", PASS, f"{current} is within {limit} major versions of Panorama {pano}")
+                           f"least trustworthy far back. This does not hold the upgrade; catching up is the fix.{tail}{stale}",
+                           evidence={"behind": behind, "limit": limit, "unit": unit})
+    return CheckResult("panorama_range", PASS, f"{current} is within {limit} {names} of Panorama {pano}{stale}")
 
 
 # (function, required). A required check with no data blocks the device: a
@@ -365,7 +366,18 @@ def _guard(fn, ctx):
 
 # ---- fleet-wide checks (Panorama vs firewalls) ----
 
-def fleet_checks(panorama_version, target, planned_versions, settings):
+def _unit_names(unit):
+    return "major versions" if unit == "major" else "minor versions (feature releases)"
+
+
+def _stale_note(table, *versions):
+    """A sentence to add when a release is missing from the table, so a stale table is noticed rather than trusted."""
+    missing = table.unlisted(*versions)
+    return (f" (The release table does not list {', '.join(missing)}, so {'it is' if len(missing) == 1 else 'they are'} counted in numeric "
+            f"order; `panupgrade releases --update` refreshes the table.)") if missing else ""
+
+
+def fleet_checks(panorama_version, target, planned_versions, settings, table=None):
     """planned_versions: versions the selected firewalls will have after the plan, plus the unselected as they are."""
     out = []
     if not panorama_version:
@@ -374,7 +386,8 @@ def fleet_checks(panorama_version, target, planned_versions, settings):
         pano = Version.parse(panorama_version)
     except VersionError as exc:
         return [_skip("panorama_version", NO_DATA, str(exc))]
-    older = pano.feature_key < target.feature_key if settings.panorama_compare == "feature" else pano < target
+    table = table or releases_mod.default()
+    older = pano.major < target.major if settings.panorama_compare == "major" else pano.feature_key < target.feature_key
     if older:
         out.append(CheckResult(
             "panorama_not_older", WARN,
@@ -384,16 +397,17 @@ def fleet_checks(panorama_version, target, planned_versions, settings):
     else:
         out.append(CheckResult("panorama_not_older", PASS, f"Panorama {pano} is not older than the target {target}"))
     if planned_versions:
-        limit = settings.spread_limit
-        behind = sorted(v for v in planned_versions if pano.major - v.major > limit)
+        limit, unit = settings.spread_limit, settings.panorama_compare
+        names, stale = _unit_names(unit), _stale_note(table, pano, *planned_versions)
+        behind = sorted(v for v in planned_versions if table.behind(pano, v, unit) > limit)
         if behind:
             out.append(CheckResult(
                 "version_spread", WARN,
                 f"advise upgrade: after this plan {len(behind)} of {len(planned_versions)} firewall(s) are still more than "
-                f"{limit} major versions behind Panorama {pano} (oldest: {behind[0]}). Not a blocker: this tool upgrades "
-                f"firewalls, never Panorama; catching up is the fix. Panorama must not be upgraded further while these lag.",
-                evidence={"behind": len(behind), "limit": limit}))
+                f"{limit} {names} behind Panorama {pano} (oldest: {behind[0]}). Not a blocker: this tool upgrades "
+                f"firewalls, never Panorama; catching up is the fix. Panorama must not be upgraded further while these lag.{stale}",
+                evidence={"behind": len(behind), "limit": limit, "unit": unit}))
         else:
             out.append(CheckResult("version_spread", PASS,
-                                   f"after this plan every firewall is within {limit} major versions of Panorama {pano}"))
+                                   f"after this plan every firewall is within {limit} {names} of Panorama {pano}{stale}"))
     return out

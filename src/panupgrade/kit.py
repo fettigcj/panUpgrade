@@ -36,7 +36,8 @@ def upgrade_argv(args, serials_file, approval_file, journal_file):
     argv = ["python", "-m", "panupgrade", "upgrade", *where, "--serials-file", str(serials_file),
             "--target", args.target, "--approval", str(approval_file), "--journal", str(journal_file)]
     for flag, value in (("--settings", args.settings), ("--creds-file", args.creds_file),
-                        ("--path-rules", args.path_rules)):
+                        ("--path-rules", args.path_rules),
+                        ("--releases", getattr(args, "releases", None))):
         if value:
             argv += [flag, str(Path(value).resolve())]
     login = getattr(args, "_login", None) or {"reading": args.account, "changes": args.work_account, "ask": getattr(args, "ask_credentials", None)}

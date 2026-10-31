@@ -1,0 +1,150 @@
+{
+ "source": "https://www.paloaltonetworks.com/services/support/end-of-life-announcements/end-of-life-summary",
+ "fetched": "2026-10-30",
+ "releases": [
+  {
+   "release": "1.3",
+   "released": "2007-11-15",
+   "standard_eol": "2008-11-20",
+   "extended_eol": ""
+  },
+  {
+   "release": "2.0",
+   "released": "2008-05-20",
+   "standard_eol": "2009-05-20",
+   "extended_eol": ""
+  },
+  {
+   "release": "2.1",
+   "released": "2009-01-05",
+   "standard_eol": "2012-01-05",
+   "extended_eol": ""
+  },
+  {
+   "release": "3.0",
+   "released": "2009-06-17",
+   "standard_eol": "2010-12-17",
+   "extended_eol": ""
+  },
+  {
+   "release": "3.1",
+   "released": "2010-03-15",
+   "standard_eol": "2013-06-30",
+   "extended_eol": ""
+  },
+  {
+   "release": "4.0",
+   "released": "2011-02-22",
+   "standard_eol": "2014-12-31",
+   "extended_eol": ""
+  },
+  {
+   "release": "4.1",
+   "released": "2011-10-31",
+   "standard_eol": "2015-04-30",
+   "extended_eol": ""
+  },
+  {
+   "release": "5.0",
+   "released": "2012-11-13",
+   "standard_eol": "2016-11-13",
+   "extended_eol": ""
+  },
+  {
+   "release": "6.0",
+   "released": "2014-01-19",
+   "standard_eol": "2017-03-19",
+   "extended_eol": ""
+  },
+  {
+   "release": "6.1",
+   "released": "2014-10-25",
+   "standard_eol": "2018-10-25",
+   "extended_eol": ""
+  },
+  {
+   "release": "7.0",
+   "released": "2015-06-04",
+   "standard_eol": "2017-12-04",
+   "extended_eol": ""
+  },
+  {
+   "release": "7.1",
+   "released": "2016-03-29",
+   "standard_eol": "2020-06-30",
+   "extended_eol": ""
+  },
+  {
+   "release": "8.0",
+   "released": "2017-01-29",
+   "standard_eol": "2019-10-31",
+   "extended_eol": ""
+  },
+  {
+   "release": "8.1",
+   "released": "2018-03-01",
+   "standard_eol": "2022-03-01",
+   "extended_eol": ""
+  },
+  {
+   "release": "9.0",
+   "released": "2019-02-06",
+   "standard_eol": "2022-03-01",
+   "extended_eol": ""
+  },
+  {
+   "release": "9.1",
+   "released": "2019-12-13",
+   "standard_eol": "2024-06-30",
+   "extended_eol": ""
+  },
+  {
+   "release": "10.0",
+   "released": "2020-07-16",
+   "standard_eol": "2022-07-16",
+   "extended_eol": ""
+  },
+  {
+   "release": "10.1",
+   "released": "2021-05-31",
+   "standard_eol": "2024-12-01",
+   "extended_eol": "2026-03-31"
+  },
+  {
+   "release": "10.2",
+   "released": "2022-02-27",
+   "standard_eol": "2025-08-27",
+   "extended_eol": "2027-03-31"
+  },
+  {
+   "release": "11.0",
+   "released": "2022-11-17",
+   "standard_eol": "2024-11-17",
+   "extended_eol": ""
+  },
+  {
+   "release": "11.1",
+   "released": "2023-11-03",
+   "standard_eol": "2027-05-03",
+   "extended_eol": "2027-08-31"
+  },
+  {
+   "release": "11.2",
+   "released": "2024-05-02",
+   "standard_eol": "2027-05-02",
+   "extended_eol": "2027-08-31"
+  },
+  {
+   "release": "12.1",
+   "released": "2025-08-28",
+   "standard_eol": "2028-08-28",
+   "extended_eol": "2029-08-28"
+  },
+  {
+   "release": "12.2",
+   "released": "2026-07-30",
+   "standard_eol": "2029-07-30",
+   "extended_eol": "2030-07-30"
+  }
+ ]
+}

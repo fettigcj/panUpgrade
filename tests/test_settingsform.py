@@ -73,12 +73,13 @@ class Editing(unittest.TestCase):
     def test_left_and_right_step_through_a_choice_and_wrap(self):
         form = fresh()
         goto(form, "sync_to_peer")
+        self.assertEqual(form.text["sync_to_peer"], "Both")
         keys(form, "right")
-        self.assertEqual(form.text["sync_to_peer"], "upgrade")
+        self.assertEqual(form.text["sync_to_peer"], "UpgradeOnly")
         keys(form, "right")
-        self.assertEqual(form.text["sync_to_peer"], "never")
+        self.assertEqual(form.text["sync_to_peer"], "Disable")
         keys(form, "left")
-        self.assertEqual(form.text["sync_to_peer"], "upgrade")
+        self.assertEqual(form.text["sync_to_peer"], "UpgradeOnly")
 
     def test_a_yes_no_setting_toggles(self):
         form = fresh()
@@ -145,10 +146,29 @@ class Editing(unittest.TestCase):
         form = fresh()
         goto(form, "sync_to_peer")
         text = screen(form)
-        self.assertIn("one of: never, prepare, upgrade", text)
-        self.assertIn("prepare: the separate `prepare` step syncs", text)
+        self.assertIn("one of: Disable, Both, UpgradeOnly", text)
+        flat = " ".join(text.split())
+        self.assertIn("Both: the default. Force the sync when preparing for the upgrade cycle (`prepare`) AND again during the upgrade "
+                      "itself", flat)
         keys(form, "right")
-        self.assertIn("upgrade: the upgrade run itself syncs", screen(form))
+        self.assertIn("UpgradeOnly: force the sync only during the upgrade itself", " ".join(screen(form).split()))
+
+    def test_nothing_is_cut_off_with_dots_every_word_of_the_explanation_is_on_screen(self):
+        import re
+        for width in (70, 100, 160):
+            for name in settingsform.shown_names():
+                form = fresh(pending_changes="ignore", allow_downgrade="true", max_parallel=3)
+                goto(form, name)
+                text = " ".join(screen(form, width, 60).split())
+                description, meanings = settingsform.INFO[name]
+                for passage in [description] + ([meanings[form.text[name]]] if form.text[name] in meanings else []):
+                    self.assertIn(" ".join(passage.split()), text, f"{name} at width {width}")
+                self.assertNotIn("...", re.sub(r"\.\.\. and \d+ more", "", text.replace("(...)", "")), f"{name} at width {width}")
+
+    def test_a_long_value_is_shown_in_full_below_the_list(self):
+        form = fresh(backup_dir="D:/a/very/long/folder/name/for/backups")
+        goto(form, "backup_dir")
+        self.assertIn("Value: D:/a/very/long/folder/name/for/backups", " ".join(screen(form).split()))
 
     def test_risky_settings_show_a_caution_wherever_the_cursor_is(self):
         form = fresh(pending_changes="ignore")

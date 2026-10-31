@@ -40,19 +40,26 @@ def dev(plan, serial):
 class SyncToPeerPlanning(unittest.TestCase):
     data = staticmethod(lambda: fleet_data(unsynced_pair()))
 
-    def test_never_blocks_and_says_which_setting_helps(self):
-        p, _ = plan_for(self.data(), ha_config_unsynced="block")
+    def test_disable_blocks_and_says_which_setting_helps(self):
+        p, _ = plan_for(self.data(), sync_to_peer="Disable", ha_config_unsynced="block")
         self.assertEqual(dev(p, "A2")["verdict"], "blocked")
         text = " ".join(r["reason"] for r in dev(p, "A2")["results"])
         self.assertIn("sync_to_peer", text)
 
-    def test_prepare_mode_blocks_and_points_at_the_prepare_task(self):
-        p, _ = plan_for(self.data(), sync_to_peer="prepare", ha_config_unsynced="block")
-        self.assertEqual(dev(p, "A2")["verdict"], "blocked")
-        self.assertIn("panupgrade prepare", " ".join(r["reason"] for r in dev(p, "A2")["results"]))
+    def test_both_is_the_default_and_the_upgrade_run_syncs_a_pair_prepare_has_not_reached(self):
+        for given in ({}, {"sync_to_peer": "Both"}):
+            p, _ = plan_for(self.data(), **given)
+            self.assertEqual(dev(p, "A2")["verdict"], "caution", given)
+            self.assertIn(("A2", "force_config_sync"), [(c["scope"], c["code"]) for c in p["cautions"]])
+            self.assertIn("sync to peer", [s["action"] for s in dev(p, "A2")["steps"]])
 
-    def test_upgrade_mode_needs_an_acknowledgement_and_adds_the_step_after_the_backup(self):
-        p, _ = plan_for(self.data(), sync_to_peer="upgrade")
+    def test_disable_with_caution_plans_the_pair_and_flags_the_failover_moment(self):
+        p, _ = plan_for(self.data(), sync_to_peer="Disable", ha_config_unsynced="caution")
+        self.assertIn("failover_to_unsynced_passive", [c["code"] for c in p["cautions"]])
+        self.assertNotIn("sync to peer", [s["action"] for s in dev(p, "A2")["steps"]])
+
+    def test_upgrade_only_needs_an_acknowledgement_and_adds_the_step_after_the_backup(self):
+        p, _ = plan_for(self.data(), sync_to_peer="UpgradeOnly")
         self.assertEqual(dev(p, "A2")["verdict"], "caution")
         self.assertIn(("A2", "force_config_sync"), [(c["scope"], c["code"]) for c in p["cautions"]])
         actions = [s["action"] for s in dev(p, "A2")["steps"]]
@@ -63,7 +70,7 @@ class SyncToPeerPlanning(unittest.TestCase):
     def test_other_ha_trouble_still_blocks(self):
         d = unsynced_pair()
         d[1]["facts"]["ha_session_sync"] = False
-        p, _ = plan_for(fleet_data(d), sync_to_peer="upgrade")
+        p, _ = plan_for(fleet_data(d), sync_to_peer="UpgradeOnly")
         self.assertEqual(dev(p, "A2")["verdict"], "blocked")
 
 
@@ -75,7 +82,7 @@ class SyncToPeerExecution(unittest.TestCase):
 
     def test_upgrade_run_syncs_first_then_upgrades_the_pair(self):
         data = fleet_data(unsynced_pair())
-        p, s = plan_for(data, sync_to_peer="upgrade")
+        p, s = plan_for(data, sync_to_peer="UpgradeOnly")
         sim = SimBackend(data)
         result = executor.run(p, approve(p), sim, Journal.create(self.j, p["hash"]), s)
         self.assertEqual({k: v[0] for k, v in result["outcome"].items()}, {"A2": "done", "A1": "done"})
@@ -86,7 +93,7 @@ class SyncToPeerExecution(unittest.TestCase):
 
     def test_a_failed_sync_fails_the_passive_and_holds_the_active(self):
         data = fleet_data(unsynced_pair())
-        p, s = plan_for(data, sync_to_peer="upgrade")
+        p, s = plan_for(data, sync_to_peer="UpgradeOnly")
         sim = SimBackend(data, fail={("A1", "sync to peer"): "sync job failed"})
         result = executor.run(p, approve(p), sim, Journal.create(self.j, p["hash"]), s)
         self.assertEqual(result["outcome"]["A2"][0], "failed")
@@ -183,7 +190,7 @@ class PrepareTask(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.j = str(Path(self.tmp.name, "p.jsonl"))
         self.data = fleet_data(unsynced_pair("A1", "A2"), pair("B1", "B2"))
-        self.s = settings.load(None, ["sync_to_peer=prepare"])
+        self.s = settings.load(None, ["sync_to_peer=Both"])
 
     def build(self, data=None, s=None, target=None):
         return prepare.build(FakeFleet(data or self.data), s or self.s, Selection(), target, TEST_RULES)
@@ -194,11 +201,11 @@ class PrepareTask(unittest.TestCase):
         self.assertEqual(plan["downloads"], [])                    # no target given: nothing to pre-download
 
     def test_other_sync_settings_leave_the_config_alone_and_say_why(self):
-        for mode in ("never", "upgrade"):
+        for mode in ("Disable", "UpgradeOnly"):
             plan = self.build(s=settings.load(None, [f"sync_to_peer={mode}"]))
             self.assertEqual(plan["units"], [], mode)
             self.assertIn("not synchronized", plan["notes"][0]["why"])
-        self.assertIn("upgrade run will sync", self.build(s=settings.load(None, ["sync_to_peer=upgrade"]))["notes"][0]["why"])
+        self.assertIn("upgrade run will sync", self.build(s=settings.load(None, ["sync_to_peer=UpgradeOnly"]))["notes"][0]["why"])
 
     def test_a_target_adds_downloads_only_where_the_image_is_missing(self):
         data = fleet_data(pair("A1", "A2"), pair("B1", "B2"), device("S1", version="20.2.9"))
@@ -232,7 +239,7 @@ class PrepareTask(unittest.TestCase):
         self.assertEqual(result["failures"], 1)
 
     def test_the_failure_limit_stops_new_tasks(self):
-        s = settings.load(None, ["sync_to_peer=prepare", "max_failures=1"])
+        s = settings.load(None, ["sync_to_peer=Both", "max_failures=1"])
         plan = prepare.build(FakeFleet(fleet_data(pair("A1", "A2"))), s, Selection(), TARGET, TEST_RULES)
         sim = SimBackend(fleet_data(pair("A1", "A2")), fail={("A1", "download"): "disk full", ("A2", "download"): "disk full"})
         result = prepare.run(plan, Approval(plan["hash"], plan["serials"]), sim, Journal.create(self.j, plan["hash"]), s)
@@ -276,7 +283,7 @@ class ContentSyncBeforeConfigSync(unittest.TestCase):
     NEW = {"app": "8770-8365", "threat": "8770-8365", "av": "0", "wildfire": "0", "url": "0000.00.00.000"}
 
     def build(self, data, **opts):
-        s = settings.load(None, [f"{k}={v}" for k, v in {"sync_to_peer": "prepare", "content_settle_s": 0, **opts}.items()])
+        s = settings.load(None, [f"{k}={v}" for k, v in {"sync_to_peer": "Both", "content_settle_s": 0, **opts}.items()])
         return prepare.build(FakeFleet(data), s, Selection(), None, TEST_RULES), s
 
     def test_matching_content_means_no_content_task_and_zeros_count_as_none(self):
@@ -379,7 +386,7 @@ class HaCompatibilityVerdict(unittest.TestCase):
         return fleet_data(d)
 
     def build(self, data, **opts):
-        s = settings.load(None, [f"{k}={v}" for k, v in {"sync_to_peer": "prepare", "content_settle_s": 0, **opts}.items()])
+        s = settings.load(None, [f"{k}={v}" for k, v in {"sync_to_peer": "Both", "content_settle_s": 0, **opts}.items()])
         return prepare.build(FakeFleet(data), s, Selection(), None, TEST_RULES), s
 
     def test_equal_versions_but_unknown_compatibility_still_plan_a_content_update_first(self):
@@ -483,7 +490,7 @@ class OneApprovalCoversContent(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with mock.patch("sys.stdin", Tty()), mock.patch("builtins.input", side_effect=answers), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = cli.main(["prepare", "--source", f"fake:{self.fleet}", "--serial", "A1", "--serial", "A2", "--set", "sync_to_peer=prepare",
+            code = cli.main(["prepare", "--source", f"fake:{self.fleet}", "--serial", "A1", "--serial", "A2", "--set", "sync_to_peer=Both",
                              "--set", "content_settle_s=0", "--journal", str(self.dir / "p.jsonl"), "--kit-dir", str(self.dir / "kit"),
                              "--color", "never", *extra])
         return code, out.getvalue(), err.getvalue()
@@ -515,13 +522,12 @@ class OneApprovalCoversContent(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertTrue(list((self.dir / "kit").glob("run-upgrade-*")))
 
-    def test_a_failed_preparation_still_leaves_out_what_the_settings_block(self):
-        code, out, _ = self.run_prepare(["APPROVE"], "--target", TARGET, "--set", "sync_content=never", "--set", "ha_config_unsynced=block")
+    def test_a_failed_preparation_is_reported_and_the_upgrade_runs_own_sync_is_left_for_the_people_to_accept(self):
+        code, out, _ = self.run_prepare(["APPROVE"], "--target", TARGET, "--set", "sync_content=never")
         self.assertIn("These preparation steps failed:", out)
-        self.assertIn("BLOCKED", out)
-        self.assertIn("nothing is ready to upgrade", out)
-        self.assertEqual(code, 1)
-        self.assertFalse(list((self.dir / "kit").glob("run-upgrade-*")))
+        self.assertIn("[force_config_sync]", out)                    # with sync_to_peer = Both the upgrade run syncs the pair again
+        self.assertIn("Running the script accepts these cautions", out)
+        self.assertEqual(code, 0)                                    # a kit was written: the pair can still be synced by the upgrade run
 
 
 class AutomaticJournals(unittest.TestCase):
@@ -603,7 +609,7 @@ class AutomaticJournals(unittest.TestCase):
         data = fleet_data(pair("A1", "A2", ha_config_sync=False))
         self.fleet.write_text(json.dumps(data), encoding="utf-8")
         for _ in range(3):
-            code, out, _ = self.cli("prepare", "--target", TARGET, "--dry-run", "--set", "sync_to_peer=prepare", "--runs-dir", str(self.runs))
+            code, out, _ = self.cli("prepare", "--target", TARGET, "--dry-run", "--set", "sync_to_peer=Both", "--runs-dir", str(self.runs))
             self.assertEqual(code, 0, out)
         self.assertEqual(len(list(self.runs.glob("prepare-dry-*.jsonl"))), 3)
 
@@ -643,7 +649,7 @@ class Console(unittest.TestCase):
 class KitWriting(unittest.TestCase):
     def args(self, **kw):
         base = dict(source="panorama:192.0.2.1", target="20.2.9", settings=None, creds_file=None, path_rules=None,
-                    account="reader", work_account="writer", set=["sync_to_peer=upgrade"])
+                    account="reader", work_account="writer", set=["sync_to_peer=UpgradeOnly"])
         base.update(kw)
         return type("A", (), base)
 
@@ -660,7 +666,7 @@ class KitWriting(unittest.TestCase):
         files, name = self.make(True)
         self.assertTrue(name.endswith(".bat"))
         self.assertIn("python -m panupgrade upgrade --panorama 192.0.2.1", files["script"])
-        self.assertIn("--set sync_to_peer=upgrade", files["script"])
+        self.assertIn("--set sync_to_peer=UpgradeOnly", files["script"])
         self.assertIn("--approval", files["script"])
         self.assertIn("--account reader --work-account writer", files["script"])      # pinned, so the script does not depend on the environment it is run under
         self.assertIn("--creds-file", files["script"])

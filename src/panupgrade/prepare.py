@@ -8,7 +8,7 @@ What it does, for the selected firewalls:
 * **Dynamic-content sync.** HA members should run the same cloud-delivered security content (applications/threats,
   antivirus, WildFire). With ``sync_content = prepare`` the latest is installed on a member that differs. This comes BEFORE
   the config sync and GATES it: if the members still differ afterwards, the config sync is not attempted.
-* **Config sync.** With ``sync_to_peer = prepare``, force each active member's running configuration onto a passive peer
+* **Config sync.** With ``sync_to_peer = Both``, force each active member's running configuration onto a passive peer
   that reads "not synchronized". (A production active should always be syncing to its passive: failing over in an
   emergency must not change how the network behaves.) The passive member's own configuration is backed up and verified
   before it is overwritten.
@@ -146,7 +146,7 @@ def build(source, settings, selection, target=None, rules=None):
                 families = ["content"]            # same versions, but PAN-OS itself cannot confirm the pair's content is compatible
                 reason = "PAN-OS reports the HA content compatibility as " + ", ".join(f"{k}: {compat[k]}" for k in bad)
             need_content = bool(families) and settings.sync_content == "prepare"
-            need_cfg = facts.ha_config_sync is False and settings.sync_to_peer == "prepare"
+            need_cfg = facts.ha_config_sync is False and settings.sync_to_peer == "Both"
             if families and not need_content:
                 notes.append({"serial": ref.serial, "hostname": ref.hostname,
                               "why": f"dynamic content is not level between the HA members ({reason}); "
@@ -155,8 +155,8 @@ def build(source, settings, selection, target=None, rules=None):
                 notes.append({"serial": ref.serial, "hostname": ref.hostname,
                               "why": ("config is not synchronized with the passive member; sync_to_peer is "
                                       f"'{settings.sync_to_peer}', so prepare leaves it" +
-                                      (" (the upgrade run will sync it)" if settings.sync_to_peer == "upgrade"
-                                       else " (set sync_to_peer to prepare or upgrade to have the tool fix it)"))})
+                                      (" (the upgrade run will sync it)" if settings.sync_to_peer == "UpgradeOnly"
+                                       else " (set sync_to_peer to Both or UpgradeOnly to have the tool fix it)"))})
             if need_content or need_cfg:
                 units.append({"active": ref.serial, "active_name": ref.hostname, "passive": peer,
                               "passive_name": refs[peer].hostname if peer in refs else peer,

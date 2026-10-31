@@ -9,11 +9,11 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from dataclasses import asdict
 from pathlib import Path
 
-from . import (approval as approval_mod, fleetreport, console, executor, paths, prepare as prepare_mod, report,
+from . import (approval as approval_mod, fleetreport, console, executor, paths, prepare as prepare_mod, releases as releases_mod, report,
                settings as settings_mod, xlsxout)
 from .site import DEFAULT_ACCOUNT, DEFAULT_CREDS, DEFAULT_WORK_ACCOUNT
 from .journal import Journal, JournalError
@@ -25,6 +25,7 @@ from .sources import FakeFleet, SourceError, snapshot
 
 
 _SAID = set()
+DEFAULT_RELEASES = "releases.json"    # the PAN-OS release table saved by `releases --update`; used from the same folder when present
 DEFAULT_SETTINGS = "settings.toml"   # saved by `settings`; used by every command run from the same folder unless --settings names another
 DEFAULT_LIST = "upgradeList.txt"      # what `select` saves and plan / prepare / upgrade read when no firewalls are named
 
@@ -230,11 +231,29 @@ def _style(args):
     return console.Style.detect(getattr(args, "color", "auto"), getattr(args, "ascii", False))
 
 
+def _load_releases(args):
+    """The PAN-OS release table: the file named, else ./releases.json when it exists, else the one that ships with the tool.
+
+    Says which, once. A table found in the folder is recorded in ``args.releases`` so the upgrade script pins that exact file.
+    """
+    found = ""
+    if not args.releases and Path(DEFAULT_RELEASES).is_file():
+        args.releases, found = str(Path(DEFAULT_RELEASES).resolve()), " (found in this folder)"
+    table = releases_mod.load(args.releases)
+    if ("releases", args.releases) not in _SAID:
+        _SAID.add(("releases", args.releases))
+        where = f"release table {_tilde(args.releases)}{found}" if args.releases else "the release table that ships with the tool"
+        when = f", fetched {table.fetched}" if table.fetched else ""
+        print(_style(args).line("info", f"Using {where}{when}"))
+    return table
+
+
 def _build(args, source=None):
     settings = _load_settings(args)
     rules = paths.load_rules(args.path_rules) if args.path_rules else None
+    table = _load_releases(args)
     source = source or _source(args)
-    return build_plan(source, args.target, settings, _selection(args), rules), settings
+    return build_plan(source, args.target, settings, _selection(args), rules, releases=table), settings
 
 
 def _plan(args):
@@ -629,6 +648,7 @@ def _prepare(args):
     try:
         settings = _load_settings(args)
         rules = paths.load_rules(args.path_rules) if args.path_rules else None
+        _load_releases(args)                                  # so the upgrade script pins the same table
         backend, fleet, label = _backend_and_source(args)
         plan = prepare_mod.build(fleet, settings, _selection(args), args.target, rules)
         names = {u[k]: u[k + "_name"] for u in plan["units"] for k in ("active", "passive")}
@@ -825,6 +845,43 @@ def _settings(args):
     return 0
 
 
+def _releases(args):
+    """Show the PAN-OS release table in use, or (--update) download a fresh one into a file you own."""
+    from panupgrade_live import releasefeed
+    style = _style(args)
+    target = args.file or DEFAULT_RELEASES
+    try:
+        if args.update:
+            try:
+                before = {e["release"] for e in releases_mod.load(target if Path(target).is_file() else None).entries}
+            except releases_mod.ReleaseError:
+                before = set()
+            fresh = releasefeed.download()
+            releases_mod.save(target, fresh)
+            added = sorted((e["release"] for e in fresh.entries if e["release"] not in before), key=releases_mod.key)
+            print(style.line("ok", f"Saved {len(fresh.entries)} PAN-OS releases to {_tilde(Path(target).resolve())} (from {releases_mod.URL})."))
+            print(style.line("info", ("New since the table you had: " + ", ".join(added) + ".") if before and added else
+                             "Nothing new since the table you had." if before else "That is now the table every command run from this folder uses."))
+            return 0
+        path = args.file or (DEFAULT_RELEASES if Path(DEFAULT_RELEASES).is_file() else None)
+        table = releases_mod.load(path)
+    except (releases_mod.ReleaseError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    where = _tilde(Path(path).resolve()) if path else "the table that ships with the tool"
+    print(style.bold(f"PAN-OS releases, from {where}" + (f" (fetched {table.fetched})" if table.fetched else "")))
+    rows = [[e["release"], e.get("released") or "-", e.get("standard_eol") or "-", e.get("extended_eol") or "-", releases_mod.standing(e)]
+            for e in reversed(table.entries)]
+    sys.stdout.write(console.render_table(["release", "released", "standard support ends", "extended support ends", "today"], rows, style))
+    print(style.line("info", "'Minor' distances in the settings are counted along this list, newest first: each row is one step. "
+                             "Dates are the vendor's, copied as they were; check them against the vendor before relying on one."))
+    if table.fetched and (date.today() - date.fromisoformat(table.fetched)).days > 180:
+        print(style.line("warn", "This table is more than six months old. `panupgrade releases --update` fetches a fresh one."))
+    if not path:
+        print(style.line("info", "`panupgrade releases --update` saves a fresh copy here, in ./releases.json, which you can also edit by hand."))
+    return 0
+
+
 def _selection_args(p):
     """Connection options and the filters that choose which firewalls a command looks at (all of them by default)."""
     conn = p.add_argument_group("connect to Panorama")
@@ -871,6 +928,7 @@ The usual order (everything but prepare and upgrade only reads):
 Helpers:
   select    build a firewall list from filters, to check and edit (on a terminal it opens a fill-in form)
   settings  change the settings on a form (prints them when there is no terminal)
+  releases  the list of PAN-OS releases used to count minor versions; --update downloads a fresh one
   help      this page; `panupgrade help <command>` shows that command's options
 
 Every command takes the same filters to choose firewalls (default: all of them):
@@ -896,6 +954,8 @@ def _plan_args(p):
     p.add_argument("--settings", help="settings TOML file")
     p.add_argument("--set", action="append", help="override a setting: name=value")
     p.add_argument("--path-rules", help="path rules JSON (default: the packaged, unverified, empty rules)")
+    p.add_argument("--releases", help=f"PAN-OS release table JSON (default ./{DEFAULT_RELEASES} if present, else the one that ships with the tool; "
+                                      f"`panupgrade releases --update` makes a fresh one)")
     p.add_argument("--accept-standalone-outage", action="store_true",
                    help="include standalone firewalls (their reboot is an outage)")
 
@@ -953,7 +1013,7 @@ def main(argv=None):
     prep = sub.add_parser("prepare", help="pre-maintenance: sync HA config, pre-download images, review the upgrade, and write its approval and run script")
     _selection_args(prep)
     _run_args(prep, journal_required=False)
-    prep.add_argument("--settings", help="settings TOML file (needs sync_to_peer = prepare)")
+    prep.add_argument("--settings", help="settings TOML file (sync_to_peer must be Both for prepare to sync a pair)")
     prep.add_argument("--set", action="append", help="override a setting: name=value")
     prep.add_argument("--approval", help="approval JSON for the preparation tasks themselves; without it you are asked to type APPROVE "
                                          "(a --dry-run asks nothing)")
@@ -961,8 +1021,16 @@ def main(argv=None):
                       help="where the upgrade kit (firewall list, approval, run script) is written after a real prepare (default prepared)")
     prep.add_argument("--target", help="the version you are about to upgrade to: pre-download its images, and only touch firewalls it would change")
     prep.add_argument("--path-rules", help="path rules JSON (default: the packaged rules)")
+    prep.add_argument("--releases", help=f"PAN-OS release table JSON (default ./{DEFAULT_RELEASES} if present, else the shipped one)")
     prep.add_argument("--out", help="directory for prepare.plan.json and prepare.approval.template.json")
     prep.set_defaults(func=_prepare)
+
+    rl = sub.add_parser("releases", help="show the PAN-OS release table used to count minor versions, or download a fresh one")
+    rl.add_argument("--update", action="store_true", help=f"download the vendor's list of PAN-OS releases and save it as ./{DEFAULT_RELEASES}")
+    rl.add_argument("--file", help=f"the table to show, or to save to with --update (default ./{DEFAULT_RELEASES})")
+    rl.add_argument("--color", choices=["auto", "always", "never"], default="auto", help=argparse.SUPPRESS)
+    rl.add_argument("--ascii", action="store_true", help=argparse.SUPPRESS)
+    rl.set_defaults(func=_releases)
 
     st = sub.add_parser("settings", help="change the settings on a form (or print them when there is no terminal); changes nothing else")
     st.add_argument("--settings", help=f"the settings file to edit (default ./{DEFAULT_SETTINGS})")

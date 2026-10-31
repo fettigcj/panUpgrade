@@ -40,14 +40,17 @@ INFO = {
                       {"leave": "leave the roles as the upgrade left them",
                        "restore": "fail back, so the member that was active at the start is active again",
                        "pause": "stop and ask before touching the roles"}),
-    "sync_to_peer": ("Whether the active member's configuration is pushed to the passive one, which forces the passive to match "
-                     "what is running.",
-                     {"never": "only report a pair that is out of sync; never force a sync",
-                      "prepare": "the separate `prepare` step syncs ahead of the maintenance window",
-                      "upgrade": "the upgrade run itself syncs each pair that needs it, overwriting the passive's configuration"}),
+    "sync_to_peer": ("Whether the tool forces the passive member of an HA pair to match the active member's configuration. The sync "
+                     "overwrites whatever the passive is running, so the passive's own configuration is backed up and verified first.",
+                     {"Disable": "never force a sync. A pair whose passive is out of sync is only reported (and, depending on "
+                                 "ha_config_unsynced, refused or flagged).",
+                      "Both": "the default. Force the sync when preparing for the upgrade cycle (`prepare`) AND again during the upgrade "
+                              "itself, just before the passive member is touched, for each pair that still needs it.",
+                      "UpgradeOnly": "force the sync only during the upgrade itself. `prepare` leaves the pair alone."}),
     "sync_timeout_s": ("How long to wait for a configuration sync to finish, in seconds.", {}),
-    "ha_config_unsynced": ("A pair whose passive member's configuration is not synchronized. The risk is one moment: the active member "
-                           "suspends and the upgraded passive takes over running its own, different configuration.",
+    "ha_config_unsynced": ("What to do about a pair whose passive member's configuration is not synchronized, when sync_to_peer is "
+                           "Disable (with Both or UpgradeOnly the tool syncs the pair itself and this is not used). The risk is one moment: "
+                           "the active member suspends and the upgraded passive takes over running its own, different configuration.",
                            {"block": "refuse to plan such a pair at all, so nobody runs into it unread",
                             "caution": "plan it anyway, flag that moment on the active member, and accept it when the batch is prepared"}),
     "sync_content": ("Dynamic content (applications and threats, antivirus, WildFire). HA members should run the same versions, "
@@ -56,10 +59,15 @@ INFO = {
                       "prepare": "install the latest on both members during `prepare`; the approval prompt lists it"}),
     "content_settle_s": ("After checking content on both members, how long to wait for PAN-OS's own HA check to read Match "
                          "before installing, in seconds.", {}),
-    "spread_limit": ("Advise when a firewall is more than this many major versions behind Panorama. Advice only: it never blocks "
-                     "an upgrade.", {}),
-    "panorama_compare": ("How 'Panorama is older than the target' is judged.",
-                         {"feature": "compare feature releases only (10.2 against 11.0)", "full": "compare every number"}),
+    "spread_limit": ("Advise (never block) when a firewall is more than this many versions behind Panorama, counted in the unit "
+                     "panorama_compare names. The default of 2 with minor means Panorama should be at most 2 feature releases ahead of a "
+                     "firewall: 12.2 and 12.1 and 11.2 are within 2 of each other.", {}),
+    "panorama_compare": ("The unit PAN-OS releases are compared in, both for 'Panorama is older than the target' and for spread_limit. "
+                         "A version reads major.minor.maintenance.hotfix: 12.1.10-h2 is major 12, minor 1, maintenance 10, hotfix 2.",
+                         {"minor": "the default. Compare feature releases (major.minor). Distance is counted along the list of releases "
+                                   "PAN-OS really has (12.2, 12.1, 11.2 and so on), because the numbering has gaps: there is no 12.0, so 11.2 is "
+                                   "two behind 12.2. `panupgrade releases` shows that list and `--update` refreshes it.",
+                          "major": "compare only the major number: 12 against 10 is two behind."}),
     "max_failures": ("Stop starting new firewalls after this many have failed.", {}),
     "max_parallel": ("How many HA pairs (or standalone firewalls) are worked on at the same time. A pair's two members always go "
                      "one after the other.", {}),
@@ -92,7 +100,7 @@ HELP = {
     BUTTONS: "Left / Right: choose a button   Enter or Space: press it   Up: back to the settings",
 }
 ALWAYS = "Shortcuts: Ctrl-D = Save & Exit   Esc = Quit without saving (asks first if there are unsaved changes)"
-NAME_WIDTH, VALUE_WIDTH, DEFAULT_WIDTH = 30, 14, 12
+NAME_WIDTH, VALUE_WIDTH = 30, 14
 
 
 def _fmt(value):
@@ -285,16 +293,16 @@ class Form:
 
     # ---- drawing
     def render(self, width, height, title=""):
-        """The screen as a list of lines; each line is a list of (style, text) pieces. Fits width x height."""
+        """The screen as a list of lines; each line is a list of (style, text) pieces. Fits width x height. Long text wraps."""
         current, problems, general = self.check()
         bad = general or (f"{next(iter(problems))}: {next(iter(problems.values()))}" if problems else "")
         name = self.names[self.focus]
-        lines = [[("bold", f" {title}".rstrip() or " panupgrade settings")], [("dim", " " + HELP[self.zone])], [("dim", " " + ALWAYS)]]
+        lines = [[("bold", f" {title}".rstrip() or " panupgrade settings")]]
+        lines += self._wrapped("dim", HELP[self.zone], width, " ") + self._wrapped("dim", ALWAYS, width, " ")
         status = self.message or ("!" + bad if bad else "")
-        lines.append([("error" if status.startswith("!") else "dim", " " + status.lstrip("!"))])
+        lines += self._wrapped("error" if status.startswith("!") else "dim", status.lstrip("!"), width, " ")
         lines.append([])
-        header = f"    {'setting'.ljust(NAME_WIDTH)}  {'value'.ljust(VALUE_WIDTH)}  {'default'.ljust(DEFAULT_WIDTH)}  what it does"
-        lines.append([("bold", header)])
+        lines.append([("bold", f"    {'setting'.ljust(NAME_WIDTH)}  {'value'.ljust(VALUE_WIDTH)}  default")])
 
         body, focus_line = [], 0
         for title_, names in SECTIONS:
@@ -302,9 +310,9 @@ class Form:
             for n in names:
                 if n == name and self.zone == ROWS:
                     focus_line = len(body)
-                body.append(self._row(n, n == name and self.zone == ROWS, n in problems, width))
+                body.append(self._row(n, n == name and self.zone == ROWS, n in problems))
 
-        detail = self._detail(name, current, width)
+        detail = self._detail(name, current, width, max((height - len(lines)) // 2, 6))
         room = max(height - len(lines) - len(detail) - 3, 5)
         self.page = max(room - 2, 1)
         if focus_line < self.offset + 1:
@@ -313,11 +321,9 @@ class Form:
             self.offset = focus_line - room + 1
         self.offset = max(0, min(self.offset, max(len(body) - room, 0)))
         lines += body[self.offset:self.offset + room]
-        if len(body) > room:
-            lines.append([("dim", f"   (showing lines {self.offset + 1}-{min(self.offset + room, len(body))} of {len(body)}; "
-                                  f"{self.changed_count()} setting{'s' if self.changed_count() != 1 else ''} differ from the defaults)")])
-        else:
-            lines.append([("dim", f"   {self.changed_count()} setting{'s' if self.changed_count() != 1 else ''} differ from the defaults (marked *)")])
+        count = f"{self.changed_count()} setting{'s' if self.changed_count() != 1 else ''} differ from the defaults (marked *)"
+        lines.append([("dim", f"   showing lines {self.offset + 1}-{min(self.offset + room, len(body))} of {len(body)}; {count}"
+                              if len(body) > room else f"   {count}")])
         lines += detail
         lines.append([])
         buttons = [("", "   ")]
@@ -329,22 +335,27 @@ class Form:
         lines.append(buttons)
         return [self._cut(line, width - 1) for line in lines[:height]]
 
-    def _row(self, name, here, wrong, width):
+    def _row(self, name, here, wrong):
         kind, text = self.kinds[name], self.text[name]
         cycles = name in settings_mod._CHOICES or kind is bool
         box = f"< {text} >" if cycles else f"[{text}{'_' if here else ''}]"
         if len(box) > VALUE_WIDTH:
-            box = box[:VALUE_WIDTH - 2] + (">" if cycles else "]")
-        marker = ("*" if self.changed(name) else " ")
-        room = width - (NAME_WIDTH + VALUE_WIDTH + DEFAULT_WIDTH + 14)
-        brief = textwrap.shorten(_short(name), room, placeholder="...") if room > 10 else ""
+            box = box[:VALUE_WIDTH - 3] + ("..>" if cycles else "..]")        # the whole value is printed in full under the list
+        marker = "*" if self.changed(name) else " "
         style = "focus" if here else ("error" if wrong else "")
         return [(style, f" {'>' if here else ' '}{marker} {name.ljust(NAME_WIDTH)}  {box.ljust(VALUE_WIDTH)}  "),
-                (style or "dim", _fmt(getattr(self.defaults, name)).ljust(DEFAULT_WIDTH)[:DEFAULT_WIDTH] + "  "),
-                (style or "dim", brief)]
+                (style or "dim", _fmt(getattr(self.defaults, name)))]
 
-    def _detail(self, name, current, width):
-        """What the setting under the cursor is, what its value means, and a caution for every risky setting in force."""
+    @staticmethod
+    def _wrapped(style, text, width, indent="   ", first=None):
+        """``text`` broken into lines that fit ``width``, each a one-piece line; the first starts with ``first`` (default ``indent``)."""
+        lead = indent if first is None else first
+        wrapped = textwrap.wrap(text, max(width - 2, len(lead) + 20), initial_indent=lead, subsequent_indent=indent, break_on_hyphens=False) or [lead]
+        return [[(style, line)] for line in wrapped]
+
+    def _detail(self, name, current, width, limit):
+        """What the setting under the cursor is, what its value means, and a caution for every risky setting in force. All of it
+        wraps; only the cautions are shortened (to a count) when the window is too small to show everything."""
         text = self.text[name]
         kind = self.kinds[name]
         choices = settings_mod._CHOICES.get(name)
@@ -352,15 +363,20 @@ class Form:
             "a whole number" if kind is int else "a number" if kind is float else "text")
         description, meanings = INFO[name]
         out = [[("bold", f" {name}"), ("dim", f"   ({what}; the default is {_fmt(getattr(self.defaults, name))})")]]
-        for line in textwrap.wrap(description, max(width - 6, 20))[:2]:
-            out.append([("", "   " + line)])
+        out += self._wrapped("", description, width)
         if text in meanings:
-            out.append([("bold", f"   {text}: "), ("", meanings[text])])
+            out += self._wrapped("", meanings[text], width, "     ", f"   {text}: ")
+        if kind is str and not choices and len(text) > VALUE_WIDTH - 2:
+            out += self._wrapped("", text, width, "     ", "   Value: ")
         cautions = current.loosening_warnings() if current is not None else []
-        for warning in cautions[:3]:
-            out.append([("warn", "   Caution: " + warning)])
-        if len(cautions) > 3:
-            out.append([("warn", f"   ... and {len(cautions) - 3} more cautions")])
+        shown = 0
+        for warning in cautions:
+            lines = self._wrapped("warn", warning, width, "     ", "   Caution: ")
+            if len(out) + len(lines) > limit and shown < len(cautions):
+                out.append([("warn", f"   ... and {len(cautions) - shown} more cautions; make the window taller to read them")])
+                break
+            out += lines
+            shown += 1
         return out
 
     @staticmethod

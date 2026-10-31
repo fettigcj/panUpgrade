@@ -128,7 +128,7 @@ class PrepareInParallel(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         data = fleet_data(*[pair(f"{c}1", f"{c}2", ha_config_sync=False) for c in "ABC"])
-        s = settings.load(None, ["sync_to_peer=prepare", "max_parallel=3"])
+        s = settings.load(None, ["sync_to_peer=Both", "max_parallel=3"])
         plan = prepare.build(FakeFleet(data), s, Selection(), TARGET, TEST_RULES)
         sim = SimBackend(data)
         result = prepare.run(plan, Approval(plan["hash"], plan["serials"]), sim, Journal.create(str(Path(tmp.name, "p.jsonl")), plan["hash"]), s)

@@ -197,31 +197,50 @@ class FleetChecks(unittest.TestCase):
         return [(a["scope"], a["code"]) for a in p["advice"]]
 
     def test_lagging_firewalls_get_advice_not_a_blocker_or_a_caution(self):
-        p = plan(fleet(pair("A1", "A2"), panorama="23.0.0"))   # 23 vs 20 = 3 > 2
+        p = plan(fleet(pair("A1", "A2"), panorama="23.0.0"), panorama_compare="major")   # 23 vs 20 = 3 > 2
         self.assertIn(("A1", "advise_upgrade"), self.advice(p))
         self.assertIn(("fleet", "advise_upgrade"), self.advice(p))
         self.assertNotIn("version_spread", self.codes(p))
         self.assertEqual(dev(p, "A1")["verdict"], "ready")      # the lag does not hold the upgrade
 
     def test_spread_limit_is_tunable(self):
-        p = plan(fleet(pair("A1", "A2"), panorama="23.0.0"), spread_limit=3)
+        p = plan(fleet(pair("A1", "A2"), panorama="23.0.0"), spread_limit=3, panorama_compare="major")
         self.assertEqual(self.advice(p), [])
 
     def test_advice_covers_firewalls_left_behind_by_the_selection(self):
         src = fleet(pair("A1", "A2"), device("OLD", version="20.1.4"), panorama="23.0.0")
-        p = plan(src, Selection(serials=["A1", "A2"]))
+        p = plan(src, Selection(serials=["A1", "A2"]), panorama_compare="major")
         self.assertIn(("fleet", "advise_upgrade"), self.advice(p))
 
     def test_advice_says_when_the_target_is_itself_out_of_range(self):
-        p = plan(fleet(pair("A1", "A2"), panorama="23.0.0"))     # target 20.2.9 is itself 3 behind 23
+        p = plan(fleet(pair("A1", "A2"), panorama="23.0.0"), panorama_compare="major")     # target 20.2.9 is itself 3 behind 23
         text = " ".join(a["text"] for a in p["advice"] if a["scope"] == "A1")
         self.assertIn("consider a newer target", text)
 
-    def test_panorama_older_is_judged_by_feature_release_unless_told_otherwise(self):
-        # Panorama 20.2.5 vs target 20.2.9: same feature release, so not older by default
+    def test_panorama_older_is_judged_by_minor_version_by_default_and_by_major_if_told(self):
+        # Panorama 20.2.5 vs target 20.2.9: same feature release, so not older
         self.assertNotIn("panorama_older_than_target", self.codes(plan(fleet(pair("A1", "A2"), panorama="20.2.5"))))
-        self.assertIn("panorama_older_than_target",
-                      self.codes(plan(fleet(pair("A1", "A2"), panorama="20.2.5"), panorama_compare="full")))
+        # Panorama 20.1.0 vs target 20.2.9: an older feature release, but the same major
+        self.assertIn("panorama_older_than_target", self.codes(plan(fleet(pair("A1", "A2"), panorama="20.1.0"))))
+        self.assertNotIn("panorama_older_than_target",
+                         self.codes(plan(fleet(pair("A1", "A2"), panorama="20.1.0"), panorama_compare="major")))
+
+    def test_minor_distance_is_counted_along_the_releases_that_exist_not_along_the_numbers(self):
+        from panupgrade import releases
+        from panupgrade.versions import Version
+        table = releases.Releases([{"release": r} for r in ("10.2", "11.0", "11.1", "11.2", "12.1", "12.2")])
+        behind = lambda pano, fw, unit="minor": table.behind(Version.parse(pano), Version.parse(fw), unit)
+        self.assertEqual(behind("12.2.0", "11.2.0"), 2)          # 12.2 > 12.1 > 11.2: there is no 12.0
+        self.assertEqual(behind("12.1.10", "10.2.2"), 4)
+        self.assertEqual(behind("12.1.10", "10.2.2", "major"), 2)
+        self.assertEqual(behind("11.2.0", "11.2.5"), 0)          # level, or the firewall is ahead
+        self.assertEqual(behind("11.1.0", "11.2.0"), 0)
+        self.assertEqual(behind("13.1.0", "11.2.0"), 3)          # 13.1 is not in the table: placed by its numbers, 11.2 > 12.1 > 12.2 > 13.1
+
+    def test_a_release_the_table_lacks_is_said_so_in_the_advice(self):
+        p = plan(fleet(pair("A1", "A2"), panorama="23.0.0"), panorama_compare="minor")
+        text = " ".join(a["text"] for a in p["advice"]) + " ".join(r["reason"] for r in dev(p, "A1")["results"] if r["check"] == "panorama_range")
+        self.assertIn("release table does not list", text)
 
 
 class PlanIdentity(unittest.TestCase):

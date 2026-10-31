@@ -88,7 +88,7 @@ class Selection:
         return "; ".join(parts) or "everything Panorama manages"
 
 
-def build_plan(source, target_text, settings, selection=None, rules=None, now=None):
+def build_plan(source, target_text, settings, selection=None, rules=None, now=None, releases=None):
     selection = selection or Selection()
     try:
         target = Version.parse(target_text)
@@ -112,7 +112,8 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
                 facts = source.facts(ref.serial)
             except SourceError as exc:
                 error = str(exc)
-        ctx = checks.Context(ref, facts, target, settings, rules, pano_version, error, panorama_clock=source.panorama_clock())
+        ctx = checks.Context(ref, facts, target, settings, rules, pano_version, error, panorama_clock=source.panorama_clock(),
+                             releases=releases)
         ctxs[ref.serial] = ctx
         results = checks.run_device_checks(ctx)
         verdict, kind = _verdict(results)
@@ -122,7 +123,7 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
     _apply_pair_rules(devices, ctxs, by_serial, target)
 
     planned_versions = _planned_versions(devices, refs, target)
-    fleet = checks.fleet_checks(pano_version, target, planned_versions, settings)
+    fleet = checks.fleet_checks(pano_version, target, planned_versions, settings, releases)
 
     for dev in devices.values():
         if dev["verdict"] in ("ready", "caution"):

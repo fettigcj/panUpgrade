@@ -21,25 +21,27 @@ class Settings:
     # HA / session checks (fractions of the active node's session count)
     failover_band: float = 0.30
     post_upgrade_band: float = 0.50
-    # Panorama should stay within this many MAJOR versions of the firewalls it manages (a rule of thumb from experience
-    # with schema conversion). A firewall further behind gets "advise upgrade"; it never blocks that firewall's upgrade.
+    # Panorama should stay within this many versions of the firewalls it manages (a rule of thumb from experience with schema
+    # conversion), counted in the unit panorama_compare names. A firewall further behind gets "advise upgrade"; it never blocks that
+    # firewall's upgrade.
     spread_limit: int = 2
-    # How "Panorama is older than the firewall's target" is judged: feature (10.2 vs 11.0) | full (every number)
-    panorama_compare: str = "feature"
+    # The unit versions are compared in, for "Panorama is older than the target" and for spread_limit: minor (feature releases,
+    # 12.2 > 12.1 > 11.2, counted from the table of releases PAN-OS really has) | major (12 > 11 > 10).
+    panorama_compare: str = "minor"
     # Batch handling
     max_failures: int = 5
     max_parallel: int = 1               # HA pairs (or standalone firewalls) worked on at the same time; a pair's members stay in series
     api_rate_per_s: float = 5.0         # polite ceiling on requests per second to Panorama, shared by every worker
-    # Active-to-peer config sync ("sync to peer"): never (report only) | prepare (a separate pre-maintenance
-    # `prepare` task does it) | upgrade (the upgrade run does it first, for each pair that needs it).
+    # Active-to-peer config sync ("sync to peer"): Disable (never force it; only report) | Both (the separate `prepare` step does it
+    # ahead of the window AND the upgrade run does it again first, for each pair that needs it) | UpgradeOnly (only the upgrade run).
     # Production actives should always be syncing to the passive; the sync forces the passive to match what is running.
-    sync_to_peer: str = "prepare"
+    sync_to_peer: str = "Both"
     sync_timeout_s: int = 600
     # A pair whose passive member's config is NOT synchronized. The risk is exactly one moment: the ACTIVE member suspends and the
     # upgraded passive takes over running its own, different configuration. block (the default): refuse to plan such a pair at all,
-    # so nobody runs into it unread; with sync_to_peer = prepare a healthy pair is synced first and never reaches this. caution:
-    # that moment is flagged on the active member with a plain-words message, to be accepted when the batch is prepared; the
-    # passive's own upgrade is unaffected. Ignored when sync_to_peer = upgrade, which forces the sync instead.
+    # so nobody runs into it unread. caution: that moment is flagged on the active member with a plain-words message, to be accepted
+    # when the batch is prepared; the passive's own upgrade is unaffected. Only used when sync_to_peer = Disable: with Both or
+    # UpgradeOnly the tool syncs the pair itself instead.
     ha_config_unsynced: str = "block"
     # Dynamic content (the cloud-delivered security services: applications/threats, antivirus, WildFire). HA peers should run
     # the same versions, and a mismatch gates the config sync. never | prepare (install the latest on both members as part of the
@@ -76,8 +78,6 @@ class Settings:
         if self.ha_config_unsynced == "caution":
             out.append("ha_config_unsynced=caution: a pair whose passive config is not synchronized is planned anyway; when the active member "
                        "suspends, the passive takes over running its own, different configuration.")
-        if self.sync_to_peer == "upgrade":
-            out.append(f"sync_to_peer={self.sync_to_peer}: the passive member's configuration is overwritten with the active member's.")
         if self.allow_downgrade:
             out.append("allow_downgrade=true: firewalls running a newer release than the target are installed down to it.")
         if self.allow_cross_feature_downgrade:
@@ -92,8 +92,8 @@ _CHOICES = {
     "pending_changes": ("block", "warn", "ignore"),
     "restore_roles": ("leave", "restore", "pause"),
     "image_source": ("firewall", "panorama"),
-    "panorama_compare": ("feature", "full"),
-    "sync_to_peer": ("never", "prepare", "upgrade"),
+    "panorama_compare": ("minor", "major"),
+    "sync_to_peer": ("Disable", "Both", "UpgradeOnly"),
     "sync_content": ("never", "prepare"),
     "ha_config_unsynced": ("block", "caution"),
 }
@@ -131,8 +131,11 @@ def from_dict(data):
         kwargs[name] = _coerce(name, value, known[name])
     settings = Settings(**kwargs)
     for name, choices in _CHOICES.items():
-        if getattr(settings, name) not in choices:
+        by_lower = {c.lower(): c for c in choices}
+        value = getattr(settings, name)
+        if value.lower() not in by_lower:
             raise SettingsError(f"{name} must be one of {', '.join(choices)}")
+        setattr(settings, name, by_lower[value.lower()])               # 'both' and 'Both' are the same choice
     if settings.allow_cross_feature_downgrade and not settings.allow_downgrade:
         raise SettingsError("allow_cross_feature_downgrade only means something together with allow_downgrade = true")
     if settings.api_rate_per_s <= 0:

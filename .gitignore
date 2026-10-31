@@ -10,3 +10,4 @@ panupgrade-data/
 *.approval.json
 upgradeList.txt
 settings.toml
+releases.json

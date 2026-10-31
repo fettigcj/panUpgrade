@@ -95,6 +95,8 @@ class TheProfiles(Home):
         os.environ["PANUPGRADE_PROFILE"] = "b"
         self.assertEqual(profiles.choose().name, "b")                                 # then the environment variable
         self.assertEqual(profiles.choose("a").name, "a")
+        self.assertEqual(profiles.choose(address="10.0.0.1").name, "a")               # but naming a Panorama beats it
+        self.assertIsNone(profiles.choose(address="10.9.9.9"))                        # and so does naming one that has no profile
         with self.assertRaisesRegex(profiles.ProfileError, "no profile called nope.*profiles: a, b"):
             profiles.choose("nope")
         self.assertEqual((a.address, b.address), ("10.0.0.1", "10.0.0.2"))

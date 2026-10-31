@@ -12,9 +12,10 @@ that belongs to that Panorama and nothing that belongs to another::
     settings.toml      its settings          releases.json    its PAN-OS release table
     runs/  prepared/  backups/               journals, upgrade kits and configuration backups
 
-Which profile a command uses: ``--profile NAME``, else the PANUPGRADE_PROFILE environment variable, else the profile whose address
-matches ``--panorama``, else (when no Panorama was named) the one used last, else the only one there is. A Panorama named on the
-command line that matches no profile is simply used as it is, with the current folder as its workspace.
+Which profile a command uses: ``--profile NAME``; else, when ``--panorama`` names an address, the profile with that address (a
+Panorama that matches no profile is simply used as it is, with the current folder as its workspace); else the PANUPGRADE_PROFILE
+environment variable; else the one used last, else the only one there is. Naming a Panorama beats the environment variable because it
+is the more specific thing to have said.
 
 Removing a profile never deletes anything: its folder is renamed ``<name>.removed-<date>`` and no longer listed, because it may hold
 configuration backups and run journals.
@@ -130,12 +131,12 @@ def choose(explicit=None, address=None, use_remembered=True):
             have = ", ".join(names()) or "none yet; `panupgrade auth` makes one"
             raise ProfileError(f"there is no profile called {explicit} (profiles: {have})")
         return profile
-    named = os.environ.get("PANUPGRADE_PROFILE", "").strip()
-    if named and load(named):
-        return load(named)
     if address:
         wanted = address.strip().lower()
         return next((p for p in map(load, names()) if p and p.address.lower() == wanted), None)
+    named = os.environ.get("PANUPGRADE_PROFILE", "").strip()
+    if named and load(named):
+        return load(named)
     if use_remembered:
         last = load(remembered()) if remembered() else None
         if last:

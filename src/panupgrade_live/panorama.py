@@ -8,7 +8,6 @@ The server's TLS certificate is verified. A lab Panorama with a self-signed cert
 (``--insecure-tls`` or ``PANUPGRADE_INSECURE_TLS=1``), which prints a warning.
 """
 
-import ast
 import re
 import ssl
 import sys
@@ -20,7 +19,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from panupgrade import site
+from panupgrade import credstore, site
 from panupgrade.model import DeviceRef
 from panupgrade.sources import SourceError
 from panupgrade.xmlops import OpSource, READ_ONLY_PREFIXES
@@ -72,29 +71,13 @@ def _tls(verify_tls=None):
 
 
 def load_accounts(path):
-    """The credentials file: a Python-style dict. An account is either 'name': 'password' or 'name': {'api_key': 'KEY'}.
-    Only the names are ever shown."""
-    if not Path(path).is_file():
-        raise SourceError(f"there is no credentials file at {path}. Create one holding {{'account': 'password'}} (or {{'account': {{'api_key': 'KEY'}}}}), keep it in your own "
-                          f"home folder, and point to it with --creds-file or PANUPGRADE_CREDS") from None
-    try:
-        data = ast.literal_eval(Path(path).read_text(encoding="utf-8").strip())
-    except (OSError, ValueError, SyntaxError) as exc:
-        raise SourceError(f"cannot read credentials file {path}: {type(exc).__name__}") from None
-    if not isinstance(data, dict) or not all(isinstance(k, str) and _is_secret(v) for k, v in data.items()):
-        raise SourceError(f"{path} must hold a dict of account name to password, or to {{'api_key': 'KEY'}}")
-    return data
-
-
-def _is_secret(value):
-    """A password (text), or an API key kept ready-made as {'api_key': 'KEY'}."""
-    return isinstance(value, str) or (isinstance(value, dict) and set(value) == {"api_key"} and isinstance(value["api_key"], str)
-                                      and bool(value["api_key"].strip()))
+    """The accounts in the credentials file (see ``panupgrade.credstore``). Only the names are ever shown."""
+    return credstore.read(path)
 
 
 def stored_kind(creds_file, account):
     """'API key' or 'password': how this account signs in. Never the secret itself."""
-    return "API key" if isinstance(load_accounts(creds_file).get(account), dict) else "password"
+    return credstore.kind(load_accounts(creds_file).get(account))
 
 
 def key_from_login(address, user, password, verify_tls=None, timeout=60):
@@ -118,7 +101,7 @@ def key_from_account(address, creds_file, account, verify_tls=None, timeout=60):
     """The API key for a named account in the credentials file: the stored one, or one obtained by logging in with its password."""
     accounts = load_accounts(creds_file)
     if account not in accounts:
-        raise SourceError(f"account {account!r} is not in {creds_file} (it has: {', '.join(sorted(accounts))})")
+        raise credstore.NeedsSignIn(f"account {account!r} is not in {creds_file} (it has: {', '.join(sorted(accounts)) or 'no accounts'})")
     secret = accounts[account]
     return secret["api_key"].strip() if isinstance(secret, dict) else key_from_login(address, account, secret, verify_tls, timeout)
 

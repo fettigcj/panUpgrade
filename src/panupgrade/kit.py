@@ -20,7 +20,8 @@ import os
 import shlex
 from pathlib import Path
 
-from .site import DEFAULT_CREDS, verify_tls
+from . import site
+from .site import verify_tls
 
 
 def _quote(value, windows):
@@ -43,7 +44,7 @@ def upgrade_argv(args, serials_file, approval_file, journal_file):
     login = getattr(args, "_login", None) or {"reading": args.account, "changes": args.work_account, "ask": getattr(args, "ask_credentials", None)}
     if login["ask"] != "all":
         if not args.creds_file:                  # the script must not depend on the environment variables it is later run under
-            argv += ["--creds-file", str(Path(DEFAULT_CREDS).resolve())]
+            argv += ["--creds-file", str(Path(site.creds_path()[0]).resolve())]
         if login["reading"]:
             argv += ["--account", login["reading"]]
     if login["ask"]:

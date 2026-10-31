@@ -11,7 +11,15 @@ pip install -e <path to your panUpgrade checkout>
 cd <your working folder>
 ```
 
-**Signing in.** You choose how; panUpgrade assumes nothing about your accounts.
+**Signing in.** You choose how; panUpgrade assumes nothing about your accounts. The easy way is a screen:
+
+```powershell
+panupgrade auth
+```
+
+It lists the accounts in your credentials file (names and whether each holds a password or an API key, never the secrets), lets you **add** one (type the name and a hidden password or API key, or type the password once and keep only the API key it gets back), **remove** one, choose which account **reads** and which makes **changes**, and **test** a sign-in against your Panorama (give the address in the first field, or start it with `--panorama ADDRESS`). Your choice of account is kept in `~/.panupgrade/auth.json` (names only, no secrets), or, on Windows, in user-level environment variables if you prefer; the screen warns when a variable already set in your terminal would override it. Any command run at a terminal that finds no credentials file, or no account to use, opens this screen by itself and carries on when you save. Without a terminal, `panupgrade auth` prints a summary and the command fails with an error that says what is missing.
+
+The pieces it manages, if you would rather do it by hand:
 
 - **A credentials file** holds a dict of account name to either a password, or a ready-made API key written `{'api_key': 'KEY'}`, for example `{'person': 'their-password', 'service': {'api_key': 'KEY'}}`. A password account is logged in with each run; an API key account is used as it is. Point to it with `--creds-file` or `PANUPGRADE_CREDS`. If it holds one account, that account is used. If it holds several, name one with `--account` (or `PANUPGRADE_ACCOUNT`).
 - **A separate account for changes:** `--work-account NAME` (or `PANUPGRADE_WORK_ACCOUNT`). Without it, the same account is used for everything.

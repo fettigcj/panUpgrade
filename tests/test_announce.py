@@ -45,7 +45,7 @@ class SignIn(unittest.TestCase):
         a = args(creds_file=self.creds("{'tool': 'x'}"))
         text = said(cli._announce_connection, a)
         self.assertIn("Reading as: tool (the only account in that file)", text)
-        self.assertEqual(cli._login(a), {"reading": "tool", "changes": "tool", "ask": None, "how": "the only account in that file"})
+        self.assertEqual(cli._login(a), {"reading": "tool", "changes": "tool", "ask": None, "how": "the only account in that file", "changes_how": ""})
 
     def test_read_only_verbs_have_no_work_account_option_and_still_sign_in(self):
         a = args(creds_file=self.creds("{'tool': 'x'}"))
@@ -84,7 +84,7 @@ class SignIn(unittest.TestCase):
 
     def test_the_path_is_shown_under_the_home_folder_and_no_password_is_ever_printed(self):
         path = str(Path.home() / ".panupgrade" / "c.txt")
-        with mock.patch("panupgrade_live.panorama.load_accounts", return_value={"tool": "hunter2"}):
+        with mock.patch("panupgrade.credstore.read", return_value={"tool": "hunter2"}):
             text = said(cli._announce_connection, args(creds_file=path))
         self.assertIn(os.path.join("~", ".panupgrade", "c.txt"), text)
         self.assertNotIn("hunter2", text)

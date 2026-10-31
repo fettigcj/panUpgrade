@@ -15,7 +15,8 @@ from pathlib import Path
 
 from . import (approval as approval_mod, fleetreport, console, executor, paths, prepare as prepare_mod, releases as releases_mod, report,
                settings as settings_mod, xlsxout)
-from .site import DEFAULT_ACCOUNT, DEFAULT_CREDS, DEFAULT_WORK_ACCOUNT
+from . import credstore, site
+from .credstore import NeedsSignIn
 from .journal import Journal, JournalError
 from .planner import PlanError, Selection, build_plan
 from .simulator import SimBackend
@@ -39,12 +40,21 @@ def _tilde(path):
         return str(full)
 
 
-def _env_origin(value, *env_names):
-    """Where a value came from: the environment variable that holds it, or a flag."""
-    for name in env_names:
-        if os.environ.get(name) and os.environ[name] == value:
-            return f"from {name}"
-    return "set with a flag"
+def _where_from(origin, flag=None):
+    """Words for where a sign-in value came from: a flag, an environment variable, the sign-in settings file, or the default."""
+    if flag:
+        return f"set with {flag}"
+    if origin == site.CONFIG_NAME:
+        return f"from your sign-in settings, {_tilde(site.config_path())}"
+    return "default location" if origin == "default" else f"from {origin}"
+
+
+def _creds(args):
+    """(credentials file path, where that choice came from)."""
+    if args.creds_file:
+        return args.creds_file, _where_from(None, "--creds-file")
+    path, origin = site.creds_path()
+    return path, _where_from(origin)
 
 
 _KEYS = {}
@@ -55,27 +65,52 @@ def _login(args):
 
     reading / changes are account names from the credentials file, or None where a login is typed at the prompt.
     With no account named: a credentials file holding exactly one account means that one; changes use the reading account.
+    When something the person can fix is missing (no file, no account), a terminal gets the sign-in screen instead of an error.
     """
     if getattr(args, "_login", None):
         return args._login
+    try:
+        return _settle_login(args)
+    except NeedsSignIn as exc:
+        if _offer_sign_in_screen(args, exc):
+            return _settle_login(args)
+        raise
+
+
+def _settle_login(args):
     ask = getattr(args, "ask_credentials", None)
     reading = changes = how = None
     if ask != "all":
-        reading = args.account
-        if reading:
-            how = _env_origin(reading, "PANUPGRADE_ACCOUNT")
+        if args.account:
+            reading, how = args.account, _where_from(None, "--account")
+        elif site.account()[0]:
+            reading, how = site.account()[0], _where_from(site.account()[1])
         else:
-            from panupgrade_live.panorama import load_accounts
-            path = args.creds_file or DEFAULT_CREDS
-            names = sorted(load_accounts(path))
+            path, _origin = _creds(args)
+            names = sorted(credstore.read(path))
             if len(names) != 1:
-                raise SourceError(f"{path} holds {len(names)} accounts ({', '.join(names)}). Say which one to use with --account NAME "
-                                  f"(or PANUPGRADE_ACCOUNT), or use --ask-credentials to type a login instead")
+                if not names:
+                    raise NeedsSignIn(f"{path} holds no accounts yet")
+                raise NeedsSignIn(f"{path} holds {len(names)} accounts ({', '.join(names)}) and none is chosen. Choose one with `panupgrade auth`, "
+                                  f"say which with --account NAME (or PANUPGRADE_ACCOUNT), or use --ask-credentials to type a login instead")
             reading, how = names[0], "the only account in that file"
     if ask not in ("changes", "all"):
-        changes = getattr(args, "work_account", None) or reading
-    args._login = {"reading": reading, "changes": changes, "ask": ask, "how": how}
+        changes = getattr(args, "work_account", None) or site.work_account()[0] or reading
+    args._login = {"reading": reading, "changes": changes, "ask": ask, "how": how,
+                   "changes_how": (_where_from(None, "--work-account") if getattr(args, "work_account", None)
+                                   else _where_from(site.work_account()[1]) if site.work_account()[0] else "")}
     return args._login
+
+
+def _offer_sign_in_screen(args, problem):
+    """On a terminal, say what is missing and open the sign-in screen so it can be fixed on the spot. True when something was saved."""
+    if ("sign-in screen",) in _SAID or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    _SAID.add(("sign-in screen",))
+    style = _style(args)
+    print(style.line("warn", f"Cannot sign in yet: {problem}."))
+    print(style.line("info", "Opening the sign-in screen so you can fix that here. Quit it to stop."))
+    return _run_auth_screen(args)
 
 
 def _typed(args, address):
@@ -101,7 +136,13 @@ def _key_for(args, address, role):
         raise SourceError("changes need an account: name one with --work-account (or --account), or use --ask-credentials changes")
     if (address, account) not in _KEYS:
         from panupgrade_live.panorama import key_from_account
-        _KEYS[(address, account)] = (account, key_from_account(address, args.creds_file or DEFAULT_CREDS, account))
+        try:
+            key = key_from_account(address, _creds(args)[0], account)
+        except NeedsSignIn as exc:
+            if not _offer_sign_in_screen(args, exc):
+                raise
+            key = key_from_account(address, _creds(args)[0], account)
+        _KEYS[(address, account)] = (account, key)
     return _KEYS[(address, account)][1]
 
 
@@ -109,7 +150,7 @@ def _with_key(args, account):
     """', signs in with its stored API key' for an account kept as an API key in the credentials file; nothing for a password."""
     from panupgrade_live.panorama import stored_kind
     try:
-        return ", signs in with its stored API key" if stored_kind(args.creds_file or DEFAULT_CREDS, account) == "API key" else ""
+        return ", signs in with its stored API key" if stored_kind(_creds(args)[0], account) == "API key" else ""
     except SourceError:
         return ""
 
@@ -128,7 +169,7 @@ def _announce_connection(args, writing=False):
         elif login["changes"] == login["reading"]:
             text = f"Changes will be made as: {login['changes']} (the same account)"
         else:
-            text = f"Changes will be made as: {login['changes']} ({_env_origin(login['changes'], 'PANUPGRADE_WORK_ACCOUNT')}{_with_key(args, login['changes'])})"
+            text = f"Changes will be made as: {login['changes']} ({login['changes_how']}{_with_key(args, login['changes'])})"
         print(style.line("warn", text))
         return
     key = ("connection", args.source)
@@ -145,8 +186,7 @@ def _announce_connection(args, writing=False):
     if login["ask"] == "all":
         print(style.line("info", "You will be asked for a username and password (used for reading and for changes; not stored)"))
         return
-    creds = args.creds_file or DEFAULT_CREDS
-    origin = "set with --creds-file" if args.creds_file else ("from PANUPGRADE_CREDS" if os.environ.get("PANUPGRADE_CREDS") else "default location")
+    creds, origin = _creds(args)
     print(style.line("info", f"Credentials file: {_tilde(creds)} ({origin})"))
     print(style.line("info", f"Reading as: {login['reading']} ({login['how']}{_with_key(args, login['reading'])})"))
 
@@ -882,15 +922,93 @@ def _releases(args):
     return 0
 
 
+class _AuthServices:
+    """What the sign-in screen needs from the network and the disk; kept out of the form so the form can be tested without either."""
+
+    def sign_in(self, address, user, password):
+        from panupgrade_live.panorama import key_from_login
+        return key_from_login(address, user, password)
+
+    def test(self, address, name, secret):
+        from panupgrade_live.panorama import PanoramaApi, key_from_login
+        key = secret["api_key"].strip() if isinstance(secret, dict) else key_from_login(address, name, secret)
+        info = PanoramaApi(address, key).op("show system info")
+        version = (info.findtext("result/system/sw-version") or "").strip()
+        return True, f"{name} signed in to {address}" + (f" (Panorama {version})." if version else ".")
+
+    def save(self, form):
+        from . import authform
+        return authform.save_all(form)
+
+
+def _saved_choices():
+    """(store, reading, changes) as they are kept now: user-level environment variables if any are set there, else the settings file."""
+    from . import authform, userenv
+    if userenv.supported() and any(userenv.get(name) for name in (authform.ENV_NAMES["account"], authform.ENV_NAMES["work_account"])):
+        return "env", userenv.get(authform.ENV_NAMES["account"]) or "", userenv.get(authform.ENV_NAMES["work_account"]) or ""
+    config = site.read_config()
+    return "config", config.get("account") or "", config.get("work_account") or ""
+
+
+def _run_auth_screen(args):
+    """Open the sign-in screen on the credentials file in use. True when something was saved."""
+    from . import authform, tui
+    style = _style(args)
+    path, origin = _creds(args)
+    exists = Path(path).is_file()
+    try:
+        accounts = credstore.read(path) if exists else {}
+    except SourceError as exc:
+        print(style.line("fail", f"{exc}. Fix or remove that file by hand; the sign-in screen will not overwrite what it cannot read."))
+        return False
+    store, reading, changes = _saved_choices()
+    overrides = [name for key, name in authform.ENV_NAMES.items() if key != "creds_file" and os.environ.get(name)
+                 and os.environ[name] != {"account": reading, "work_account": changes}[key]]
+    source = getattr(args, "source", None) or ""
+    address = source[len("panorama:"):] if source.startswith("panorama:") else ""
+    notice = "" if exists else f"There is no credentials file yet. Add an account and Save, and it is created at {authform.site_tilde(path)}."
+    form = authform.Form(accounts, path, origin, reading, changes, store, address, notice, _AuthServices(), overrides)
+    form.creds_exists = exists
+    accepted = tui.show(form, f"panupgrade auth - how this tool signs in to Panorama")
+    return accepted or form.ever_saved
+
+
+def _auth(args):
+    """Set up how the tool signs in: a form on a terminal, a plain summary otherwise. Changes nothing but the sign-in files."""
+    style = _style(args)
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        saved = _run_auth_screen(args)
+        print(style.line("ok" if saved else "info", "Sign-in settings saved." if saved else "Nothing was saved."))
+        return 0 if saved else 1
+    path, origin = _creds(args)
+    print(style.bold("Sign-in settings"))
+    print(f"  credentials file: {_tilde(path)} ({origin})")
+    try:
+        accounts = credstore.read(path)
+    except NeedsSignIn:
+        print("  no credentials file there yet; run `panupgrade auth` at a terminal to create one")
+        return 0
+    except SourceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    for name in sorted(accounts):
+        print(f"  account {name}: {credstore.kind(accounts[name])}")
+    reading, changes = site.account(), site.work_account()
+    print(f"  reading account: {reading[0] or '(the only account in the file)'} ({_where_from(reading[1])})")
+    print(f"  changes account: {changes[0] or '(same as reading)'}" + (f" ({_where_from(changes[1])})" if changes[0] else ""))
+    return 0
+
+
 def _selection_args(p):
     """Connection options and the filters that choose which firewalls a command looks at (all of them by default)."""
     conn = p.add_argument_group("connect to Panorama")
     where = conn.add_mutually_exclusive_group(required=True)
     where.add_argument("--panorama", metavar="ADDRESS", help="the Panorama that manages your firewalls (name or IP address)")
     where.add_argument("--source", help="fake:<fleet.json> to try the tool on an invented fleet, with no firewall involved")
-    conn.add_argument("--creds-file", help=f"credentials file, a dict of account -> password (default {DEFAULT_CREDS}, or set PANUPGRADE_CREDS); never printed")
-    conn.add_argument("--account", default=DEFAULT_ACCOUNT, metavar="NAME",
-                      help="the account in the credentials file to sign in with (or set PANUPGRADE_ACCOUNT). "
+    conn.add_argument("--creds-file", help="credentials file: accounts with a password or API key each (default: ~/.panupgrade/credentials.txt, "
+                                           "or PANUPGRADE_CREDS, or the choice made in `panupgrade auth`); never printed")
+    conn.add_argument("--account", metavar="NAME",
+                      help="the account in the credentials file to sign in with (or PANUPGRADE_ACCOUNT, or the choice made in `panupgrade auth`). "
                            "Optional when the file holds exactly one account")
     conn.add_argument("--ask-credentials", choices=["changes", "all"],
                       help="type a username and password instead of reading them from a file: 'changes' for the steps that change "
@@ -927,6 +1045,7 @@ The usual order (everything but prepare and upgrade only reads):
 
 Helpers:
   select    build a firewall list from filters, to check and edit (on a terminal it opens a fill-in form)
+  auth      set up how the tool signs in to Panorama (accounts, API keys)
   settings  change the settings on a form (prints them when there is no terminal)
   releases  the list of PAN-OS releases used to count minor versions; --update downloads a fresh one
   help      this page; `panupgrade help <command>` shows that command's options
@@ -966,9 +1085,9 @@ def _run_args(p, journal_required=False):
     p.add_argument("--runs-dir", default="runs", help="where run journals are kept (default runs)")
     p.add_argument("--resume", action="store_true", help="continue the unfinished earlier run of this exact plan (or the file named by --journal)")
     p.add_argument("--fresh", action="store_true", help="start a new run even if an unfinished earlier run of this plan exists")
-    p.add_argument("--work-account", default=DEFAULT_WORK_ACCOUNT, metavar="NAME",
-                   help="a different account in the credentials file for the steps that change firewalls (or set PANUPGRADE_WORK_ACCOUNT). "
-                        "Default: the same account as --account")
+    p.add_argument("--work-account", metavar="NAME",
+                   help="a different account in the credentials file for the steps that change firewalls (or PANUPGRADE_WORK_ACCOUNT, or the choice "
+                        "made in `panupgrade auth`). Default: the same account as --account")
     p.add_argument("--dry-run", action="store_true",
                    help="with a live source: read it once and rehearse against a model of it. WITHOUT this flag a live source "
                         "means a REAL run: it changes the firewalls")
@@ -1024,6 +1143,14 @@ def main(argv=None):
     prep.add_argument("--releases", help=f"PAN-OS release table JSON (default ./{DEFAULT_RELEASES} if present, else the shipped one)")
     prep.add_argument("--out", help="directory for prepare.plan.json and prepare.approval.template.json")
     prep.set_defaults(func=_prepare)
+
+    au = sub.add_parser("auth", help="set up how the tool signs in to Panorama: accounts, API keys, which account reads and which changes")
+    au.add_argument("--panorama", metavar="ADDRESS", help="the Panorama to test a sign-in against, or to obtain an API key from")
+    au.add_argument("--creds-file", help="the credentials file to edit (default ~/.panupgrade/credentials.txt, or PANUPGRADE_CREDS)")
+    au.add_argument("--insecure-tls", action="store_true", help="do not verify Panorama's TLS certificate (lab use only)")
+    au.add_argument("--color", choices=["auto", "always", "never"], default="auto", help=argparse.SUPPRESS)
+    au.add_argument("--ascii", action="store_true", help=argparse.SUPPRESS)
+    au.set_defaults(func=_auth)
 
     rl = sub.add_parser("releases", help="show the PAN-OS release table used to count minor versions, or download a fresh one")
     rl.add_argument("--update", action="store_true", help=f"download the vendor's list of PAN-OS releases and save it as ./{DEFAULT_RELEASES}")

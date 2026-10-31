@@ -994,8 +994,11 @@ def _auth(args):
     for name in sorted(accounts):
         print(f"  account {name}: {credstore.kind(accounts[name])}")
     reading, changes = site.account(), site.work_account()
-    print(f"  reading account: {reading[0] or '(the only account in the file)'} ({_where_from(reading[1])})")
-    print(f"  changes account: {changes[0] or '(same as reading)'}" + (f" ({_where_from(changes[1])})" if changes[0] else ""))
+    if reading[0]:
+        print(f"  reading account: {reading[0]} ({_where_from(reading[1])})")
+    else:
+        print("  reading account: " + ("the only account in the file" if len(accounts) == 1 else "none chosen yet; run `panupgrade auth` or use --account"))
+    print(f"  changes account: {changes[0] or 'the same as reading'}" + (f" ({_where_from(changes[1])})" if changes[0] else ""))
     return 0
 
 

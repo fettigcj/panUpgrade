@@ -393,6 +393,19 @@ class TheAuthCommand(Home):
         self.assertNotIn(SECRET, text)
         self.assertNotIn("KEY-VALUE", text)
 
+    def test_the_summary_does_not_claim_an_account_is_chosen_when_none_is(self):
+        self.creds("{'a': 'x', 'b': 'y'}")
+        out = io.StringIO()
+        with redirect_stdout(out), mock.patch("sys.stdin.isatty", return_value=False):
+            cli.main(["auth", "--color", "never", "--ascii"])
+        self.assertIn("none chosen yet", out.getvalue())
+        self.assertNotIn("only account", out.getvalue())
+        os.environ["PANUPGRADE_ACCOUNT"] = "a"
+        out = io.StringIO()
+        with redirect_stdout(out), mock.patch("sys.stdin.isatty", return_value=False):
+            cli.main(["auth", "--color", "never", "--ascii"])
+        self.assertIn("reading account: a (from PANUPGRADE_ACCOUNT)", out.getvalue())
+
     def test_without_a_file_it_says_how_to_make_one(self):
         out = io.StringIO()
         with redirect_stdout(out), mock.patch("sys.stdin.isatty", return_value=False):

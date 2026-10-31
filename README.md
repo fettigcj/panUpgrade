@@ -6,6 +6,16 @@ panUpgrade reads your fleet, tells you what would happen to each firewall and wh
 
 > **Status: pre-release (0.1.0.dev0).** It has been exercised against a lab fleet only. Read [docs/running.md](docs/running.md) before pointing it at production, and try everything with `--dry-run` first.
 
+## The one-screen way
+
+At a terminal, just type:
+
+```
+panupgrade
+```
+
+One screen walks through the whole job, in order: **sign in**, **read the fleet**, **choose firewalls**, **plan**, then (from the command line for now) **prepare** and **upgrade**. Each step shows where it stands. Alt-H goes home, Alt-A signs in, Alt-R reads the fleet, Alt-F chooses firewalls, Alt-P plans, Alt-S opens the settings, and Alt-1 to Alt-8 jump to the steps in order. Reading Panorama happens in the background while the screen stays live. Everything the screen does is also available as a command, listed below, for scripts and for anyone who prefers them.
+
 ## How it works
 
 | Step | Command | Changes anything? |

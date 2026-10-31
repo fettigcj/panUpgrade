@@ -104,6 +104,9 @@ def _settle_login(args):
 
 def _offer_sign_in_screen(args, problem):
     """On a terminal, say what is missing and open the sign-in screen so it can be fixed on the spot. True when something was saved."""
+    if getattr(args, "_in_shell", False):
+        args._sign_in_problem = str(problem)                  # the shell has its own sign-in screen and takes the person there
+        return False
     if ("sign-in screen",) in _SAID or not (sys.stdin.isatty() and sys.stdout.isatty()):
         return False
     _SAID.add(("sign-in screen",))
@@ -365,6 +368,23 @@ def _write_list(path, chosen, criteria):
     Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _select_form(args, refs):
+    """The select form for these firewalls, starting from the list saved last time when no firewalls were named."""
+    from . import selectform
+    selection = _selection(args)
+    saved = args.out or DEFAULT_LIST
+    notice = ""
+    if not selection.serials and Path(saved).is_file():           # come back to the list you made last time
+        selection.serials = _read_list(saved)
+        notice = f"Started with the {len(selection.serials)} firewalls already in {saved}."
+
+    def save_list(form):
+        path = form.out.strip()
+        _write_list(path, form.included_refs(), form.describe())
+        return f"Saved {len(form.included)} firewall{'s' if len(form.included) != 1 else ''} to {path}."
+    return selectform.Form(refs, selection, saved, notice, save_list)
+
+
 def _select(args):
     """Build the list of devices from criteria, show it, and save it for the user to check and edit."""
     style = _style(args)
@@ -377,16 +397,7 @@ def _select(args):
     selection = _selection(args)
     if use_form:
         from . import selectform
-        saved = args.out or DEFAULT_LIST
-        notice = ""
-        if not selection.serials and Path(saved).is_file():           # come back to the list you made last time
-            selection.serials = _read_list(saved)
-            notice = f"Started with the {len(selection.serials)} firewalls already in {saved}."
-        def save_list(form):
-            path = form.out.strip()
-            _write_list(path, form.included_refs(), form.describe())
-            return f"Saved {len(form.included)} firewall{'s' if len(form.included) != 1 else ''} to {path}."
-        form = selectform.Form(refs, selection, saved, notice, save_list)
+        form = _select_form(args, refs)
         if not selectform.show(form, f"panupgrade select - {len(refs)} firewalls from {_where(args)}"):
             print("Cancelled; nothing was selected.")
             return 1
@@ -848,6 +859,22 @@ def _wants_settings_form(args):
     return bool(args.interactive) or not args.set
 
 
+def _settings_form(args):
+    """The settings form, on the settings file in use (or the one it would create), with any --set values applied on top."""
+    from . import settingsform
+    target = args.settings or DEFAULT_SETTINGS
+    file = args.settings or (DEFAULT_SETTINGS if Path(DEFAULT_SETTINGS).is_file() else None)
+    on_disk, current = settings_mod.load(file), settings_mod.load(file, args.set)
+    notice = (f"Editing {_tilde(Path(target).resolve())}. Saving rewrites it with only the settings that differ from the defaults; comments are not kept."
+              if Path(target).is_file() else
+              f"No settings file yet: this starts from the built-in defaults and saves to {_tilde(Path(target).resolve())}.")
+
+    def save(form, chosen):
+        settingsform.write_file(target, chosen)
+        return f"Saved {form.changed_count()} changed setting{'s' if form.changed_count() != 1 else ''} to {target}."
+    return settingsform.Form(current, target, save, notice, baseline=on_disk)
+
+
 def _settings(args):
     style = _style(args)
     try:
@@ -864,15 +891,8 @@ def _settings(args):
         for warning in current.loosening_warnings():
             print(f"caution: {warning}", file=sys.stderr)
         return 0
-    from . import settingsform, tui
-    existing = Path(target).is_file()
-    notice = (f"Editing {_tilde(Path(target).resolve())}. Saving rewrites it with only the settings that differ from the defaults; comments are not kept."
-              if existing else f"No settings file yet: this starts from the built-in defaults and saves to {_tilde(Path(target).resolve())}.")
-
-    def save(form, chosen):
-        settingsform.write_file(target, chosen)
-        return f"Saved {form.changed_count()} changed setting{'s' if form.changed_count() != 1 else ''} to {target}."
-    form = settingsform.Form(current, target, save, notice, baseline=on_disk)
+    from . import tui
+    form = _settings_form(args)
     if not tui.show(form, f"panupgrade settings - {_tilde(Path(target).resolve())}"):
         print("Cancelled; nothing was saved." if form.dirty() else "Closed; nothing changed.")
         return 1
@@ -950,17 +970,15 @@ def _saved_choices():
     return "config", config.get("account") or "", config.get("work_account") or ""
 
 
-def _run_auth_screen(args):
-    """Open the sign-in screen on the credentials file in use. True when something was saved."""
-    from . import authform, tui
-    style = _style(args)
+def _auth_form(args):
+    """(form, None) for the credentials file in use, or (None, why) when that file exists but cannot be understood."""
+    from . import authform
     path, origin = _creds(args)
     exists = Path(path).is_file()
     try:
         accounts = credstore.read(path) if exists else {}
     except SourceError as exc:
-        print(style.line("fail", f"{exc}. Fix or remove that file by hand; the sign-in screen will not overwrite what it cannot read."))
-        return False
+        return None, f"{exc}. Fix or remove that file by hand; the sign-in screen will not overwrite what it cannot read."
     store, reading, changes = _saved_choices()
     overrides = [name for key, name in authform.ENV_NAMES.items() if key != "creds_file" and os.environ.get(name)
                  and os.environ[name] != {"account": reading, "work_account": changes}[key]]
@@ -969,7 +987,17 @@ def _run_auth_screen(args):
     notice = "" if exists else f"There is no credentials file yet. Add an account and Save, and it is created at {authform.site_tilde(path)}."
     form = authform.Form(accounts, path, origin, reading, changes, store, address, notice, _AuthServices(), overrides)
     form.creds_exists = exists
-    accepted = tui.show(form, f"panupgrade auth - how this tool signs in to Panorama")
+    return form, None
+
+
+def _run_auth_screen(args):
+    """Open the sign-in screen on the credentials file in use. True when something was saved."""
+    from . import tui
+    form, problem = _auth_form(args)
+    if form is None:
+        print(_style(args).line("fail", problem))
+        return False
+    accepted = tui.show(form, "panupgrade auth - how this tool signs in to Panorama")
     return accepted or form.ever_saved
 
 
@@ -999,6 +1027,21 @@ def _auth(args):
     else:
         print("  reading account: " + ("the only account in the file" if len(accounts) == 1 else "none chosen yet; run `panupgrade auth` or use --account"))
     print(f"  changes account: {changes[0] or 'the same as reading'}" + (f" ({_where_from(changes[1])})" if changes[0] else ""))
+    return 0
+
+
+def _shell(args):
+    """The whole workflow on one screen (see ``shell``). Needs a terminal."""
+    from . import shell, tui
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print("error: the shell needs a terminal; use the commands (see `panupgrade help`) in a script", file=sys.stderr)
+        return 2
+    remembered = site.read_state()
+    session = shell.Session(args, getattr(args, "panorama", None) or remembered.get("panorama", ""),
+                            getattr(args, "target", None) or remembered.get("target", ""))
+    tui.show(shell.Shell(session), "panupgrade")
+    site.write_state(panorama=session.address.strip(), target=session.target.strip())
+    print(_style(args).line("info", "Closed the panupgrade screen. Nothing was changed on any firewall."))
     return 0
 
 
@@ -1097,7 +1140,7 @@ def _run_args(p, journal_required=False):
     p.add_argument("--sim-fail", action="append", help="inject a failure: serial:operation (e.g. SIMA0001:install)")
 
 
-def main(argv=None):
+def build_parser():
     parser = argparse.ArgumentParser(prog="panupgrade", description="Upgrade Palo Alto firewalls through Panorama, safely. Run `panupgrade help` for the order to use the commands in.", epilog="Run `panupgrade help` for an overview.")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -1147,6 +1190,13 @@ def main(argv=None):
     prep.add_argument("--out", help="directory for prepare.plan.json and prepare.approval.template.json")
     prep.set_defaults(func=_prepare)
 
+    sh = sub.add_parser("shell", help="the whole workflow on one screen (this is also what plain `panupgrade` opens at a terminal)")
+    sh.add_argument("--panorama", metavar="ADDRESS", help="the Panorama to work with (remembered from last time when left out)")
+    sh.add_argument("--target", help="the PAN-OS version to upgrade to (remembered from last time when left out)")
+    sh.add_argument("--creds-file", help="the credentials file to use (default ~/.panupgrade/credentials.txt, or PANUPGRADE_CREDS)")
+    sh.add_argument("--insecure-tls", action="store_true", help="do not verify Panorama's TLS certificate (lab use only)")
+    sh.set_defaults(func=_shell)
+
     au = sub.add_parser("auth", help="set up how the tool signs in to Panorama: accounts, API keys, which account reads and which changes")
     au.add_argument("--panorama", metavar="ADDRESS", help="the Panorama to test a sign-in against, or to obtain an API key from")
     au.add_argument("--creds-file", help="the credentials file to edit (default ~/.panupgrade/credentials.txt, or PANUPGRADE_CREDS)")
@@ -1171,6 +1221,12 @@ def main(argv=None):
     st.add_argument("--ascii", action="store_true", help=argparse.SUPPRESS)
     st.set_defaults(func=_settings)
 
+    return parser
+
+
+def parse_args(argv):
+    """argv parsed as the command line would be, with --panorama folded into the source and --insecure-tls applied."""
+    parser = build_parser()
     args = parser.parse_args(argv)
     if getattr(args, "source", None) and not args.source.startswith("fake:"):
         parser.error("--source takes fake:<fleet.json>; use --panorama ADDRESS for a real Panorama")
@@ -1178,6 +1234,16 @@ def main(argv=None):
         args.source = "panorama:" + args.panorama
     if getattr(args, "insecure_tls", False):
         os.environ["PANUPGRADE_INSECURE_TLS"] = "1"
+    return args
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if not argv:                                              # just `panupgrade`: the whole workflow on one screen, or the overview when there is no terminal
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            return _shell(parse_args(["shell"]))
+        return _help(argparse.Namespace(topic=None))
+    args = parse_args(argv)
     return args.func(args)
 
 

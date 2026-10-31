@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- `panupgrade` with no arguments (or `panupgrade shell`) opens one screen for the whole workflow: Panorama address and target version, then sign in, fleet report, choose firewalls, plan, prepare, upgrade, settings and the release table, each with its status and reachable with Alt-letters or Alt-1..8 from anywhere. Report and plan run in the background; a step that cannot sign in takes you to the sign-in screen and back. Prepare and upgrade show the command to run for now.
+- Terminal layer: screens can poll background work, Alt hotkeys work on Windows and Unix terminals, and Ctrl-C now reaches every screen on Windows (before, it was ignored until another key was pressed).
+- `cli` now has `build_parser`/`parse_args`; the select, settings and sign-in forms are built by functions the shell shares.
 - New `panupgrade auth` screen: add, remove and test accounts in the credentials file (password, ready-made API key, or sign in once and keep only the key), choose which account reads and which makes changes, and keep that choice in `~/.panupgrade/auth.json` or in Windows user-level environment variables. A command that finds no credentials file or no usable account opens it on a terminal instead of stopping with an error. Environment variables still win over the settings file, and flags over both. The sign-in defaults are now read when needed instead of when the program starts.
 - Removed `restore_roles = "pause"`. It stopped the whole run from starting any further firewall after the first pair and offered no way to make a decision, only to re-run with `--resume`. `restore_roles` is now `leave` or `restore`.
 - Settings form: the explanation lists every choice a setting has, with what each means and the current one marked, so you do not have to change a value to read the others. PgUp / PgDn scroll the explanation when the window is too short to show it all, and the buttons always stay visible.

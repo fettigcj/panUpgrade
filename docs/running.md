@@ -1,5 +1,21 @@
 # Running panUpgrade
 
+## The one-screen way
+
+`panupgrade` with no arguments, typed at a terminal, opens a single screen for the whole workflow. The top has two boxes, the **Panorama address** and the **target PAN-OS version** (both remembered for next time in `~/.panupgrade/state.json`, which holds no secrets). Below them are the steps, each with a line saying where it stands:
+
+1. **Sign in**: the `auth` screen. If a step finds it cannot sign in, the screen takes you here and brings you back to the step when you save.
+2. **Fleet report**: what `panupgrade report` prints, read in the background. R refreshes it; Up, Down, PgUp and PgDn scroll.
+3. **Choose firewalls**: the `select` form, saving `upgradeList.txt`.
+4. **Plan the upgrade**: what `panupgrade plan --target ...` prints. Read-only.
+5. **Prepare** and 6. **Upgrade**: still run from the command line, where you type APPROVE; the screen shows the exact command with your address and target filled in.
+7. **Settings**: the `settings` form.
+8. **PAN-OS releases**: the table used to count minor versions.
+
+Alt-H (home), Alt-A (sign in), Alt-R (report), Alt-F (firewalls), Alt-P (plan), Alt-S (settings) and Alt-1 to Alt-8 (the steps in order) work from every screen. A screen with unsaved changes asks you to press the key a second time before it lets them go. Ctrl-C leaves from anywhere. On Linux and macOS terminals, Alt arrives as Esc plus the letter (on macOS Terminal, turn on "Use Option as Meta key").
+
+`panupgrade shell --panorama ADDRESS --target VERSION` starts it with those filled in. The commands below do the same things one at a time and are what scripts should use.
+
 The whole workflow on one page. Commands are PowerShell; on Linux or macOS use the same arguments in your shell.
 
 ## Before you start

@@ -66,6 +66,25 @@ def work_account():
     return _pick("PANUPGRADE_WORK_ACCOUNT", "work_account")
 
 
+def read_state():
+    """What the shell remembered last time (the Panorama address and target version): plain words, nothing secret."""
+    try:
+        data = json.loads((home_dir() / "state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_state(**values):
+    """Remember values for next time. Failing to is not worth interrupting anyone for."""
+    state = {**read_state(), **{k: v for k, v in values.items() if isinstance(v, str)}}
+    try:
+        home_dir().mkdir(parents=True, exist_ok=True)
+        (home_dir() / "state.json").write_text(json.dumps(state, indent=1) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
 def verify_tls():
     """Certificates are verified unless the operator opts out (a lab Panorama with a self-signed certificate)."""
     return os.environ.get("PANUPGRADE_INSECURE_TLS", "").lower() not in ("1", "true", "yes")

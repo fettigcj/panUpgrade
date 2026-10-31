@@ -304,8 +304,6 @@ def _steps(dev, settings, devices=None):
             f"{int(settings.post_upgrade_band * 100)}% of the baseline")
     if role != "standalone" and settings.restore_roles == "restore" and role == "active":
         add("restore roles", "failover", "fail back so the original active member is active again")
-    if role != "standalone" and settings.restore_roles == "pause" and role == "active":
-        add("pause", note="wait for the user to decide on role placement")
     rollback = ("not automatic. The saved config and the previous image remain; a rollback is planned and approved "
                 "separately. Exact commands to be verified from vendor documentation before implementation.")
     return steps, rollback

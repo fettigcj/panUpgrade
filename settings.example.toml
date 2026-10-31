@@ -5,7 +5,7 @@
 # ---- HA behaviour --------------------------------------------------------------------------------------------
 failover_band      = 0.30      # after failing the active member over, the new active node's sessions must be within +/-30% of before
 post_upgrade_band  = 0.50      # after the upgrade, the active node's sessions must be within +/-50% of the pair's baseline
-restore_roles      = "leave"   # once both members are done: leave | restore (fail back to the original active) | pause (stop and ask)
+restore_roles      = "leave"   # once both members are done: leave | restore (fail back to the original active)
 sync_to_peer       = "Both"    # force the passive member to match the active one: Disable (never) | Both (in `prepare` AND again during the upgrade) | UpgradeOnly (only during the upgrade)
 sync_timeout_s     = 600
 ha_config_unsynced = "block"   # only used when sync_to_peer = Disable. A pair whose passive config is not synchronized: block (refuse to plan it; default) | caution (flag the failover moment on the active member, accepted when you prepare the batch)

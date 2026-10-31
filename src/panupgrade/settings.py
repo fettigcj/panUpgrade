@@ -55,7 +55,7 @@ class Settings:
     allow_cross_feature_downgrade: bool = False
     # What to do about a pending (uncommitted) candidate config: block | warn | ignore
     pending_changes: str = "block"
-    # HA roles after both members are upgraded: leave | restore | pause
+    # HA roles after both members are upgraded: leave | restore
     restore_roles: str = "leave"
     # Who fetches images: firewall (default, downloads from the vendor) | panorama
     image_source: str = "firewall"
@@ -90,7 +90,7 @@ class Settings:
 
 _CHOICES = {
     "pending_changes": ("block", "warn", "ignore"),
-    "restore_roles": ("leave", "restore", "pause"),
+    "restore_roles": ("leave", "restore"),
     "image_source": ("firewall", "panorama"),
     "panorama_compare": ("minor", "major"),
     "sync_to_peer": ("Disable", "Both", "UpgradeOnly"),

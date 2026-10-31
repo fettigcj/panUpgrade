@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Removed `restore_roles = "pause"`. It stopped the whole run from starting any further firewall after the first pair and offered no way to make a decision, only to re-run with `--resume`. `restore_roles` is now `leave` or `restore`.
 - Settings form: the explanation lists every choice a setting has, with what each means and the current one marked, so you do not have to change a value to read the others. PgUp / PgDn scroll the explanation when the window is too short to show it all, and the buttons always stay visible.
 - Settings form: the explanation of the setting under the cursor now sits to the right of the list when the window is wide enough (below it otherwise); Up and Down wrap round the whole ring of settings and buttons in both directions; the `ha_config_unsynced` description is rewritten and broken into paragraphs.
 - `sync_to_peer` is now `Disable`, `Both` (default) or `UpgradeOnly`. Both forces the passive member to match the active one in `prepare` and again during the upgrade, so an unsynced pair now needs acknowledgement (`force_config_sync`) in a plan instead of being refused; refusal applies only with `Disable`. Choices are matched without regard to case.

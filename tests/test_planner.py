@@ -38,7 +38,7 @@ class HappyPaths(unittest.TestCase):
 
     def test_restore_roles_option_adds_step(self):
         self.assertIn("restore roles", actions(dev(plan(fleet(pair("A1", "A2")), restore_roles="restore"), "A1")))
-        self.assertIn("pause", actions(dev(plan(fleet(pair("A1", "A2")), restore_roles="pause"), "A1")))
+        self.assertNotIn("restore roles", actions(dev(plan(fleet(pair("A1", "A2"))), "A1")))     # the default leaves the roles alone
         self.assertNotIn("restore roles", actions(dev(plan(fleet(pair("A1", "A2"))), "A1")))
 
     def test_cross_feature_path_becomes_download_and_install_steps(self):

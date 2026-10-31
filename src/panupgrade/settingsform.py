@@ -38,8 +38,7 @@ INFO = {
     "post_upgrade_band": ("After the upgrade, the active member's session count must be within this fraction of the pair's baseline.", {}),
     "restore_roles": ("What to do with the HA roles once both members are upgraded.",
                       {"leave": "leave the roles as the upgrade left them",
-                       "restore": "fail back, so the member that was active at the start is active again",
-                       "pause": "stop and ask before touching the roles"}),
+                       "restore": "fail back, so the member that was active at the start is active again"}),
     "sync_to_peer": ("Whether the tool forces the passive member of an HA pair to match the active member's configuration. The sync "
                      "overwrites whatever the passive is running, so the passive's own configuration is backed up and verified first.",
                      {"Disable": "never force a sync. A pair whose passive is out of sync is only reported (and, depending on "

@@ -203,7 +203,6 @@ class Editing(unittest.TestCase):
         self.assertTrue(lines[at + 2].startswith("> leave: leave the roles as the upgrade left them"))
         flat = " ".join(" ".join(lines).split())
         self.assertIn("restore: fail back, so the member that was active at the start is active again", flat)
-        self.assertIn("pause: stop and ask before touching the roles", flat)
         keys(form, "right")                                                               # moving the choice moves the marker, loses nothing
         flat = " ".join(" ".join(line.strip() for line in explanation(form, 150, 40).split("\n")).split())
         self.assertIn("> restore: fail back", flat)

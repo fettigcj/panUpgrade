@@ -31,7 +31,6 @@ GLYPHS = {
     "sync": ("\U0001F504", "[SYNC]", "35"),       # configuration forced from the active member to the passive one
     "down": ("⏬", "[DOWN]", "1;35"),         # a downgrade
     "held": ("\U0001F512", "[HELD]", "33"),       # not started because its partner or an earlier device failed
-    "pause": ("⏸️", "[PAUS]", "34"),    # waiting for the user's decision
 }
 
 VERDICT_GLYPH = {"ready": "ok", "caution": "warn", "blocked": "fail", "skipped": "skip"}
@@ -181,7 +180,7 @@ class EventPrinter:
 
 
 def render_outcomes(result, names, style):
-    mapping = {"done": "ok", "failed": "fail", "held": "held", "needs_attention": "stop", "paused": "pause", "stopped": "stop",
+    mapping = {"done": "ok", "failed": "fail", "held": "held", "needs_attention": "stop", "stopped": "stop",
                "not_started": "skip", "not_approved": "skip"}
     lines = ["", style.bold("Result")]
     for serial, (state, detail) in result["outcome"].items():

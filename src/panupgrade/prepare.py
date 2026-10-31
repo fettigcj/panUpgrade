@@ -395,4 +395,4 @@ def run(plan, approval, backend, journal, settings=None):
     pool.shutdown()
 
     outcome = {serial: _fold(p) for serial, p in parts.items()}
-    return {"outcome": outcome, "failures": len(failed), "stopped": len(failed) >= max_failures, "paused": False}
+    return {"outcome": outcome, "failures": len(failed), "stopped": len(failed) >= max_failures}

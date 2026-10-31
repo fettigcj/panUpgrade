@@ -65,14 +65,14 @@ def run(plan, approval, backend, journal, settings, stop=None):
     devices = {d["serial"]: d for d in plan["devices"]}
     stop = stop or threading.Event()
     lock = threading.Lock()
-    state = {"failures": sum(1 for s in devices if _failed_in_journal(journal, s)), "paused": False}
+    state = {"failures": sum(1 for s in devices if _failed_in_journal(journal, s))}
 
     def do_unit(unit):
         blocker, local = None, {}
         for serial in unit:
             started = bool(journal.steps_of(serial))
             with lock:
-                over, paused = state["failures"] >= settings.max_failures, state["paused"]
+                over = state["failures"] >= settings.max_failures
                 failures = state["failures"]
             if serial not in approval.serials:
                 local[serial] = ("not_approved", "not named in the approval")
@@ -82,8 +82,6 @@ def run(plan, approval, backend, journal, settings, stop=None):
                 local[serial] = ("not_started", "stopped by you before it started")
             elif over and not started:
                 local[serial] = ("not_started", f"stopped after {failures} failed device(s)")
-            elif paused and not started:
-                local[serial] = ("not_started", "paused by a pause step")
             else:
                 was_failed = _failed_in_journal(journal, serial)
                 result = _run_device(devices[serial], backend, journal, settings, stop)
@@ -91,8 +89,6 @@ def run(plan, approval, backend, journal, settings, stop=None):
                 with lock:
                     if result[0] == "failed" and not was_failed:
                         state["failures"] += 1
-                    if result[0] == "paused":
-                        state["paused"] = True
             if local[serial][0] in ("failed", "needs_attention", "stopped"):
                 blocker = blocker or serial
         return local
@@ -111,8 +107,7 @@ def run(plan, approval, backend, journal, settings, stop=None):
         pool.shutdown(wait=True)
         raise
     pool.shutdown()
-    return {"outcome": outcome, "failures": state["failures"], "stopped": state["failures"] >= settings.max_failures,
-            "paused": state["paused"]}
+    return {"outcome": outcome, "failures": state["failures"], "stopped": state["failures"] >= settings.max_failures}
 
 
 def _failed_in_journal(journal, serial):
@@ -146,8 +141,6 @@ def _run_device(dev, backend, journal, settings, stop=None):
         err = _step(journal, serial, key, lambda: _do(st["action"], index, dev, backend, journal, settings))
         if err:
             return "failed", f"{st['action']}: {err}"
-        if st["action"] == "pause":
-            return "paused", "waiting for the user's decision on role placement"
     return "done", ""
 
 
@@ -268,8 +261,6 @@ def _do(action, index, dev, backend, journal, settings):
         peer = dev["peer_serial"]
         backend.suspend(peer)
         backend.functional(peer)
-    elif action == "pause":
-        return {"paused": True}
     else:
         raise StepFailed(f"unknown step {action!r}")
     return {}

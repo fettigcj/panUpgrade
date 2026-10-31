@@ -119,16 +119,6 @@ class HappyPath(Base):
         self.assertEqual({v[0] for v in result["outcome"].values()}, {"done"})
         self.assertEqual((sim.nodes["A1"].state, sim.nodes["A2"].state), ("active", "passive"))
 
-    def test_pause_stops_the_run_without_counting_a_failure(self):
-        data = fleet_data(pair("A1", "A2"), pair("B1", "B2"))
-        _, _, _, _, result = self.go(data, restore_roles="pause")
-        self.assertTrue(result["paused"])
-        self.assertEqual(result["failures"], 0)
-        self.assertEqual(result["outcome"]["A1"][0], "paused")
-        self.assertEqual(result["outcome"]["B2"][0], "not_started")
-
-
-class FailuresAreLoud(Base):
     def test_install_failure_is_recorded_and_holds_the_partner(self):
         data = fleet_data(pair("A1", "A2"))
         sim = SimBackend(data, fail={("A2", "install"): "disk full during install"})

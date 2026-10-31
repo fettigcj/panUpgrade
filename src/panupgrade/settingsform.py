@@ -99,7 +99,8 @@ LIMITS = {
     "poll_interval_s": "whole seconds, 1 or more", "content_settle_s": "whole seconds, 0 or more",
 }
 HELP = {
-    ROWS: "Up / Down / Tab: move   Left / Right: change a choice   type: edit a number   Ctrl-R or Delete: back to the default",
+    ROWS: "Up / Down / Tab: move   Left / Right: change a choice   type: edit a number   Ctrl-R or Delete: back to the default   "
+          "PgUp / PgDn: scroll the explanation",
     BUTTONS: "Left / Right: choose a button   Enter or Space: press it   Up: back to the settings",
 }
 ALWAYS = "Shortcuts: Ctrl-D = Save & Exit   Esc = Quit without saving (asks first if there are unsaved changes)"
@@ -170,7 +171,7 @@ class Form:
         self.saved = {n: _fmt(getattr(base, n)) for n in self.names}          # what is on disk, as far as the form knows
         self.saver = saver                                                    # saver(form, settings) writes the file, returns a message
         self.zone, self.focus, self.button = ROWS, 0, SAVE_EXIT
-        self.offset, self.page = 0, 10
+        self.offset, self.pane_offset, self.pane_page = 0, 0, 5
         self.message, self.armed = notice, False
 
     # ---- state
@@ -205,6 +206,16 @@ class Form:
     # ---- keys
     def press(self, key):
         """Apply one key. Returns 'accept' or 'cancel' when the form is finished, otherwise None."""
+        before = self._pane_key()
+        result = self._press(key)
+        if self._pane_key() != before and key not in ("pgup", "pgdn"):
+            self.pane_offset = 0                                            # another setting or value: read it from the top
+        return result
+
+    def _pane_key(self):
+        return self.focus, self.text[self.names[self.focus]]
+
+    def _press(self, key):
         was_armed, self.armed, self.message = self.armed, False, ""
         if key == "ctrl-c":
             return "cancel"
@@ -241,9 +252,9 @@ class Form:
         elif key == "up":
             self._step(-1)
         elif key == "pgdn":
-            self.focus = min(self.focus + self.page, len(self.names) - 1)
+            self.pane_offset += self.pane_page                       # the explanation scrolls; render() keeps it in range
         elif key == "pgup":
-            self.focus = max(self.focus - self.page, 0)
+            self.pane_offset = max(self.pane_offset - self.pane_page, 0)
         elif key == "home":
             self.focus = 0
         elif key == "end":
@@ -305,10 +316,13 @@ class Form:
         bad = general or (f"{next(iter(problems))}: {next(iter(problems.values()))}" if problems else "")
         name = self.names[self.focus]
         lines = [[("bold", f" {title}".rstrip() or " panupgrade settings")]]
-        lines += self._wrapped("dim", HELP[self.zone], width, " ") + self._wrapped("dim", ALWAYS, width, " ")
+        lines += self._wrapped("dim", HELP[self.zone], width, " ")
+        if height >= 20:                                                    # a very short window keeps its lines for the settings
+            lines += self._wrapped("dim", ALWAYS, width, " ")
         status = self.message or ("!" + bad if bad else "")
         lines += self._wrapped("error" if status.startswith("!") else "dim", status.lstrip("!"), width, " ")
-        lines.append([])
+        if height >= 20:
+            lines.append([])
         lines.append([("bold", f"    {'setting'.ljust(NAME_WIDTH)}  {'value'.ljust(VALUE_WIDTH)}  default")])
 
         body, focus_line = [], 0
@@ -320,15 +334,15 @@ class Form:
                 body.append(self._row(n, n == name and self.zone == ROWS, n in problems))
 
         side = self.side_by_side(width)
+        avail = max(height - len(lines) - 3, 2)                             # rows for the list and, when stacked, the explanation
         if side:
-            detail = self._detail(name, current, width - LEFT_WIDTH - 4, 10 ** 6)
-            room = max(height - len(lines) - 3, 5)                          # rows beside the explanation; the header row is one more
-            if len(detail) > room + 1:
-                detail = detail[:room] + [[("dim", "(a taller window shows the rest)")]]
+            room = avail                                                    # rows beside the explanation; the header row is one more
+            detail = self._scrolled(self._detail(name, current, width - LEFT_WIDTH - 4), room + 1)
         else:
-            detail = self._detail(name, current, width, max((height - len(lines)) // 2, 6))
-            room = max(height - len(lines) - len(detail) - 3, 5)
-        self.page = max(room - 2, 1)
+            keep = 6 if avail >= 14 else max(avail // 3, 1)                 # rows the list keeps at the least
+            detail = self._scrolled(self._detail(name, current, width), max(avail - keep, 2))
+            room = max(avail - len(detail), 1)
+        self.pane_page = max(len(detail) - 2, 1)
         if focus_line < self.offset + 1:
             self.offset = max(focus_line - 1, 0)
         if focus_line >= self.offset + room:
@@ -395,9 +409,20 @@ class Form:
             out += [[(style, line)] for line in wrapped]
         return out
 
-    def _detail(self, name, current, width, limit):
-        """What the setting under the cursor is, what its value means, and a caution for every risky setting in force. All of it
-        wraps; only the cautions are shortened (to a count) when the window is too small to show everything."""
+    def _scrolled(self, full, size):
+        """The part of ``full`` that fits in ``size`` lines, starting where the person has scrolled to. When it does not all fit the
+        last line says so and names the keys, so nobody is left unable to read the rest."""
+        if len(full) <= size:
+            self.pane_offset = 0
+            return full
+        window = size - 1
+        self.pane_offset = max(0, min(self.pane_offset, len(full) - window))
+        end = self.pane_offset + window
+        return full[self.pane_offset:end] + [[("bold", f"   (PgUp / PgDn scroll this: lines {self.pane_offset + 1}-{end} of {len(full)})")]]
+
+    def _detail(self, name, current, width):
+        """What the setting under the cursor is, every choice it has and what each means (the current one marked), and a caution for
+        every risky setting in force. All of it wraps."""
         text = self.text[name]
         kind = self.kinds[name]
         choices = settings_mod._CHOICES.get(name)
@@ -406,19 +431,19 @@ class Form:
         description, meanings = INFO[name]
         out = [[("bold", f" {name}"), ("dim", f"   ({what}; the default is {_fmt(getattr(self.defaults, name))})")]]
         out += self._wrapped("", description, width)
-        if text in meanings:
-            out += self._wrapped("", meanings[text], width, "     ", f"   {text}: ")
+        if meanings:
+            out.append([])
+            for choice in (choices or list(meanings)):
+                if choice in meanings:
+                    here = choice == text
+                    out += self._wrapped("bold" if here else "", meanings[choice], width, "       ", f"   {'>' if here else ' '} {choice}: ")
         if kind is str and not choices and len(text) > VALUE_WIDTH - 2:
             out += self._wrapped("", text, width, "     ", "   Value: ")
-        cautions = current.loosening_warnings() if current is not None else []
-        shown = 0
-        for warning in cautions:
-            lines = self._wrapped("warn", warning, width, "     ", "   Caution: ")
-            if len(out) + len(lines) > limit and shown < len(cautions):
-                out.append([("warn", f"   ... and {len(cautions) - shown} more cautions; make the window taller to read them")])
-                break
-            out += lines
-            shown += 1
+        warnings = current.loosening_warnings() if current is not None else []
+        if warnings:
+            out.append([])
+        for warning in warnings:
+            out += self._wrapped("warn", warning, width, "     ", "   Caution: ")
         return out
 
     @staticmethod

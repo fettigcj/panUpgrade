@@ -152,7 +152,8 @@ Every setting is on one screen, grouped (HA behaviour, Panorama range, Failure h
 
 - **Up / Down / Tab** move between settings; Down past the last one reaches the buttons, and Down again wraps to the top (Up does the same in reverse). **Left / Right** step through a choice (`sync_to_peer`: never, prepare, upgrade) or flip a yes/no. Numbers and text are typed.
 - **Ctrl-R** (or Delete) puts a setting back to its default.
-- The explanation of the setting under the cursor sits to the right of the list (below it in a window narrower than about 110 columns): what it does, what its current value means, and a **Caution** for every setting that makes a run riskier (`sync_to_peer = upgrade`, `ha_config_unsynced = caution`, `allow_downgrade`, wide session bands, `max_parallel` above 1, and so on).
+- **PgUp / PgDn** scroll the explanation when it is taller than the window; its last line says so and shows which lines you are looking at. The buttons always stay on screen.
+- The explanation of the setting under the cursor sits to the right of the list (below it in a window narrower than about 110 columns): what it does, then every choice it has with what each means (the current one marked with `>`), and a **Caution** for every setting that makes a run riskier (`sync_to_peer = upgrade`, `ha_config_unsynced = caution`, `allow_downgrade`, wide session bands, `max_parallel` above 1, and so on).
 - A value that is not allowed (text in a number, a band above 1, a cross-feature downgrade without `allow_downgrade`) turns red and blocks saving until it is fixed.
 - The buttons work as in `select`: **Save**, **Save & Exit** (Ctrl-D), **Quit without saving** (Esc, which asks first if there are unsaved changes).
 

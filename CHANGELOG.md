@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Settings form: the explanation lists every choice a setting has, with what each means and the current one marked, so you do not have to change a value to read the others. PgUp / PgDn scroll the explanation when the window is too short to show it all, and the buttons always stay visible.
 - Settings form: the explanation of the setting under the cursor now sits to the right of the list when the window is wide enough (below it otherwise); Up and Down wrap round the whole ring of settings and buttons in both directions; the `ha_config_unsynced` description is rewritten and broken into paragraphs.
 - `sync_to_peer` is now `Disable`, `Both` (default) or `UpgradeOnly`. Both forces the passive member to match the active one in `prepare` and again during the upgrade, so an unsynced pair now needs acknowledgement (`force_config_sync`) in a plan instead of being refused; refusal applies only with `Disable`. Choices are matched without regard to case.
 - `panorama_compare` is now `minor` (default) or `major` and is the unit for `spread_limit` (default 2) and for "Panorama older than the target". Minor distances are counted along a table of the PAN-OS releases that exist (there is no 12.0, so 11.2 is two behind 12.2). New command `panupgrade releases` shows the table; `--update` downloads the vendor's current list into `releases.json`, which commands in that folder then use; `--releases FILE` names another. The upgrade script pins the table it was prepared with.

@@ -190,15 +190,74 @@ class Editing(unittest.TestCase):
                 goto(form, name)
                 text = " ".join(explanation(form, width, 60).split())
                 description, meanings = settingsform.INFO[name]
-                for passage in [description] + ([meanings[form.text[name]]] if form.text[name] in meanings else []):
+                for passage in [description] + list(meanings.values()):
                     self.assertIn(" ".join(passage.split()), text, f"{name} at width {width}")
                 self.assertNotIn("...", re.sub(r"\.\.\. and \d+ more", "", text.replace("(...)", "")), f"{name} at width {width}")
+
+    def test_every_choice_is_listed_under_the_description_with_the_current_one_marked(self):
+        form = fresh()
+        goto(form, "restore_roles")
+        lines = [line.strip() for line in explanation(form, 150, 40).split("\n")]
+        at = next(i for i, line in enumerate(lines) if line.startswith("What to do with the HA roles"))
+        self.assertEqual(lines[at + 1], "")                                              # a line break after the description
+        self.assertTrue(lines[at + 2].startswith("> leave: leave the roles as the upgrade left them"))
+        flat = " ".join(" ".join(lines).split())
+        self.assertIn("restore: fail back, so the member that was active at the start is active again", flat)
+        self.assertIn("pause: stop and ask before touching the roles", flat)
+        keys(form, "right")                                                               # moving the choice moves the marker, loses nothing
+        flat = " ".join(" ".join(line.strip() for line in explanation(form, 150, 40).split("\n")).split())
+        self.assertIn("> restore: fail back", flat)
+        self.assertIn("leave: leave the roles as the upgrade left them", flat)
+
+    def test_a_yes_no_setting_lists_both_answers(self):
+        form = fresh()
+        goto(form, "allow_downgrade")
+        flat = " ".join(explanation(form, 150, 40).split())
+        self.assertIn("false: a release older than the running one is refused", flat)
+        self.assertIn("true: downgrades are allowed", flat)
+
+    def test_an_explanation_taller_than_the_window_scrolls_with_page_up_and_down(self):
+        for width, height in ((150, 18), (100, 26)):                                       # beside the list, and stacked below it
+            form = fresh(pending_changes="ignore", allow_downgrade="true", max_parallel=3)
+            goto(form, "sync_to_peer")
+            first = explanation(form, width, height)
+            self.assertIn("PgUp / PgDn scroll this: lines 1-", first)
+            self.assertNotIn("UpgradeOnly: force the sync only during the upgrade itself", " ".join(first.split()))
+            seen = " ".join(first.split())
+            for _ in range(12):
+                form.press("pgdn")
+                seen += " " + " ".join(explanation(form, width, height).split())
+            self.assertIn("UpgradeOnly: force the sync only during the upgrade itself", seen, (width, height))
+            self.assertIn("Caution: max_parallel=3", seen, (width, height))
+            for _ in range(20):
+                form.press("pgup")
+            self.assertIn("PgUp / PgDn scroll this: lines 1-", explanation(form, width, height))
+            self.assertLessEqual(len(form.render(width, height)), height)
+
+    def test_the_scroll_starts_again_at_the_top_for_another_setting_and_the_buttons_stay_visible(self):
+        form = fresh(pending_changes="ignore", allow_downgrade="true", max_parallel=3)
+        goto(form, "sync_to_peer")
+        keys(form, "pgdn", "pgdn")
+        self.assertGreater(form.pane_offset, 0)
+        keys(form, "down")
+        self.assertEqual(form.pane_offset, 0)
+        for height in (14, 18, 24):
+            self.assertIn("[ Save & Exit ]", screen(form, 150, height))
+            self.assertIn("[ Save & Exit ]", screen(form, 100, height + 10))
+
+    def test_page_keys_do_nothing_when_everything_already_fits(self):
+        form = fresh()
+        goto(form, "sync_timeout_s")
+        before = explanation(form, 150, 50)
+        keys(form, "pgdn", "pgdn")
+        self.assertEqual(explanation(form, 150, 50), before)
+        self.assertNotIn("PgUp / PgDn scroll this", before)
 
     def test_a_wide_window_puts_the_explanation_beside_the_list_and_a_narrow_one_below_it(self):
         form = fresh()
         goto(form, "sync_to_peer")
         wide = form.render(150, 40)
-        header = "".join(t for _s, t in wide[5])
+        header = next("".join(t for _s, t in line) for line in wide if "default" in "".join(t for _s, t in line) and "setting" in "".join(t for _s, t in line))
         self.assertIn("setting", header)
         self.assertIn("sync_to_peer   (one of: Disable, Both, UpgradeOnly", header)      # level with the column headings
         row = next("".join(t for _s, t in line) for line in wide if "sync_timeout_s" in "".join(t for _s, t in line))

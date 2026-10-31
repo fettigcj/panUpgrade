@@ -296,7 +296,7 @@ class TheForm(Home):
     def test_the_only_account_is_used_for_everything_without_choosing(self):
         form = self.form(entry(accounts={"solo": "pw"}))
         self.assertEqual((form.effective_reading(), form.effective_changes()), ("solo", "solo"))
-        self.assertIn("only account", screen(form))
+        self.assertIn("reading, changes", screen(form))
 
     def test_test_sign_in_needs_an_address_then_reports(self):
         form = self.form(entry(address="", accounts={"a": "pw"}))
@@ -307,6 +307,86 @@ class TheForm(Home):
         keys(form, *typing("192.0.2.1"), "tab", "tab", "t")            # address -> profile in use -> accounts
         self.assertEqual(form.services.tested, [("192.0.2.1", "a")])
         self.assertEqual(form.message, "a signed in to 192.0.2.1.")
+
+
+class FailingServices(FakeServices):
+    def test(self, address, name, secret):
+        self.tested.append((address, name))
+        return False, f"{address}: login as {name} failed (invalid credentials)"
+
+
+class TheLastSignInTest(Home):
+    """Test sign-in answers once and the answer used to vanish at the next key; now the table keeps it."""
+
+    def form(self, services=None, **kw):
+        self.profile("lab", "192.0.2.1", {"a": "pw"})
+        e = authform.Entry("lab", "192.0.2.1", {"a": "pw"}, "", "", str(profiles.root() / "lab" / "credentials.txt"),
+                           sign_ins=profiles.sign_ins("lab"))
+        return authform.Form([e], "lab", "state", "", services or FakeServices())
+
+    def test_an_account_that_was_never_tested_says_so(self):
+        text = screen(self.form())
+        self.assertIn("last sign-in test", text)
+        self.assertIn("not tested yet", text)
+
+    def test_a_good_test_stays_in_the_table_with_its_date_and_time_after_the_message_is_gone(self):
+        form = self.form()
+        form.zone = "accounts"
+        keys(form, "t")
+        self.assertIn("signed in to", form.message)
+        keys(form, "up", "down")                                    # any key clears the message
+        self.assertEqual(form.message, "")
+        text = screen(form, width=130)
+        self.assertRegex(text, r"connected successfully on \d{4}-\d\d-\d\d \d\d:\d\d")
+        self.assertNotIn("not tested yet", text)
+
+    def test_a_failed_test_is_shown_as_failed_with_the_reason_underneath(self):
+        form = self.form(FailingServices())
+        form.zone = "accounts"
+        keys(form, "t")
+        text = screen(form, width=130)
+        self.assertRegex(text, r"failed on \d{4}-\d\d-\d\d \d\d:\d\d")
+        self.assertIn("login as a failed (invalid credentials)", text)
+
+    def test_a_narrow_window_shortens_the_wording_but_not_the_facts(self):
+        form = self.form()
+        form.zone = "accounts"
+        keys(form, "t")
+        self.assertRegex(screen(form, width=100), r"connected \d{4}-\d\d-\d\d \d\d:\d\d")
+
+    def test_the_result_is_on_disk_at_once_and_comes_back_next_time(self):
+        form = self.form(FailingServices())
+        form.zone = "accounts"
+        keys(form, "t")                                             # nothing saved, nothing even edited
+        book = profiles.sign_ins("lab")
+        self.assertFalse(book["a"]["ok"])
+        again = cli._auth_form(argparse.Namespace(profile="lab", source=None))[0]
+        again.zone = "accounts"
+        self.assertIn("failed on", screen(again, width=130))
+
+    def test_replacing_an_accounts_secret_forgets_the_old_result(self):
+        form = self.form()
+        form.zone = "accounts"
+        keys(form, "t", "a", *typing("a"), "tab", "tab", *typing("new"), "tab", "enter")
+        self.assertIn("not tested yet", screen(form))
+
+    def test_a_new_unsaved_profile_keeps_its_results_until_it_is_saved(self):
+        form = authform.Form([], "", "state", "", FakeServices())
+        keys(form, *typing("fresh"), "tab", *typing("192.0.2.9"), "tab", "enter")
+        self.assertFalse((profiles.root() / "fresh").exists())
+        form.zone = "accounts"
+        keys(form, "a", *typing("u"), "tab", "tab", *typing("pw"), "tab", "enter")
+        keys(form, "t")
+        self.assertFalse((profiles.root() / "fresh" / profiles.SIGN_INS).exists())    # not saved yet
+        authform.save_all(form)
+        self.assertTrue(profiles.sign_ins("fresh")["u"]["ok"])
+
+    def test_removing_an_account_drops_its_result_when_saved(self):
+        form = self.form()
+        form.zone = "accounts"
+        keys(form, "t", "delete")
+        authform.save_all(form)
+        self.assertEqual(profiles.sign_ins("lab"), {})
 
 
 class SeveralPanoramas(Home):
@@ -616,7 +696,7 @@ class MovingAround(Home):
     def test_the_profile_in_use_row_is_drawn_above_the_accounts_and_so_is_reached_before_them(self):
         lines = [("".join(t for _s, t in l)) for l in self.form().render(120, 40)]
         at = lambda text: next(i for i, l in enumerate(lines) if text in l)
-        self.assertLess(at("Profile in use is"), at("signs in with"))
+        self.assertLess(at("When none is named, use"), at("signs in with"))
         self.assertLess(at("signs in with"), at("[ Add account ]"))
         self.assertLess(at("[ Add account ]"), at("[ Save ]"))
 

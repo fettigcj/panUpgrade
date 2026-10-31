@@ -3,31 +3,39 @@
 
 """``panupgrade`` with no arguments: the whole workflow on one screen.
 
-A home screen lists the steps in order (sign in, read the fleet, choose firewalls, plan, prepare, upgrade) with where each one
-stands, and a few keys jump between them from anywhere: Alt-H home, Alt-A sign in, Alt-R report, Alt-F firewalls, Alt-P plan,
-Alt-S settings, or Alt-1 to Alt-8 for the steps in order. Each step is the same code the command of that name runs, so the screen
-and the command line cannot disagree: long work (reading Panorama) runs in the background while the screen stays alive, and its
-output is shown as it would be printed.
+A home screen lists the steps in order (sign in, choose firewalls, read the fleet, plan, prepare, upgrade) with where each one
+stands, and a few keys jump between them from anywhere: Alt-H home, Alt-A sign in, Alt-F firewalls, Alt-R report, Alt-P plan,
+Alt-S settings, Alt-J jobs, or Alt-1 to Alt-9 for the steps in order. Each step is the same code the command of that name runs, so
+the screen and the command line cannot disagree: long work (reading Panorama) runs in the background while the screen stays alive.
+
+Background work is kept by the shell, not by the screen that started it. Leave the report while it is still reading and the answer is
+waiting when you come back; come back later and the last answer is still there, marked with how old it is. Every piece of
+background work is listed on the Jobs screen (Alt-J) and, on a wide window, in a pane down the right-hand side of every screen.
 
 Screens are small objects with ``render(width, height)``, ``press(key)`` (returning None, 'home', 'quit' or ('goto', name)),
-``enter()`` and, where there is background work, ``tick()``. The terminal loop is in ``tui``; nothing here touches the terminal.
+``enter()`` and, where they have something of their own to poll, ``tick()``. The terminal loop is in ``tui``; nothing here touches
+the terminal.
 """
 
 import io
 import re
+import sys
 import threading
 import time
 import traceback
-from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from . import cli, credstore, profiles, site
+from . import cli, credstore, profiles, progress, site
 from .sources import SourceError
 
 SPIN = "|/-\\"
-HOTKEYS = [("alt-h", "home", "Alt-H home"), ("alt-a", "auth", "Alt-A sign in"), ("alt-r", "report", "Alt-R report"),
-           ("alt-f", "select", "Alt-F firewalls"), ("alt-p", "plan", "Alt-P plan"), ("alt-s", "settings", "Alt-S settings")]
-STEP_ORDER = ["auth", "report", "select", "plan", "prepare", "upgrade", "settings", "releases"]       # Alt-1 .. Alt-8
+HOTKEYS = [("alt-h", "home", "Alt-H home"), ("alt-a", "auth", "Alt-A sign in"), ("alt-f", "select", "Alt-F firewalls"),
+           ("alt-r", "report", "Alt-R report"), ("alt-p", "plan", "Alt-P plan"), ("alt-s", "settings", "Alt-S settings"),
+           ("alt-j", "jobs", "Alt-J jobs")]
+STEP_ORDER = ["auth", "select", "report", "plan", "prepare", "upgrade", "settings", "releases", "jobs"]       # Alt-1 .. Alt-9
+PANE_FROM = 120                  # a window this wide gets the jobs pane on the right
+FORM_PANE_FROM = 170             # the forms (sign-in table, settings) need their room, so they only share a very wide window
+KEPT_JOBS = 30                   # finished jobs remembered for the Jobs screen
 
 
 def cut(line, width):
@@ -46,21 +54,95 @@ def wrapped(style, text, width, indent=" "):
                                                        break_on_hyphens=False)] or [[]]
 
 
+def width_of(line):
+    return sum(len(text) for _style, text in line)
+
+
+def ago(seconds):
+    seconds = max(int(seconds), 0)
+    if seconds < 10:
+        return "just now"
+    if seconds < 60:
+        return f"{seconds}s ago"
+    if seconds < 3600:
+        return f"{seconds // 60} min ago"
+    return f"{seconds // 3600} h {seconds % 3600 // 60} min ago"
+
+
+def clock(moment, seconds=True):
+    return time.strftime("%H:%M:%S" if seconds else "%H:%M", time.localtime(moment))
+
+
 # ---- background work ---------------------------------------------------------------------------------------------------------
 
-class Job:
-    """A function run in a thread with everything it prints captured. The screen polls it; it never touches the terminal."""
+class _Router:
+    """Stands in for sys.stdout / sys.stderr while jobs run: each job's thread writes into its own buffer, every other thread (the
+    screen) to the real stream. Without it two jobs at once would pour into each other's capture."""
 
-    def __init__(self, fn):
+    def __init__(self, base):
+        self.base, self.targets = base, {}
+
+    def _target(self):
+        return self.targets.get(threading.get_ident(), self.base)
+
+    def write(self, text):
+        return self._target().write(text)
+
+    def flush(self):
+        return self._target().flush()
+
+    def __getattr__(self, name):
+        return getattr(self._target(), name)
+
+
+_capture_lock = threading.Lock()
+_capture = {"count": 0, "out": None, "err": None}
+
+
+def _capture_start(out, err):
+    with _capture_lock:
+        if _capture["count"] == 0:
+            _capture["out"], _capture["err"] = _Router(sys.stdout), _Router(sys.stderr)
+            sys.stdout, sys.stderr = _capture["out"], _capture["err"]
+        _capture["count"] += 1
+        me = threading.get_ident()
+        _capture["out"].targets[me], _capture["err"].targets[me] = out, err
+
+
+def _capture_stop():
+    with _capture_lock:
+        me = threading.get_ident()
+        _capture["out"].targets.pop(me, None)
+        _capture["err"].targets.pop(me, None)
+        _capture["count"] -= 1
+        if _capture["count"] == 0:
+            if sys.stdout is _capture["out"]:
+                sys.stdout = _capture["out"].base
+            if sys.stderr is _capture["err"]:
+                sys.stderr = _capture["err"].base
+
+
+class Job:
+    """A function run in a thread with everything it prints captured. Screens and the jobs pane poll it; it never touches the terminal."""
+
+    def __init__(self, fn, title="", done=None):
+        self.title, self.done, self.reported = title or "work", done, False
         self.started, self.finished, self.text, self.code, self.value = time.monotonic(), None, "", None, None
+        self.began = time.time()
+        self.stage = ""                                   # the latest words from progress.say
+        self._out, self._err = io.StringIO(), io.StringIO()
         self._fn = fn
         threading.Thread(target=self._run, daemon=True).start()
 
+    def _note(self, text):
+        self.stage = text
+
     def _run(self):
-        out, err = io.StringIO(), io.StringIO()
+        out, err = self._out, self._err
+        _capture_start(out, err)
+        progress.listen(self._note)
         try:
-            with redirect_stdout(out), redirect_stderr(err):
-                self.value = self._fn()
+            self.value = self._fn()
             self.code = self.value if isinstance(self.value, int) else 0
         except (SourceError, OSError, ValueError) as exc:    # the kind of trouble a person can act on
             self.code = 2
@@ -68,6 +150,9 @@ class Job:
         except BaseException as exc:                     # a bug must show up on the screen, not kill the program
             self.code = 2
             err.write(f"internal error: {type(exc).__name__}: {exc}\n" + traceback.format_exc(limit=3))
+        finally:
+            progress.listen(None)
+            _capture_stop()
         self.text = out.getvalue() + (("\n" if out.getvalue() else "") + err.getvalue() if err.getvalue() else "")
         self.finished = time.monotonic()
 
@@ -75,8 +160,30 @@ class Job:
     def running(self):
         return self.finished is None
 
+    @property
+    def failed(self):
+        return not self.running and bool(self.code)
+
     def elapsed(self):
         return int((self.finished or time.monotonic()) - self.started)
+
+    def live(self):
+        """Everything printed so far, while it is still running; the whole text once it has finished."""
+        if not self.running:
+            return self.text
+        return self._out.getvalue() + self._err.getvalue()
+
+    def latest(self):
+        """A few words on what it is doing now (running) or how it ended."""
+        if self.running:
+            if self.stage:
+                return self.stage
+            lines = [line.strip() for line in self.live().splitlines() if line.strip()]
+            return lines[-1] if lines else "starting..."
+        if self.failed:
+            lines = [line.strip() for line in self.text.splitlines() if line.strip()]
+            return lines[-1] if lines else f"ended with code {self.code}"
+        return "finished"
 
 
 # ---- session -----------------------------------------------------------------------------------------------------------------
@@ -86,7 +193,6 @@ class Session:
 
     def __init__(self, base, address="", target="", profile=None):
         self.base, self.address, self.target, self.profile = base, address, target, profile
-        self.results = {}                                # screen name -> (time, text, code)
 
     def args_for(self, command, *extra, address=True):
         argv = [command] + (["--profile", self.profile.name] if self.profile else [])
@@ -111,11 +217,10 @@ class Session:
         return self.profile.path(name) if self.profile else Path(name)
 
     def use(self, name):
-        """Switch to another profile: its address and target replace the ones shown, and what was read before no longer applies."""
+        """Switch to another profile: its address and target replace the ones shown."""
         self.persist()
         self.profile = profiles.load(name)
         self.address, self.target = (self.profile.address, self.profile.target) if self.profile else ("", "")
-        self.results.clear()
         profiles.remember(name)
 
     def persist(self):
@@ -132,9 +237,11 @@ class Session:
 
 class Screen:
     name, title, tick_s = "", "", None
+    pane_from = PANE_FROM                            # how wide the window must be for the jobs pane to fit beside this screen
 
     def __init__(self, shell):
         self.shell = shell
+        self.pending = None                          # a sign-in or certificate problem a finished job left, to deal with on the next visit
 
     def enter(self):
         pass
@@ -142,15 +249,39 @@ class Screen:
     def reset(self):
         """Forget what was read, so the next visit reads again."""
 
+    def profile_changed(self):
+        """Another Panorama profile was chosen."""
+        self.reset()
+
     def tick(self):
         return False
 
     def dirty(self):
         return False
 
+    def settle_problem(self, args):
+        """After a job: a certificate or sign-in problem takes the person to the sign-in screen (now when this screen is in front,
+        otherwise on their next visit). True when there was one."""
+        problem = getattr(args, "_certificate_problem", None)
+        signin = getattr(args, "_sign_in_problem", "")
+        if not (problem or signin):
+            return False
+        self.pending = ("certificate", problem) if problem else ("sign-in", signin)
+        if self.shell.screen is self:
+            self.route_pending()
+        else:
+            self.shell.note = f"{self.title} needs you to sign in again (Alt-{self.shell.number(self.name)})."
+        return True
+
+    def route_pending(self):
+        kind, what = self.pending
+        self.pending = None
+        (self.shell.need_certificate if kind == "certificate" else self.shell.need_sign_in)(self, what)
+
 
 class FormScreen(Screen):
     """One of the existing forms (sign-in, settings) shown full size; it ends when the form does."""
+    pane_from = FORM_PANE_FROM
 
     def __init__(self, shell, name, title, make):
         super().__init__(shell)
@@ -177,83 +308,104 @@ class FormScreen(Screen):
         return None
 
 
+class Record:
+    """What one finished read said, kept so the screen can show it again."""
+
+    def __init__(self, job):
+        self.text, self.code, self.seconds, self.when = job.text, job.code, job.elapsed(), time.time()
+        self.lines = job.text.rstrip("\n").split("\n")
+
+
 class JobScreen(Screen):
-    """A step that reads Panorama and shows what the matching command prints: the fleet report, the plan."""
+    """A step that reads Panorama and shows what the matching command prints: the fleet report, the plan.
+
+    The last answer for each (profile, address, target) is kept, so leaving the screen and coming back shows it again, marked with how old
+    it is. Refresh reads again; while it does, the old answer stays on show."""
 
     def __init__(self, shell, name, title, command, needs_target=False, intro="", needs_address=True):
         super().__init__(shell)
         self.name, self.title, self.command, self.needs_target, self.intro = name, title, command, needs_target, intro
         self.needs_address = needs_address
-        self.job, self.lines, self.offset, self.bar, self.note = None, [], 0, 0, ""
-        self.for_address = None
+        self.records, self.running = {}, {}               # by key: the last answer, and the read in flight
+        self.offset, self.bar, self.note = 0, 0, ""
 
-    @property
-    def tick_s(self):
-        return 0.25 if self.job is not None and self.job.running else None
+    def key(self, session):
+        return (session.profile.name if session.profile else "", session.address if self.needs_address else "",
+                session.target if self.needs_target else "")
 
     def reset(self):
-        self.job, self.lines, self.for_address = None, [], None
+        self.records.clear()
+        self.running.clear()                              # reads still in flight are left to finish; their answers are not wanted here
+        self.pending, self.note = None, ""
 
-    @staticmethod
-    def key(session):
-        return (session.profile.name if session.profile else "", session.address, session.target)
+    def profile_changed(self):
+        self.pending, self.note, self.offset = None, "", 0   # each profile keeps its own answers
+
+    def record(self, session=None):
+        return self.records.get(self.key(session or self.shell.session))
+
+    def reading(self, session=None):
+        return self.running.get(self.key(session or self.shell.session))
 
     def enter(self):
-        session = self.shell.session
-        if self.job is None and not self.lines or self.for_address != self.key(session):
+        if self.pending:
+            self.route_pending()
+            return
+        key = self.key(self.shell.session)
+        self.offset = 0
+        if key not in self.records and key not in self.running:
             self.start()
 
     def start(self):
         session = self.shell.session
-        self.lines, self.offset, self.note = [], 0, ""
+        self.note = ""
         if self.needs_address and not session.address.strip():
             self.note = "Choose or make a Panorama profile, or type its address, on the home screen first (Alt-H)."
             return
         if self.needs_target and not session.target.strip():
             self.note = "Type the target PAN-OS version on the home screen first (Alt-H)."
             return
-        self.for_address = self.key(session)
+        key = self.key(session)
+        if key in self.running:
+            return
         args = session.args_for(self.command, *(["--target", session.target.strip()] if self.needs_target else []), address=self.needs_address)
-        self.args = args
-        self.job = Job(lambda: self.shell.run_command(args))
+        where = session.profile.name if session.profile else session.address.strip()
+        title = f"{self.title.capitalize()}" + (f" ({where})" if self.needs_address and where else "")
+        self.running[key] = self.shell.start_job(title, lambda: self.shell.run_command(args), lambda job: self._finished(job, args, key))
 
-    def tick(self):
-        job = self.job
-        if job is None:
-            return False
-        if job.running:
-            return True
-        if job.text is not None and not self.lines:
-            self.lines = job.text.rstrip("\n").split("\n")
-            self.shell.session.results[self.name] = (time.strftime("%H:%M"), job.text, job.code)
-            if getattr(self.args, "_certificate_problem", None):
-                self.shell.need_certificate(self, self.args._certificate_problem)
-            elif getattr(self.args, "_sign_in_problem", ""):
-                self.shell.need_sign_in(self, self.args._sign_in_problem)
-            return True
-        return False
+    def _finished(self, job, args, key):
+        if self.running.get(key) is not job:              # it was reset while this ran
+            return
+        del self.running[key]
+        self.records[key] = Record(job)
+        if self.shell.screen is self and key == self.key(self.shell.session):
+            self.offset = 0
+        self.settle_problem(args)
 
     def render(self, width, height):
-        job = self.job
+        job, record = self.reading(), self.record()
         lines = [[("bold", f" panupgrade - {self.title}")]]
         if self.intro:
             lines += wrapped("dim", self.intro, width)
         if self.note:
             lines += wrapped("error", self.note, width)
-        elif job is not None and job.running:
-            lines.append([("warn", f" {SPIN[int(time.monotonic() * 4) % 4]} working... {job.elapsed()}s (the screen stays live; Alt-keys still work)")])
-        elif job is not None:
-            ok = job.code == 0
-            lines.append([("" if ok else "error", f" finished in {job.elapsed()}s" + ("" if ok else f" with an error (code {job.code})"))])
+        if job is not None:
+            seen = f"   (the result from {clock(record.when)} stays on show until this finishes)" if record else ""
+            lines.append([("warn", f" {SPIN[int(time.monotonic() * 4) % 4]} working... {job.elapsed()}s {job.latest()}"), ("dim", seen)])
+        elif record is not None:
+            ok = not record.code
+            lines.append([("" if ok else "error", f" result from {clock(record.when)} ({ago(time.time() - record.when)}), finished in {record.seconds}s"
+                           + ("" if ok else f" with an error (code {record.code})")), ("dim", "   R refreshes")])
         lines.append([])
         bar = [("", " ")]
         for n, label in enumerate(("Refresh", "Change sign-in", "Home")):
             bar += [("focus" if self.bar == n else "bold", f"[ {label} ]"), ("", "  ")]
+        body_lines = record.lines if record is not None else []
         room = max(height - len(lines) - 2, 3)
-        self.offset = max(0, min(self.offset, max(len(self.lines) - room, 0)))
-        body = [[("", " " + line)] for line in self.lines[self.offset:self.offset + room]]
-        if len(self.lines) > room:
-            lines += body + [[("dim", f" lines {self.offset + 1}-{min(self.offset + room, len(self.lines))} of {len(self.lines)}  (Up / Down / PgUp / PgDn scroll)")]]
+        self.offset = max(0, min(self.offset, max(len(body_lines) - room, 0)))
+        body = [[("", " " + line)] for line in body_lines[self.offset:self.offset + room]]
+        if len(body_lines) > room:
+            lines += body + [[("dim", f" lines {self.offset + 1}-{min(self.offset + room, len(body_lines))} of {len(body_lines)}  (Up / Down / PgUp / PgDn scroll)")]]
         else:
             lines += body
         lines += [[]] * max(height - len(lines) - 1, 0)
@@ -262,6 +414,7 @@ class JobScreen(Screen):
 
     def press(self, key):
         page = 10
+        count = len(self.record().lines) if self.record() else 0
         if key == "up":
             self.offset = max(self.offset - 1, 0)
         elif key == "down":
@@ -273,7 +426,7 @@ class JobScreen(Screen):
         elif key == "home":
             self.offset = 0
         elif key == "end":
-            self.offset = len(self.lines)
+            self.offset = count
         elif key in ("r", "R", "f5"):
             self.start()
         elif key in ("left", "shift-tab"):
@@ -302,8 +455,8 @@ class SelectScreen(Screen):
         self.job, self.form, self.note, self.args = None, None, "", None
 
     @property
-    def tick_s(self):
-        return 0.25 if self.job is not None and self.job.running else None
+    def pane_from(self):
+        return FORM_PANE_FROM if self.form is not None else PANE_FROM
 
     def dirty(self):
         return bool(self.form and self.form.dirty())
@@ -313,40 +466,37 @@ class SelectScreen(Screen):
 
     def enter(self):
         session = self.shell.session
+        if self.pending:
+            self.route_pending()
+            return
         if self.form is not None and not self.form.dirty():
             self.form = None
-        if self.form is not None:
+        if self.form is not None or (self.job is not None and self.job.running):
             return
         if not session.address.strip():
             self.note = "Choose or make a Panorama profile, or type its address, on the home screen first (Alt-H)."
             return
         self.note = ""
-        self.args = session.args_for("select")
-        self.job = Job(lambda: self.shell.read_devices(self.args))
+        self.args = args = session.args_for("select")
+        where = session.profile.name if session.profile else session.address.strip()
+        self.job = self.shell.start_job(f"Firewall list ({where})", lambda: self.shell.read_devices(args), lambda job: self._finished(job, args))
 
-    def tick(self):
-        job = self.job
-        if job is None:
-            return False
-        if job.running:
-            return True
-        self.job = None
-        if getattr(self.args, "_certificate_problem", None):
-            self.shell.need_certificate(self, self.args._certificate_problem)
-        elif getattr(self.args, "_sign_in_problem", ""):
-            self.shell.need_sign_in(self, self.args._sign_in_problem)
-        elif job.code or not isinstance(job.value, list):
+    def _finished(self, job, args):
+        if self.job is not job:                           # reset while it ran
+            return
+        if self.settle_problem(args):
+            return
+        if job.code or not isinstance(job.value, list):
             self.note = (job.text or "could not read the firewall list").strip()
         else:
-            self.form = cli._select_form(self.args, job.value)
-        return True
+            self.form = cli._select_form(args, job.value)
 
     def render(self, width, height):
         if self.form is not None:
             return self.form.render(width, height, "panupgrade - choose the firewalls")
         lines = [[("bold", " panupgrade - choose the firewalls")], []]
-        if self.job is not None:
-            lines.append([("warn", f" {SPIN[int(time.monotonic() * 4) % 4]} reading the firewall list from Panorama... {self.job.elapsed()}s")])
+        if self.job is not None and self.job.running:
+            lines.append([("warn", f" {SPIN[int(time.monotonic() * 4) % 4]} reading the firewall list from Panorama... {self.job.elapsed()}s {self.job.latest()}")])
         elif self.note:
             lines += wrapped("error", self.note, width)
             lines += wrapped("dim", "Alt-H goes home; Alt-A changes how this signs in; Enter tries again.", width)
@@ -382,6 +532,107 @@ class StaticScreen(Screen):
 
     def press(self, key):
         return "home" if key in ("enter", "esc", " ") else None
+
+
+def job_lines(job, width):
+    """One job as it appears in a list: what it is and how it stands, then what it is doing or how it ended."""
+    if job.running:
+        head = [("warn", ">> "), ("bold", job.title)]
+        tail = [("dim", f"    {job.elapsed()}s  {job.latest()}")]
+    elif job.failed:
+        head = [("error", "!! "), ("bold", job.title)]
+        tail = [("error", f"    {clock(job.began, False)}  {job.latest()}")]
+    else:
+        head = [("ok", "ok "), ("bold", job.title)]
+        tail = [("dim", f"    {clock(job.began, False)}  took {job.elapsed()}s")]
+    return [cut(head, width), cut(tail, width)]
+
+
+class JobsScreen(Screen):
+    """Every piece of background work: the list on the left, what the chosen one printed on the right."""
+    name, title = "jobs", "background jobs"
+    LIST = 46
+
+    def __init__(self, shell):
+        super().__init__(shell)
+        self.chosen, self.offset = None, 0
+
+    def ordered(self):
+        return list(reversed(self.shell.jobs))               # newest first
+
+    def current(self):
+        jobs = self.ordered()
+        return self.chosen if self.chosen in jobs else (jobs[0] if jobs else None)
+
+    def enter(self):
+        self.chosen, self.offset = None, 0
+
+    def tick(self):
+        return bool(self.shell.running_jobs())
+
+    def render(self, width, height):
+        jobs, current = self.ordered(), self.current()
+        top = [[("bold", " panupgrade - background jobs")],
+               [("dim", " Up / Down choose a job   PgUp / PgDn scroll its output   Esc home")], []]
+        room = max(height - len(top) - 1, 3)
+        listing = []
+        for job in jobs:
+            rows = job_lines(job, self.LIST - 3)
+            mark = ">" if job is current else " "
+            listing += [[("focus" if job is current else "bold", f" {mark}")] + rows[0], [("", "  ")] + rows[1]]
+        if not jobs:
+            listing = [[("dim", " nothing has run yet: reading the fleet or the firewall list shows up here")]]
+        detail = self._detail(current, max(width - self.LIST - 2, 20), room)
+        if width < 100:                                      # too narrow for two columns: the list, then the output
+            body = (listing[:max(room // 2, 2)] + [[]] + detail)[:room]
+        else:
+            body = self._beside(listing[:room], detail, self.LIST, room)
+        return [cut(line, width - 1) for line in (top + body)[:height]]
+
+    def _detail(self, job, width, room):
+        if job is None:
+            return []
+        state = "running" if job.running else ("failed" if job.failed else "finished")
+        out = [[("bold", f" {job.title}")],
+               [("dim", f" started {clock(job.began)}   {state}   {job.elapsed()}s")], []]
+        text = job.live().rstrip("\n")
+        lines = text.split("\n") if text else ["(nothing printed yet)" if job.running else "(it printed nothing)"]
+        if job.running and job.stage:
+            lines = [f"now: {job.stage}", ""] + lines
+        space = max(room - len(out) - 1, 2)
+        self.offset = max(0, min(self.offset, max(len(lines) - space, 0)))
+        out += [[("", " " + line)] for line in lines[self.offset:self.offset + space]]
+        if len(lines) > space:
+            out.append([("dim", f" lines {self.offset + 1}-{min(self.offset + space, len(lines))} of {len(lines)}")])
+        return out
+
+    @staticmethod
+    def _beside(left, right, left_width, room):
+        rows = []
+        for n in range(room):
+            a = left[n] if n < len(left) else []
+            b = right[n] if n < len(right) else []
+            rows.append(a + [("", " " * max(left_width - width_of(a), 0)), ("dim", "| ")] + b)
+        return rows
+
+    def press(self, key):
+        jobs, current = self.ordered(), self.current()
+        at = jobs.index(current) if current in jobs else 0
+        if key == "up" and jobs:
+            self.chosen, self.offset = jobs[max(at - 1, 0)], 0
+        elif key == "down" and jobs:
+            self.chosen, self.offset = jobs[min(at + 1, len(jobs) - 1)], 0
+        elif key == "pgup":
+            self.offset = max(self.offset - 10, 0)
+        elif key == "pgdn":
+            self.offset += 10
+        elif key == "home":
+            self.offset = 0
+        elif key == "end":
+            self.offset = 10 ** 6
+        elif key in ("esc", "enter", "q", "Q"):
+            return "home"
+        return None
 
 
 class HomeScreen(Screen):
@@ -458,20 +709,21 @@ class HomeScreen(Screen):
 # ---- the shell ---------------------------------------------------------------------------------------------------------------
 
 class Shell:
-    """Holds the screens, the shared session, the hotkeys and the footer. It is the one 'form' the terminal loop runs."""
-    titles = {"auth": "Sign in", "report": "Fleet report", "select": "Choose firewalls", "plan": "Plan the upgrade",
-              "prepare": "Prepare", "upgrade": "Upgrade", "settings": "Settings", "releases": "PAN-OS releases"}
+    """Holds the screens, the shared session, the hotkeys, the footer and every background job. It is the one 'form' the terminal loop runs."""
+    titles = {"auth": "Sign in", "select": "Choose firewalls", "report": "Fleet report", "plan": "Plan the upgrade",
+              "prepare": "Prepare", "upgrade": "Upgrade", "settings": "Settings", "releases": "PAN-OS releases", "jobs": "Jobs"}
 
     def __init__(self, session, run_command=None, read_devices=None):
         self.session = session
         self.run_command = run_command or self._run_command
         self.read_devices = read_devices or self._read_devices
-        self.message, self._armed, self.after_sign_in = "", None, None
+        self.message, self.note, self._armed, self.after_sign_in = "", "", None, None
+        self.jobs = []
         self.screens = {
             "home": HomeScreen(self),
             "auth": FormScreen(self, "auth", "sign in", lambda: cli._auth_form(self._auth_args())),
-            "report": JobScreen(self, "report", "fleet report", "report", intro="What state is the fleet in right now? Nothing is changed."),
             "select": SelectScreen(self),
+            "report": JobScreen(self, "report", "fleet report", "report", intro="What state is the fleet in right now? Nothing is changed."),
             "plan": JobScreen(self, "plan", "plan the upgrade", "plan", needs_target=True,
                               intro="What would an upgrade do to each firewall, and why? Read-only: nothing is changed."),
             "prepare": StaticScreen(self, "prepare", "prepare", lambda: self._not_yet("prepare")),
@@ -479,23 +731,69 @@ class Shell:
             "settings": FormScreen(self, "settings", "settings", self._settings_form),
             "releases": JobScreen(self, "releases", "PAN-OS releases", "releases", needs_address=False,
                                   intro="The list of PAN-OS releases used to count minor versions."),
+            "jobs": JobsScreen(self),
         }
         self.screen = self.screens["home"]
+
+    # -- background work
+    def start_job(self, title, fn, done=None):
+        """Run ``fn`` in the background. ``done(job)`` is called on the screen's thread once it has finished, whichever screen is in front."""
+        job = Job(fn, title, done)
+        self.jobs.append(job)
+        finished = [j for j in self.jobs if not j.running]
+        for old in finished[:-KEPT_JOBS]:
+            self.jobs.remove(old)
+        return job
+
+    def running_jobs(self):
+        return [job for job in self.jobs if job.running]
 
     # -- terminal loop interface
     @property
     def tick_s(self):
+        if any(job.running or not job.reported for job in self.jobs):
+            return 0.25
         return self.screen.tick_s
 
     def tick(self):
-        return self.screen.tick()
+        changed = False
+        for job in list(self.jobs):
+            if not job.running and not job.reported:
+                job.reported, changed = True, True
+                if job.done is not None:
+                    try:
+                        job.done(job)
+                    except Exception as exc:                  # a bug in handling an answer must not end the program
+                        self.message = f"internal error handling {job.title}: {type(exc).__name__}: {exc}"
+        if self.screen.tick():
+            changed = True
+        return changed or bool(self.running_jobs())
 
     def render(self, width, height, title=""):
-        body = self.screen.render(width, max(height - 1, 3))
+        room = max(height - 1, 3)
+        pane = min(52, width // 3 + 4) if width >= self.screen.pane_from and self.jobs and self.screen.name != "jobs" else 0
+        if pane:
+            left = self.screen.render(width - pane - 1, room)
+            right = self._pane(pane - 2, room)
+            body = [(left[n] if n < len(left) else []) for n in range(room)]
+            body = [row + [("", " " * max(width - pane - 1 - width_of(row), 0)), ("dim", "| ")] + (right[n] if n < len(right) else [])
+                    for n, row in enumerate(body)]
+        else:
+            body = self.screen.render(width, room)
         body = (body + [[]] * (height - 1))[:height - 1]
         hints = "  ".join(h for _k, _n, h in HOTKEYS)
-        footer = [("dim", " " + (self.message + "   " if self.message else "") + hints + "   Alt-1..8 steps")]
+        running = len(self.running_jobs())
+        extra = f"{running} job{'s' if running != 1 else ''} running   " if running and not pane and self.screen.name != "jobs" else ""
+        footer = [("dim", " " + (self.message + "   " if self.message else "") + (self.note + "   " if self.note and not self.message else "") + extra
+                   + hints + f"   Alt-1..{len(STEP_ORDER)} steps")]
         return body + [cut(footer, width - 1)]
+
+    def _pane(self, width, room):
+        """The side pane: what is running and what has finished, newest first."""
+        lines = [[("bold", "Background jobs"), ("dim", "   Alt-J for more")], []]
+        for job in reversed(self.jobs):
+            lines += job_lines(job, width) + [[]]
+        return [cut(line, width) for line in lines[:room]]
 
     def press(self, key):
         self.message = ""
@@ -509,6 +807,9 @@ class Shell:
         return self._navigate(result)
 
     # -- navigation
+    def number(self, name):
+        return STEP_ORDER.index(name) + 1 if name in STEP_ORDER else "?"
+
     def _hotkey_target(self, key):
         for hot, name, _label in HOTKEYS:
             if key == hot:
@@ -537,18 +838,19 @@ class Shell:
     def goto(self, name):
         self.session.persist()
         self.screen = self.screens[name]
+        self.note = ""
         self.screen.enter()
         return None
 
     def switch_profile(self, step):
-        """Left / Right on the home screen: the next or previous Panorama profile, with everything that was read forgotten."""
+        """Left / Right on the home screen: the next or previous Panorama profile. What each profile last read stays with it."""
         names = profiles.names()
         if not names:
             return
         at = names.index(self.session.profile.name) if self.session.profile and self.session.profile.name in names else -1
         self.session.use(names[(at + step) % len(names)])
         for screen in self.screens.values():
-            screen.reset()
+            screen.profile_changed()
         self.message = f"Now working in the profile {self.session.profile.name}."
 
     def form_finished(self, screen, result):
@@ -602,14 +904,20 @@ class Shell:
         if not reading:
             return "warn", f"{session.profile.name}: {len(accounts)} accounts, none chosen - open this to choose"
         changes = site.work_account(session.profile)[0]
-        return "ok", f"{reading} ({credstore.kind(accounts.get(reading))}) reads" + (f"; {changes} changes" if changes else "; changes use the same")
+        text = f"{reading} ({credstore.kind(accounts.get(reading))}) reads" + (f"; {changes} changes" if changes else "; changes use the same")
+        test = profiles.sign_ins(session.profile.name).get(reading)
+        if test:
+            text += f"; last test {'worked' if test.get('ok') else 'FAILED'} {str(test.get('at', ''))[:16].replace('T', ' ')}"
+        return ("ok" if not test or test.get("ok") else "warn"), text
 
     def _status_report(self, session):
-        got = session.results.get("report")
-        if not got:
-            return "dim", "not read yet - needs the Panorama address"
-        hit = re.search(r"Needs attention \((\d+) firewall", got[1])
-        return ("warn" if hit else "ok"), f"read at {got[0]}" + (f": {hit.group(1)} firewalls need attention" if hit else ": nothing needs attention")
+        screen = self.screens["report"]
+        record, job = screen.record(session), screen.reading(session)
+        if record is None:
+            return ("warn", "reading now...") if job else ("dim", "not read yet - needs the Panorama address")
+        hit = re.search(r"Needs attention \((\d+) firewall", record.text)
+        text = f"read at {clock(record.when, False)} ({ago(time.time() - record.when)})" + (": reading again..." if job else "")
+        return ("warn" if hit else "ok"), text + (f": {hit.group(1)} firewalls need attention" if hit else ": nothing needs attention")
 
     def _status_select(self, session):
         path = session.ws(cli.DEFAULT_LIST)
@@ -618,10 +926,13 @@ class Shell:
         return "ok", f"{len(cli._read_list(path))} firewalls in {cli.DEFAULT_LIST}"
 
     def _status_plan(self, session):
-        got = session.results.get("plan")
+        screen = self.screens["plan"]
+        record, job = screen.record(session), screen.reading(session)
         if not session.target.strip():
             return "dim", "needs a target PAN-OS version"
-        return ("ok", f"last run {got[0]} for {session.target}") if got else ("dim", f"not run yet for {session.target}")
+        if record is not None:
+            return "ok", f"last run {clock(record.when, False)} for {session.target}" + (" (running again...)" if job else "")
+        return ("warn", f"running for {session.target}...") if job else ("dim", f"not run yet for {session.target}")
 
     def _status_prepare(self, session):
         return "dim", "not on this screen yet: use the command line"
@@ -635,6 +946,13 @@ class Shell:
 
     def _status_releases(self, session):
         return "dim", "the table used to count minor versions"
+
+    def _status_jobs(self, session):
+        running, failed = len(self.running_jobs()), len([j for j in self.jobs if j.failed])
+        if not self.jobs:
+            return "dim", "nothing has run yet"
+        text = f"{running} running, {len(self.jobs) - running} finished" + (f", {failed} failed" if failed else "")
+        return ("warn" if running or failed else "ok"), text
 
     # -- pieces the screens call
     def _auth_args(self):

@@ -12,7 +12,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest import mock
 
-from panupgrade import cli, credstore, profiles, shell, site, trust, tui
+from panupgrade import cli, credstore, profiles, progress, shell, site, trust, tui
 from panupgrade.trust import CertificateProblem
 from panupgrade.model import DeviceRef
 from panupgrade.sources import SourceError
@@ -31,9 +31,7 @@ def wait(ui, seconds=3):
     end = time.monotonic() + seconds
     while time.monotonic() < end:
         ui.tick()
-        job = getattr(ui.screen, "job", None)
-        if job is None or not job.running:
-            ui.tick()
+        if not any(job.running or not job.reported for job in ui.jobs):
             return
         time.sleep(0.01)
     raise AssertionError("the background work did not finish")
@@ -71,8 +69,8 @@ class Home_(ShellCase):
     def test_it_opens_on_the_home_screen_with_the_steps_in_order_and_where_each_stands(self):
         ui = self.make()
         text = self.text(ui)
-        for needle in ("Panorama profile", "< lab >", "Panorama address", "[192.0.2.1]", "Target PAN-OS", "1  Sign in", "2  Fleet report", "3  Choose firewalls", "4  Plan the upgrade",
-                       "5  Prepare", "6  Upgrade", "7  Settings", "8  PAN-OS releases", "Q  Quit", "Alt-R report"):
+        for needle in ("Panorama profile", "< lab >", "Panorama address", "[192.0.2.1]", "Target PAN-OS", "1  Sign in", "2  Choose firewalls", "3  Fleet report", "4  Plan the upgrade",
+                       "5  Prepare", "6  Upgrade", "7  Settings", "8  PAN-OS releases", "9  Jobs", "Q  Quit", "Alt-R report", "Alt-J jobs"):
             self.assertIn(needle, text)
         self.assertIn("tool (password) reads", text)
         self.assertIn("built-in defaults", text)
@@ -92,7 +90,7 @@ class Home_(ShellCase):
 
     def test_enter_opens_a_step_and_escape_or_q_leaves(self):
         ui = self.make()
-        for _ in range(4):                                    # profile, address, target, then step 1 (sign in) and step 2: the fleet report
+        for _ in range(5):                                    # profile, address, target, then step 1 (sign in), 2 (firewalls) and 3: the fleet report
             ui.press("down")
         ui.press("enter")
         self.assertEqual(ui.screen.name, "report")
@@ -227,8 +225,10 @@ class Hotkeys(ShellCase):
         for number, name in enumerate(shell.STEP_ORDER, 1):
             ui.press(f"alt-{number}")
             self.assertEqual(ui.screen.name, name)
-        ui.press("alt-9")
-        self.assertEqual(ui.screen.name, shell.STEP_ORDER[-1])        # no ninth step: nothing happens
+        ui.press("alt-0")
+        self.assertEqual(ui.screen.name, shell.STEP_ORDER[-1])        # no step 0 or 10: nothing happens
+        ui.press("alt-10")
+        self.assertEqual(ui.screen.name, shell.STEP_ORDER[-1])
         ui.press("alt-z")
         self.assertEqual(ui.screen.name, shell.STEP_ORDER[-1])
 
@@ -665,6 +665,245 @@ class Painting(unittest.TestCase):
                         self.assertIn(style, known, f"{name} uses the style {style!r}")
 
 
+class TheStepsAreInTheOrderYouDoThem(ShellCase):
+    def test_choosing_the_firewalls_comes_before_reading_the_fleet(self):
+        self.assertLess(shell.STEP_ORDER.index("select"), shell.STEP_ORDER.index("report"))
+        lines = self.text(self.make()).splitlines()
+        at = lambda needle: next(i for i, line in enumerate(lines) if needle in line)
+        self.assertLess(at("Choose firewalls"), at("Fleet report"))
+        hints = self.text(self.make()).splitlines()[-1]
+        self.assertLess(hints.index("Alt-F firewalls"), hints.index("Alt-R report"))
+
+
+class TheLastAnswerStaysPut(ShellCase):
+    def test_leaving_the_report_and_coming_back_shows_the_same_answer_not_a_new_read(self):
+        ui = self.make(run=lambda args: print("Fleet report\nNeeds attention (3 firewalls)") or 0)
+        ui.press("alt-r"); wait(ui)
+        ui.press("alt-a"); ui.press("esc")                    # hop to the sign-in screen and home again
+        ui.press("alt-f"); ui.press("alt-h")
+        ui.press("alt-r")
+        text = self.text(ui)
+        self.assertIn("Needs attention (3 firewalls)", text)
+        self.assertIn("result from", text)
+        self.assertIn("just now", text)
+        self.assertEqual(len(self.commands), 1)
+
+    def test_leaving_while_it_is_still_reading_the_answer_is_waiting_when_you_come_back(self):
+        gate = threading.Event()
+        ui = self.make(run=lambda args: gate.wait(3) and print("Needs attention (2 firewalls)") or 0)
+        ui.press("alt-r")
+        ui.press("alt-h")                                     # off to the home screen while Panorama is still being asked
+        gate.set()
+        wait(ui)                                              # the loop's ticks run on whatever screen is in front
+        self.assertIn("2 firewalls need attention", self.text(ui))
+        ui.press("alt-r")
+        self.assertIn("Needs attention (2 firewalls)", self.text(ui))
+        self.assertEqual(len(self.commands), 1)
+
+    def test_a_job_that_finishes_between_two_checks_still_gets_its_answer_without_a_key_press(self):
+        ui = self.make()
+        ui.press("alt-r")
+        end = time.monotonic() + 3
+        while ui.jobs[0].running and time.monotonic() < end:
+            time.sleep(0.01)
+        self.assertFalse(ui.jobs[0].running)
+        self.assertIsNotNone(ui.tick_s)                       # the loop must still wake up to collect it ...
+        ui.tick()
+        self.assertIn("output of report", self.text(ui))      # ... and then it has
+        self.assertIsNone(ui.tick_s)
+
+    def test_refreshing_keeps_the_old_answer_on_show_until_the_new_one_arrives(self):
+        gate = threading.Event()
+        runs = []
+
+        def run(args):
+            runs.append(1)
+            if len(runs) == 2:
+                gate.wait(3)
+            print(f"answer number {len(runs)}")
+            return 0
+        ui = self.make(run=run)
+        ui.press("alt-r"); wait(ui)
+        ui.press("r")
+        text = self.text(ui)
+        self.assertIn("answer number 1", text)
+        self.assertIn("stays on show", text)
+        gate.set(); wait(ui)
+        self.assertIn("answer number 2", self.text(ui))
+        self.assertNotIn("answer number 1", self.text(ui))
+
+    def test_asking_twice_while_it_reads_does_not_start_a_second_read(self):
+        gate = threading.Event()
+        ui = self.make(run=lambda args: gate.wait(3) and print("x") or 0)
+        ui.press("alt-r"); ui.press("r"); ui.press("r")
+        gate.set(); wait(ui)
+        self.assertEqual(len(self.commands), 1)
+
+    def test_each_profile_keeps_its_own_answer_and_switching_back_shows_it_again(self):
+        other = profiles.create("other", "192.0.2.77")
+        credstore.write(other.creds_file, {"t": "pw"})
+        ui = self.make(run=lambda args: print(f"report for {args.profile}") or 0)
+        ui.press("alt-r"); wait(ui)
+        ui.press("alt-h")
+        ui.screen.at = 0
+        ui.press("right")                                      # on to the next profile
+        ui.press("alt-r"); wait(ui)
+        self.assertIn("report for other", self.text(ui))
+        ui.press("alt-h"); ui.screen.at = 0; ui.press("left")
+        ui.press("alt-r")
+        self.assertIn("report for lab", self.text(ui))
+        self.assertEqual(len(self.commands), 2)
+
+    def test_a_sign_in_problem_found_while_you_were_elsewhere_is_dealt_with_when_you_return(self):
+        gate = threading.Event()
+
+        def run(args):
+            gate.wait(3)
+            args._sign_in_problem = "no usable account"
+            return 2
+        ui = self.make(run=run)
+        ui.press("alt-r"); ui.press("alt-h")
+        gate.set(); wait(ui)
+        self.assertEqual(ui.screen.name, "home")                # nobody is yanked away from what they were doing
+        self.assertIn("sign in again", ui.render(110, 30)[-1][0][1])
+        ui.press("alt-r")
+        self.assertEqual(ui.screen.name, "auth")
+        self.assertIn("no usable account", self.text(ui))
+
+
+class TheJobsScreenAndPane(ShellCase):
+    def test_every_read_is_listed_with_its_state_newest_first(self):
+        gate = threading.Event()
+        ui = self.make(run=lambda args: gate.wait(3) and print("done") or 0)
+        ui.press("alt-r"); ui.press("alt-j")
+        self.assertEqual(ui.screen.name, "jobs")
+        text = self.text(ui, 130, 30)
+        self.assertIn("Fleet report (lab)", text)
+        self.assertIn("(nothing printed yet)", text)
+        gate.set(); wait(ui)
+        text = self.text(ui, 130, 30)
+        self.assertIn("ok Fleet report (lab)", text)
+        self.assertIn("done", text)
+
+    def test_a_failed_job_says_so_and_shows_what_it_printed(self):
+        ui = self.make(run=lambda args: print("error: Panorama said no") or 2)
+        ui.press("alt-r"); wait(ui)
+        ui.press("alt-j")
+        text = self.text(ui, 130, 30)
+        self.assertIn("!! Fleet report (lab)", text)
+        self.assertIn("Panorama said no", text)
+        self.assertIn("failed", text)
+
+    def test_up_and_down_choose_a_job_and_the_output_follows(self):
+        ui = self.make(run=lambda args: print(f"output for {args.command}") or 0)
+        ui.press("alt-r"); wait(ui)
+        ui.press("alt-p"); wait(ui)
+        ui.press("alt-j")
+        self.assertIn("output for plan", self.text(ui, 130, 30))
+        ui.press("down")
+        self.assertIn("output for report", self.text(ui, 130, 30))
+        self.assertNotIn("output for plan", self.text(ui, 130, 30).split("|", 1)[1])
+        ui.press("up")
+        self.assertIn("output for plan", self.text(ui, 130, 30))
+
+    def test_a_wide_window_shows_the_jobs_pane_beside_every_other_screen_and_a_narrow_one_does_not(self):
+        ui = self.make(run=lambda args: print("x") or 0)
+        self.assertNotIn("Background jobs", self.text(ui, 130, 30))      # nothing has run: no pane
+        ui.press("alt-r"); wait(ui)
+        ui.press("alt-h")
+        wide = self.text(ui, 130, 30)
+        self.assertIn("Background jobs", wide)
+        self.assertIn("ok Fleet report (lab)", wide)
+        self.assertIn("Panorama profile", wide)                           # the screen itself is still there
+        self.assertNotIn("Background jobs", self.text(ui, 100, 30))
+        for line in ui.render(130, 30):
+            self.assertLessEqual(sum(len(t) for _s, t in line), 130)
+
+    def test_the_forms_keep_their_room_and_only_share_a_very_wide_window(self):
+        ui = self.make(run=lambda args: print("x") or 0)
+        ui.press("alt-r"); wait(ui)
+        ui.press("alt-a")
+        self.assertNotIn("Background jobs", self.text(ui, 140, 36))
+        self.assertIn("last sign-in test", self.text(ui, 140, 36))           # the whole table is there
+        self.assertIn("Background jobs", self.text(ui, 175, 36))
+        ui.press("alt-s")
+        self.assertNotIn("Background jobs", self.text(ui, 140, 36))
+
+    def test_a_running_job_is_marked_differently_from_the_separator(self):
+        gate = threading.Event()
+        ui = self.make(run=lambda args: gate.wait(3) and print("x") or 0)
+        ui.press("alt-r"); ui.press("alt-h")
+        self.assertIn(">> Fleet report (lab)", self.text(ui, 130, 30))
+        gate.set(); wait(ui)
+
+    def test_a_narrow_window_says_in_the_footer_that_jobs_are_running(self):
+        gate = threading.Event()
+        ui = self.make(run=lambda args: gate.wait(3) and print("x") or 0)
+        ui.press("alt-r"); ui.press("alt-h")
+        self.assertIn("1 job running", self.text(ui, 100, 30).splitlines()[-1])
+        gate.set(); wait(ui)
+        self.assertNotIn("job running", self.text(ui, 100, 30).splitlines()[-1])
+
+    def test_the_home_screen_summarises_the_jobs(self):
+        ui = self.make()
+        self.assertIn("nothing has run yet", self.text(ui))
+        ui.press("alt-r"); wait(ui); ui.press("alt-h")
+        self.assertIn("0 running, 1 finished", self.text(ui))
+
+    def test_progress_words_from_the_work_are_shown_beside_the_running_job(self):
+        gate = threading.Event()
+        started = threading.Event()
+
+        def run(args):
+            progress.say("asking Panorama: show devices all")
+            started.set()
+            gate.wait(3)
+            return 0
+        ui = self.make(run=run)
+        ui.press("alt-r")
+        started.wait(3)
+        self.assertIn("asking Panorama: show devices all", self.text(ui))
+        ui.press("alt-h")
+        self.assertIn("asking Panorama: show devices all", self.text(ui, 130, 30))     # in the pane too
+        gate.set(); wait(ui)
+
+    def test_two_jobs_at_once_keep_their_output_apart(self):
+        gates = {"report": threading.Event(), "plan": threading.Event()}
+
+        def run(args):
+            print(f"start {args.command}")
+            gates[args.command].wait(3)
+            print(f"end {args.command}")
+            return 0
+        ui = self.make(run=run)
+        ui.press("alt-r"); ui.press("alt-p")
+        time.sleep(0.1)
+        gates["plan"].set(); gates["report"].set()
+        wait(ui)
+        by_title = {job.title: job.text for job in ui.jobs}
+        self.assertEqual(by_title["Fleet report (lab)"], "start report\nend report\n")
+        self.assertEqual(by_title["Plan the upgrade (lab)"], "start plan\nend plan\n")
+
+    def test_the_real_streams_are_put_back_once_the_work_is_done(self):
+        before = (__import__("sys").stdout, __import__("sys").stderr)
+        ui = self.make()
+        ui.press("alt-r"); wait(ui)
+        self.assertEqual((__import__("sys").stdout, __import__("sys").stderr), before)
+
+    def test_old_finished_jobs_are_dropped_beyond_a_limit_but_running_ones_never_are(self):
+        ui = self.make(run=lambda args: 0)
+        for _ in range(shell.KEPT_JOBS + 5):
+            job = ui.start_job("filler", lambda: 0)
+            while job.running:
+                time.sleep(0.001)
+        gate = threading.Event()
+        ui.start_job("slow", lambda: gate.wait(3))
+        ui.start_job("another", lambda: 0)
+        self.assertLessEqual(len([j for j in ui.jobs if not j.running]), shell.KEPT_JOBS)
+        self.assertIn("slow", [j.title for j in ui.jobs])
+        gate.set()
+
+
 class Jobs(unittest.TestCase):
     def test_a_job_captures_what_is_printed_and_its_return_code(self):
         job = shell.Job(lambda: print("hello") or 3)
@@ -672,6 +911,13 @@ class Jobs(unittest.TestCase):
         while job.running and time.monotonic() < end:
             time.sleep(0.01)
         self.assertEqual((job.text, job.code), ("hello\n", 3))
+
+    def test_progress_words_are_per_thread_and_do_nothing_when_nobody_listens(self):
+        progress.say("nobody hears this")                        # no listener on this thread: nothing happens
+        job = shell.Job(lambda: progress.say("working on it") or time.sleep(0.2))
+        time.sleep(0.1)
+        self.assertEqual(job.latest(), "working on it")
+        self.assertIsNone(getattr(progress._local, "callback", None))
 
 
 if __name__ == "__main__":

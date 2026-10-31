@@ -6,7 +6,8 @@
 Each profile (see ``profiles``) is one Panorama: its address and its own credentials file of admin accounts, with a choice of which
 account reads and which makes changes. Passwords and API keys are typed hidden, go into that profile's credentials file and nowhere
 else, and are never shown again: the list shows only each account's name and what kind of secret it holds. Which profile is in use
-is remembered automatically, or (Windows) kept in the user-level variable PANUPGRADE_PROFILE.
+is used when a command does not name one is either the profile used last, or (Windows) one pinned in the user-level variable
+PANUPGRADE_PROFILE. Each account also shows when its sign-in was last tested and whether that worked.
 
 Everything here is staged: nothing reaches the disk until Save. ``Form`` holds the state and knows nothing about terminals or the
 network; what needs the network (obtaining an API key, testing a sign-in, accepting a certificate) comes in through ``services``,
@@ -30,7 +31,18 @@ ACTION_LABELS = ["Add account", "Remove account", "Use for reading", "Use for ch
 ADD_ACCOUNT, REMOVE_ACCOUNT, FOR_READING, FOR_CHANGES, TEST, NEW_PROFILE, REMOVE_PROFILE, FORGET = range(8)
 BUTTON_LABELS = ["Save", "Save & Exit", "Quit without saving"]
 SAVE_ONLY, SAVE_EXIT, QUIT = 0, 1, 2
-STORES = {"state": "remembered automatically", "env": "the user environment variable PANUPGRADE_PROFILE (this Windows account)"}
+STORE_CHOICES = {"state": "the profile used last", "env": "always the profile above"}
+STORE_HELP = {
+    "state": "When you run panupgrade without naming a Panorama or profile, it uses whichever profile you worked in last. Nothing is "
+             "set outside this tool's own folder.",
+    "env": "When you run panupgrade without naming a Panorama or profile, it always uses the profile shown above, whatever you used last. "
+           "This sets the user environment variable PANUPGRADE_PROFILE for this Windows account; a terminal opened later sees it.",
+}
+
+
+def stamp(status):
+    """'2026-10-31 17:52' from a recorded test."""
+    return str(status.get("at", ""))[:16].replace("T", " ")
 KINDS = ["password", "API key", "password, then keep only the API key"]
 KIND_HELP = [
     "The password is stored in this profile's credentials file and used to sign in at the start of each run.",
@@ -43,7 +55,7 @@ HELP = {
     ADDRESS: "Type this profile's Panorama address (also used to test a sign-in or obtain an API key).   Tab: next",
     ACCOUNTS: "Up / Down: choose an account   A: add   Delete: remove   R: use for reading   C: use for changes   T: test   Tab: next",
     ACTIONS: "Left / Right: choose an action   Up / Down: another line of buttons, or on to the next part   Enter: do it",
-    STORE: "Left / Right: choose how the profile in use is remembered.   Tab: next",
+    STORE: "Left / Right: choose which profile is used when a command does not name one.   Tab: next",
     BUTTONS: "Left / Right: choose a button   Enter or Space: press it   Tab: next",
     MODAL: "Tab: next field   Left / Right: change the choice   Enter: next / press   Esc: cancel",
     PROMPT: "Left / Right: choose   Enter: press it   Esc: do not trust it",
@@ -61,8 +73,9 @@ def _wrapped(style, text, width, indent=" "):
 class Entry:
     """One profile as the form holds it: staged changes to its address, accounts and choices."""
 
-    def __init__(self, name, address="", accounts=None, reading="", changes="", creds_path="", new=False):
+    def __init__(self, name, address="", accounts=None, reading="", changes="", creds_path="", new=False, sign_ins=None):
         self.name, self.address, self.accounts = name, address, copy.deepcopy(accounts or {})
+        self.status = copy.deepcopy(sign_ins or {})            # the last sign-in test of each account (kept as observed, not staged)
         self.reading, self.changes, self.creds_path = reading, changes, creds_path
         self.new, self.removed = new, False
         self.creds_exists = Path(creds_path).is_file() if creds_path else False
@@ -217,7 +230,7 @@ class Form:
         if key in ("left", "right", " ", "enter") and userenv.supported():
             self.store = "env" if self.store == "state" else "state"
         elif key in ("left", "right", " ", "enter"):
-            self.message = "!This system has no user-level environment variables to set, so the profile in use is remembered automatically."
+            self.message = "!This system has no user-level environment variables to set, so the profile used last is always the one used."
         elif key == "down":
             self._step(1)
         elif key == "up":
@@ -342,7 +355,18 @@ class Form:
                 return
             except SourceError as exc:
                 ok, text = False, str(exc)
+            self._remember_test(name, ok, text)
             self.message = ("" if ok else "!") + text
+
+    def _remember_test(self, name, ok, text):
+        """Keep the result where the table shows it, and on disk now when the profile already exists (it is an observation, not a staged edit)."""
+        status = profiles.new_sign_in(ok, text)
+        self.entry.status[name] = status
+        if not self.entry.new:
+            try:
+                profiles.record_sign_in(self.entry.name, name, status)
+            except OSError:
+                pass
 
     def trusted(self):
         """The certificate accepted for the address typed above (or None), for showing."""
@@ -463,6 +487,7 @@ class Form:
             stored = {"api_key": secret.strip()} if m["kind"] == 1 else secret
         replaced = name in self.accounts
         self.accounts[name] = stored
+        self.entry.status.pop(name, None)                      # a new secret has not been tried yet
         self.cursor = self.account_names().index(name)
         self.modal = None
         self.message = f"{'Replaced' if replaced else 'Added'} {name}, signing in with " + (
@@ -502,8 +527,9 @@ class Form:
             lines += self._modal_lines(width)
         else:
             actions = self._actions_lines(width)
-            room = max(height - len(lines) - len(actions) - 4, 2)
-            lines += self._table(room)
+            room = max(height - len(lines) - len(actions) - 5, 2)
+            lines += self._table(room, width)
+            lines += self._why_it_failed(width)
             lines.append([])
             lines += actions
         lines = lines[:max(height - 2, 3)] + [[], footer]
@@ -528,7 +554,9 @@ class Form:
         if known:
             lines.append([("dim", f"   Trusted certificate  SHA-256 {trust.pretty(known['sha256'])[:47]}...  (accepted {known.get('accepted', '?')})")])
         here = self.zone == STORE and quiet
-        lines.append([("focus" if here else "bold", f" {'>' if here else ' '} Profile in use is   "), ("focus" if here else "", f"< {STORES[self.store]} >")])
+        lines.append([("focus" if here else "bold", f" {'>' if here else ' '} When none is named, use  "),
+                      ("focus" if here else "", f"< {STORE_CHOICES[self.store]} >")])
+        lines += _wrapped("dim", STORE_HELP[self.store], width, "     ")
         for name in self.overrides:
             what = ACCOUNT_ENV.get(name)
             text = (f"This terminal has {name} set, which overrides the profile's choice of {what} until it is unset or you open a new terminal."
@@ -537,9 +565,18 @@ class Form:
         lines.append([])
         return lines
 
-    def _table(self, room):
+    def _status_pieces(self, name, width):
+        status = self.entry.status.get(name) if self.entry else None
+        if not status:
+            return [("dim", "not tested yet")]
+        when = stamp(status)
+        if status.get("ok"):
+            return [("ok", f"connected successfully on {when}" if width >= 118 else f"connected {when}")]
+        return [("error", f"failed on {when}")]
+
+    def _table(self, room, width=120):
         names = self.account_names()
-        out = [[("bold", "     account" + " " * 24 + "signs in with        used for")]]
+        out = [[("bold", "     account" + " " * 24 + "signs in with        used for           last sign-in test")]]
         if not names:
             return out + [[("dim", "     (none yet: choose Add account below)")]]
         start = max(0, min(self.cursor - room + 2, len(names) - (room - 1)))
@@ -547,12 +584,20 @@ class Form:
             on = self.zone == ACCOUNTS and i == self.cursor
             used = [w for w, n in (("reading", self.effective_reading()), ("changes", self.effective_changes())) if n == name]
             if len(self.accounts) == 1:
-                used = ["reading and changes (the only account)"]
-            out.append([("focus" if on else "", f" {'>' if on else ' '}   {name[:30].ljust(30)}   {credstore.kind(self.accounts[name]).ljust(18)}   "
-                                                  f"{', '.join(used) or '-'}")])
+                used = ["reading, changes"]
+            out.append([("focus" if on else "", f" {'>' if on else ' '}   {name[:24].ljust(24)}   {credstore.kind(self.accounts[name]).ljust(18)}   "
+                                                  f"{(', '.join(used) or '-').ljust(16)}   ")] + self._status_pieces(name, width))
         if len(names) > room - 1:
             out.append([("dim", f"     ({len(names)} accounts; the list scrolls)")])
         return out
+
+    def _why_it_failed(self, width):
+        """Under the table: what the last test of the highlighted account said, when it failed."""
+        name = self.current()
+        status = self.entry.status.get(name) if self.entry and name else None
+        if not status or status.get("ok") or not status.get("note"):
+            return []
+        return _wrapped("error", f"{name} failed on {stamp(status)}: {status['note']}", width, "     ")[:2]
 
     def _actions_lines(self, width):
         """The action buttons, wrapped onto as many lines as the window needs."""
@@ -660,6 +705,9 @@ def save_all(form, set_user_env=userenv.set, delete_user_env=userenv.delete):
         if entry.creds_path != str(profile.dir / profiles.CREDS):
             profile.data["creds_file"] = entry.creds_path
         profile.save()
+        kept = {a: s for a, s in entry.status.items() if a in entry.accounts}
+        if kept or profiles.sign_ins(entry.name):
+            profiles.write_sign_ins(entry.name, kept)
         if entry.accounts_changed() or entry.new or not Path(entry.creds_path).is_file():
             credstore.write(entry.creds_path, entry.accounts)
         if entry.state() != entry.saved:

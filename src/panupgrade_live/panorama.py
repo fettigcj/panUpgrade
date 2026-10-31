@@ -23,7 +23,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from panupgrade import credstore, site, trust
+from panupgrade import credstore, progress, site, trust
 from panupgrade.trust import CertificateChanged, CertificateProblem
 from panupgrade.model import DeviceRef
 from panupgrade.sources import SourceError
@@ -196,6 +196,7 @@ class PanoramaApi:
 
     def _post(self, xml, target, label):
         command = label
+        progress.say(f"asking {'firewall ' + target if target else 'Panorama'}: {' '.join(re.sub(r'<[^>]*>', ' ', label).split())}")
         params = {"type": "op", "cmd": xml}
         if target:
             params["target"] = target

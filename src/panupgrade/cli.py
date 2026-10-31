@@ -1048,7 +1048,8 @@ def _auth_form(args):
             accounts = credstore.read(path) if Path(path).is_file() else {}
         except SourceError as exc:
             return None, f"{exc}. Fix or remove that file by hand; the sign-in screen will not overwrite what it cannot read."
-        entries.append(authform.Entry(name, profile.address, accounts, profile.account, profile.work_account, path))
+        entries.append(authform.Entry(name, profile.address, accounts, profile.account, profile.work_account, path,
+                                      sign_ins=profiles.sign_ins(name)))
     store = "env" if userenv.supported() and userenv.get("PANUPGRADE_PROFILE") else "state"
     overrides = [name for name in authform.ACCOUNT_ENV if os.environ.get(name)]
     active = _profile(args).name if _profile(args) else (profiles.remembered() or "")

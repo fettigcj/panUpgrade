@@ -24,6 +24,7 @@ configuration backups and run journals.
 import json
 import os
 import re
+import time
 from datetime import date
 from pathlib import Path
 
@@ -113,6 +114,38 @@ def remove(name):
         target = root() / f"{name}.removed-{stamp}-{n}"
     os.replace(source, target)
     return target.name
+
+
+SIGN_INS = "sign_ins.json"
+
+
+def sign_ins(name):
+    """What the last sign-in test of each account showed: {account: {"ok": bool, "at": "2026-10-31T17:52:10", "note": text}}."""
+    try:
+        data = json.loads((root() / name / SIGN_INS).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {a: s for a, s in data.items() if isinstance(s, dict)} if isinstance(data, dict) else {}
+
+
+def write_sign_ins(name, book):
+    folder = root() / name
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / SIGN_INS).write_text(json.dumps(book, indent=1) + "\n", encoding="utf-8")
+
+
+def new_sign_in(ok, note=""):
+    return {"ok": bool(ok), "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "note": note[:300]}
+
+
+def record_sign_in(name, account, status):
+    """Keep the result of a sign-in test at once, so it is still there after the screen is left. Only for a profile that exists."""
+    if load(name) is None:
+        return False
+    book = sign_ins(name)
+    book[account] = status
+    write_sign_ins(name, book)
+    return True
 
 
 def remembered():

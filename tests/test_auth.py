@@ -137,7 +137,7 @@ class WhereTheChoiceComesFrom(Home):
         self.assertEqual(site.creds_path(lab), ("elsewhere.txt", "PANUPGRADE_CREDS"))
 
     def test_the_announcement_says_which_profile_the_choice_came_from(self):
-        lab = self.profile(accounts={"svc": "pw", "other": "pw"}, account="svc")
+        lab = self.profile(accounts={"svc": "S3CR3T-value", "other": "S3CR3T-value"}, account="svc")
         a = argparse.Namespace(source="panorama:192.0.2.1", creds_file=None, account=None, work_account=None, ask_credentials=None,
                                color="never", ascii=True, _profile=lab)
         out = io.StringIO()
@@ -147,7 +147,7 @@ class WhereTheChoiceComesFrom(Home):
         self.assertIn("Reading as: svc (from the profile lab)", text)
         self.assertIn("Credentials file:", text)
         self.assertIn("from the profile lab", text)
-        self.assertNotIn("pw", text.replace("PANUPGRADE", ""))
+        self.assertNotIn("S3CR3T", text)                    # (not "pw": the random temp folder name can contain it)
 
 
 class TheCredentialsFile(Home):

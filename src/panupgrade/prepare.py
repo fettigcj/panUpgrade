@@ -218,7 +218,7 @@ def _fold(parts):
     return "done", detail
 
 
-def run(plan, approval, backend, journal, settings=None):
+def run(plan, approval, backend, journal, settings=None, stop=None):
     max_failures = settings.max_failures if settings else 5
     problems = []
     if approval.plan_hash != plan["hash"]:
@@ -232,7 +232,7 @@ def run(plan, approval, backend, journal, settings=None):
 
     parts, failed = {}, set()
     lock = threading.Lock()
-    stop = threading.Event()
+    stop = stop or threading.Event()
 
     def note(serial, state_, detail):
         with lock:

@@ -13,6 +13,13 @@ import threading
 _local = threading.local()
 
 
+class Aborted(BaseException):
+    """Raised, in the thread of read-only background work, by the next ``say`` after the person pressed Abort.
+
+    It is a BaseException on purpose: the broad ``except Exception`` handlers around device work must not swallow it. It is never
+    raised in work that changes firewalls (that stops at a step boundary instead), because it could land in the middle of a step."""
+
+
 def listen(callback):
     """Send this thread's progress words to ``callback`` (or stop doing so, with None)."""
     _local.callback = callback

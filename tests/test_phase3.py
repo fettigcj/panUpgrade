@@ -495,6 +495,18 @@ class OneApprovalCoversContent(unittest.TestCase):
                              "--color", "never", *extra])
         return code, out.getvalue(), err.getvalue()
 
+    def test_a_stop_asked_for_before_the_tasks_start_means_none_of_them_start(self):
+        args = cli.parse_args(["prepare", "--source", f"fake:{self.fleet}", "--serial", "A1", "--serial", "A2", "--set", "sync_to_peer=Both",
+                               "--set", "content_settle_s=0", "--journal", str(self.dir / "stop.jsonl"), "--color", "never"])
+        style = cli._style(args)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            bundle = cli._prepare_review(args, style)
+            bundle.stop.set()
+            code = cli._prepare_execute(args, style, bundle, lambda jp: cli._new_approval(bundle.plan["hash"], bundle.plan["serials"], [], jp, "test"))
+        self.assertIn("stopped by you before it started", out.getvalue())
+        self.assertNotIn("sync", [e["step"] for e in Journal.resume(str(self.dir / "stop.jsonl"), bundle.plan["hash"]).events if e.get("state") == "ok"])
+
     def test_one_word_approves_the_content_install_and_the_sync_and_the_prompt_says_what_content_means(self):
         code, out, _ = self.run_prepare(["APPROVE"])            # a second answer would raise StopIteration: it is never asked for
         self.assertEqual(code, 0, out)

@@ -134,11 +134,25 @@ class Job:
         self.began = time.time()
         self.stage = ""                                   # the latest words from progress.say
         self.activity = []                                # every progress note, with the time: [(HH:MM:SS, words)]
+        self.abort_requested = False
         self._out, self._err = io.StringIO(), io.StringIO()
         self._fn = fn
         threading.Thread(target=self._run, daemon=True).start()
 
+    def abort(self):
+        """Ask read-only work to stop before its next call to Panorama. Work that changes firewalls is never interrupted this way."""
+        if self.running and not self.changes:
+            self.abort_requested = True
+            return True
+        return False
+
+    @property
+    def aborted(self):
+        return self.abort_requested and self.code == 130
+
     def _note(self, text):
+        if self.abort_requested:
+            raise progress.Aborted()
         self.stage = text
         if not self.activity or self.activity[-1][1] != text:
             self.activity.append((time.strftime("%H:%M:%S"), text))
@@ -151,6 +165,9 @@ class Job:
         try:
             self.value = self._fn()
             self.code = self.value if isinstance(self.value, int) else 0
+        except progress.Aborted:
+            self.code = 130
+            err.write("aborted by you\n")
         except (SourceError, OSError, ValueError) as exc:    # the kind of trouble a person can act on
             self.code = 2
             err.write(f"error: {exc}\n")
@@ -261,6 +278,7 @@ class Screen:
     def __init__(self, shell):
         self.shell = shell
         self.pending = None                          # a sign-in or certificate problem a finished job left, to deal with on the next visit
+        self.retry = False                           # set when the person fixed the sign-in the step asked for: read again on arrival, once
 
     def enter(self):
         pass
@@ -341,10 +359,11 @@ class JobScreen(Screen):
     The last answer for each (profile, address, target) is kept, so leaving the screen and coming back shows it again, marked with how old
     it is. Refresh reads again; while it does, the old answer stays on show."""
 
-    def __init__(self, shell, name, title, command, needs_target=False, intro="", needs_address=True):
+    def __init__(self, shell, name, title, command, needs_target=False, intro="", needs_address=True, auto=False):
         super().__init__(shell)
         self.name, self.title, self.command, self.needs_target, self.intro = name, title, command, needs_target, intro
         self.needs_address = needs_address
+        self.auto = auto                                  # read as soon as the screen opens: only for things that touch no network
         self.records, self.running = {}, {}               # by key: the last answer, and the read in flight
         self.offset, self.bar, self.note = 0, 0, ""
 
@@ -372,7 +391,8 @@ class JobScreen(Screen):
             return
         key = self.key(self.shell.session)
         self.offset = 0
-        if key not in self.records and key not in self.running:
+        retry, self.retry = self.retry, False
+        if (self.auto or retry) and key not in self.records and key not in self.running:
             self.start()
 
     def start(self):
@@ -392,10 +412,28 @@ class JobScreen(Screen):
         title = f"{self.title.capitalize()}" + (f" ({where})" if self.needs_address and where else "")
         self.running[key] = self.shell.start_job(title, lambda: self.shell.run_command(args), lambda job: self._finished(job, args, key))
 
+    def abort(self):
+        job = self.reading()
+        if job is not None and job.abort():
+            self.note = "Aborting: it stops before its next call to Panorama (a call already in progress has to return first)."
+
+    def buttons(self):
+        """What the bar offers: Start before anything was read, Abort while it reads, Refresh once there is an answer."""
+        if self.reading() is not None:
+            first = ("Abort", self.abort)
+        elif self.record() is not None:
+            first = ("Refresh", self.start)
+        else:
+            first = ("Start", self.start)
+        return [first, ("Change sign-in", "sign-in"), ("Home", "home")]
+
     def _finished(self, job, args, key):
         if self.running.get(key) is not job:              # it was reset while this ran
             return
         del self.running[key]
+        if job.aborted:                                   # nothing new was learned, so what was shown before stays
+            self.note = "Aborted. " + ("The earlier result is still shown." if key in self.records else "Nothing was read.")
+            return
         self.records[key] = Record(job)
         if self.shell.screen is self and key == self.key(self.shell.session):
             self.offset = 0
@@ -408,6 +446,8 @@ class JobScreen(Screen):
             lines += wrapped("dim", self.intro, width)
         if self.note:
             lines += wrapped("error", self.note, width)
+        if job is None and record is None and not self.note:
+            lines += wrapped("dim", "Nothing has been read yet. Press Start to read it; this only reads, it changes nothing.", width)
         if job is not None:
             seen = f"   (the result from {clock(record.when)} stays on show until this finishes)" if record else ""
             lines.append([("warn", f" {SPIN[int(time.monotonic() * 4) % 4]} working... {job.elapsed()}s {job.latest()}"), ("dim", seen)])
@@ -417,7 +457,7 @@ class JobScreen(Screen):
                            + ("" if ok else f" with an error (code {record.code})")), ("dim", "   R refreshes")])
         lines.append([])
         bar = [("", " ")]
-        for n, label in enumerate(("Refresh", "Change sign-in", "Home")):
+        for n, (label, _action) in enumerate(self.buttons()):
             bar += [("focus" if self.bar == n else "bold", f"[ {label} ]"), ("", "  ")]
         body_lines = record.lines if record is not None else []
         room = max(height - len(lines) - 2, 3)
@@ -447,19 +487,20 @@ class JobScreen(Screen):
         elif key == "end":
             self.offset = count
         elif key in ("r", "R", "f5"):
-            self.start()
+            if self.reading() is None:                            # while it reads, the first button is Abort and R does nothing
+                self.start()
         elif key in ("left", "shift-tab"):
             self.bar = max(self.bar - 1, 0)
         elif key in ("right", "tab"):
             self.bar = min(self.bar + 1, 2)
         elif key == "enter":
-            if self.bar == 0:
-                self.start()
-            elif self.bar == 1:
+            action = self.buttons()[min(self.bar, 2)][1]
+            if action == "sign-in":
                 self.shell.after_sign_in = self.name              # signing in again, then straight back here to read again
                 return ("goto", "auth")
-            else:
+            if action == "home":
                 return "home"
+            action()
         elif key == "esc":
             return "home"
         return None
@@ -569,7 +610,16 @@ class ChangeScreen(Screen):
         raise NotImplementedError
 
     def running_buttons(self):
-        return [("Home (it keeps running)", None)]
+        """A real run is stopped at a step boundary, never torn down in the middle of a step; a rehearsal can simply be aborted."""
+        if self.job is not None and self.job.changes and self.bundle is not None:
+            return [("Stop after the steps in progress", self.stop), ("Home (it keeps running)", None)]
+        return [("Abort", self.abort), ("Home (it keeps running)", None)]
+
+    def stop(self):
+        if self.bundle is not None and self.stage == "running":
+            self.bundle.stop.set()
+            self.note = ("Stopping: steps already going will finish and nothing new starts. The journal records where it got to; "
+                         "read the plan again later to continue it.")
 
     def prepare_run_args(self, args):
         """Last changes to the arguments of the real run (which earlier run to carry on, for instance)."""
@@ -595,11 +645,18 @@ class ChangeScreen(Screen):
             return
         if self.stage in ("review", "approving") and self.key_ != self.key(self.shell.session):
             self.reset()                                 # the plan was for another address or target
-        if self.stage == "idle":
-            self.read_plan()
+        retry, self.retry = self.retry, False
+        if retry and self.stage == "idle":
+            self.read_plan()                             # the person had started this and was sent to fix the sign-in: carry on, once
 
     def tick(self):
         return self.busy()
+
+    def abort(self):
+        if self.stage == "reading" and self.job is not None and self.job.abort():
+            self.note = "Aborting: it stops before its next call to Panorama (a call already in progress has to return first)."
+        elif self.stage == "running" and self.job is not None and self.job.abort():           # a rehearsal; real runs are stopped, not aborted
+            self.note = "Aborting the rehearsal."
 
     def where(self):
         session = self.shell.session
@@ -633,7 +690,9 @@ class ChangeScreen(Screen):
             return
         self.lines = job.text.rstrip("\n").split("\n") if job.text else []
         self.offset = 0
-        if self.settle_problem(self.args):
+        if job.aborted:
+            self.stage, self.bundle, self.lines, self.note = "idle", None, [], "Aborted. Nothing was changed."
+        elif self.settle_problem(self.args):
             self.stage = "idle"
         elif job.code or not hasattr(job.value, "plan"):
             self.stage, self.bundle = "failed", None
@@ -670,6 +729,9 @@ class ChangeScreen(Screen):
     def _ran(self, job):
         if self.job is not job or self.stage != "running":
             return
+        if job.aborted:
+            self.stage, self.lines, self.note = "idle", [], "Aborted. Nothing was changed."
+            return
         self.stage, self.lines, self.offset, self.result, self.finished = "done", job.text.rstrip("\n").split("\n"), 0, job.code, time.time()
         self.bundle, self.bar, self.mode = None, 0, None
         for name in ("report", "plan", "prepare", "upgrade"):
@@ -682,8 +744,10 @@ class ChangeScreen(Screen):
             return self.review_buttons()
         if self.stage == "running":
             return self.running_buttons()
+        if self.stage == "reading":
+            return [("Abort", self.abort), ("Home (it keeps reading)", None)]
         if self.stage in ("done", "failed", "idle"):
-            return [("Read the plan again" if self.stage != "idle" else "Read the plan", self.read_plan), ("Home", None)]
+            return [("Read the plan again" if self.stage != "idle" else "Start: read the plan", self.read_plan), ("Home", None)]
         return [("Home", None)]
 
     def body(self):
@@ -850,7 +914,7 @@ class PrepareScreen(ChangeScreen):
             return "warn", "RUNNING - changing firewalls now"
         if self.stage == "done":
             return ("ok" if not self.result else "error"), f"finished at {clock(self.finished, False)}" + ("" if not self.result else f" with an error (code {self.result})")
-        return "dim", "not started - open this to read the plan"
+        return "dim", "not started - open it, then press Start"
 
 
 class UpgradeScreen(ChangeScreen):
@@ -873,17 +937,6 @@ class UpgradeScreen(ChangeScreen):
         self.standalone = not self.standalone
         self.reset()
         self.read_plan()
-
-    def stop(self):
-        if self.bundle is not None and self.stage == "running":
-            self.bundle.stop.set()
-            self.note = ("Stopping: steps already going will finish and nothing new starts. The journal records where it got to; "
-                         "read the plan again later to continue it.")
-
-    def running_buttons(self):
-        if self.job is not None and self.job.changes and self.bundle is not None:
-            return [("Stop after the steps in progress", self.stop), ("Home (it keeps running)", None)]
-        return [("Home (it keeps running)", None)]
 
     def prepare_run_args(self, args):
         if self.bundle.previous:
@@ -947,7 +1000,7 @@ class UpgradeScreen(ChangeScreen):
             return "warn", "RUNNING - upgrading firewalls now"
         if self.stage == "done":
             return ("ok" if not self.result else "error"), f"finished at {clock(self.finished, False)}" + ("" if not self.result else f" with an error (code {self.result})")
-        return "dim", "not started - open this to read the plan"
+        return "dim", "not started - open it, then press Start"
 
 
 def job_lines(job, width, recent=0):
@@ -1177,7 +1230,7 @@ class Shell:
             "prepare": PrepareScreen(self),
             "upgrade": UpgradeScreen(self),
             "settings": FormScreen(self, "settings", "settings", self._settings_form),
-            "releases": JobScreen(self, "releases", "PAN-OS releases", "releases", needs_address=False,
+            "releases": JobScreen(self, "releases", "PAN-OS releases", "releases", needs_address=False, auto=True,
                                   intro="The list of PAN-OS releases used to count minor versions."),
             "jobs": JobsScreen(self),
         }
@@ -1331,6 +1384,7 @@ class Shell:
             back, self.after_sign_in = (self.after_sign_in if saved else None), None
             if back:
                 self.screens[back].reset()                      # the sign-in changed, so what it read before is stale
+                self.screens[back].retry = True                 # and the read the person had started is tried again
         self.message = ("Saved." if saved else "")
         return ("goto", back) if back else "home"
 
@@ -1382,7 +1436,7 @@ class Shell:
         screen = self.screens["report"]
         record, job = screen.record(session), screen.reading(session)
         if record is None:
-            return ("warn", "reading now...") if job else ("dim", "not read yet - needs the Panorama address")
+            return ("warn", "reading now...") if job else ("dim", "not read yet - open it, then press Start")
         hit = re.search(r"Needs attention \((\d+) firewall", record.text)
         text = f"read at {clock(record.when, False)} ({ago(time.time() - record.when)})" + (": reading again..." if job else "")
         return ("warn" if hit else "ok"), text + (f": {hit.group(1)} firewalls need attention" if hit else ": nothing needs attention")
@@ -1400,7 +1454,7 @@ class Shell:
             return "dim", "needs a target PAN-OS version"
         if record is not None:
             return "ok", f"last run {clock(record.when, False)} for {session.target}" + (" (running again...)" if job else "")
-        return ("warn", f"running for {session.target}...") if job else ("dim", f"not run yet for {session.target}")
+        return ("warn", f"running for {session.target}...") if job else ("dim", f"not run yet for {session.target} - open it, then press Start")
 
     def _status_prepare(self, session):
         return self.screens["prepare"].status()

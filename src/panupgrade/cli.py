@@ -801,7 +801,7 @@ class PrepareBundle:
 
     def __init__(self, plan, names, backend, fleet, label, settings):
         self.plan, self.names, self.backend, self.fleet, self.label, self.settings = plan, names, backend, fleet, label, settings
-        self.created = time.time()
+        self.created, self.stop = time.time(), threading.Event()       # stop: start no new task (those going finish)
 
 
 def _guarded(style, fn):
@@ -876,7 +876,7 @@ def _prepare_execute(args, style, bundle, approve=None):
     plan, names, backend, label, settings = bundle.plan, bundle.names, bundle.backend, bundle.label, bundle.settings
     result = None
     if plan["serials"]:
-        result = _prepare_tasks(args, style, plan, names, backend, settings, label, approve)
+        result = _prepare_tasks(args, style, plan, names, backend, settings, label, approve, bundle.stop)
         if isinstance(result, int):
             return result
         sys.stdout.write(console.render_outcomes(result, names, style))
@@ -900,7 +900,7 @@ def _prepare_execute(args, style, bundle, approve=None):
     return 0
 
 
-def _prepare_tasks(args, style, plan, names, backend, settings, label, approve=None):
+def _prepare_tasks(args, style, plan, names, backend, settings, label, approve=None, stop=None):
     """Approve and run the preparation tasks (config sync, image downloads). Returns the result, or an exit code."""
     if args.dry_run and not args.approval:
         approval = approval_mod.Approval(plan["hash"], list(plan["serials"]), [], "dry run: nothing changes, so nothing was asked", "")
@@ -924,7 +924,7 @@ def _prepare_tasks(args, style, plan, names, backend, settings, label, approve=N
     if label == "LIVE":
         print(style.line("stop", f"LIVE RUN - this will change real firewalls (config sync and image downloads); journal {journal_path}"))
     try:
-        return prepare_mod.run(plan, approval, backend, journal, settings)
+        return prepare_mod.run(plan, approval, backend, journal, settings, stop=stop)
     except executor.ExecutionRefused:
         _discard_if_empty(journal, resuming)
         raise

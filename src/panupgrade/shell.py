@@ -534,43 +534,49 @@ class SelectScreen(Screen):
         return None
 
 
-class StaticScreen(Screen):
-    """A page of plain text, for steps that are not on this screen yet."""
+class ChangeScreen(Screen):
+    """A step that changes firewalls, in the same three steps the command takes: read the plan (changes nothing), approve it by typing
+    APPROVE, then run it. Leaving the screen does not stop a run; the Jobs screen shows it and quitting asks first.
 
-    def __init__(self, shell, name, title, make_text):
-        super().__init__(shell)
-        self.name, self.title, self._text = name, title, make_text
-
-    def render(self, width, height):
-        lines = [[("bold", f" panupgrade - {self.title}")], []]
-        for paragraph in self._text().split("\n"):
-            lines += wrapped("", paragraph, width) if paragraph.strip() else [[]]
-        lines += [[]] * max(height - len(lines) - 1, 0)
-        lines.append([("", " "), ("focus", "[ Home ]")])
-        return [cut(line, width - 1) for line in lines[:height]]
-
-    def press(self, key):
-        return "home" if key in ("enter", "esc", " ") else None
-
-
-class PrepareScreen(Screen):
-    """Get the firewalls ready ahead of the window, in the same three steps the command takes: read the plan (changes nothing), approve it by
-    typing APPROVE, then run it. Leaving the screen does not stop a run; the Jobs screen shows it and quitting asks first."""
-    name, title = "prepare", "prepare"
-    INTRO = ("Gets the firewalls ready ahead of the window: brings HA members' content level, forces a passive member's configuration to "
-             "match its active, and downloads the images for the target. It changes the firewalls, so nothing starts until you have read the "
-             "plan and typed APPROVE. It never installs PAN-OS, reboots or fails anything over.")
+    Prepare and Upgrade differ only in what they read, what they list for approval and a few extra buttons; everything that keeps them
+    safe (the typed word, the approval bound to the plan that was read, the plan's age, the quit question) is here once."""
+    verb = ""
+    INTRO = ""
 
     def __init__(self, shell):
         super().__init__(shell)
         self.stage, self.job, self.bundle, self.args, self.key_ = "idle", None, None, None, None
         self.lines, self.offset, self.bar, self.note, self.typed = [], 0, 0, "", ""
-        self.finished = None
-        self.result = None
+        self.finished, self.result, self.mode = None, None, None            # mode: how an unfinished earlier run is dealt with
+
+    # -- what differs
+    def extra_args(self):
+        return []
+
+    def tasks(self):
+        raise NotImplementedError
+
+    def approval_body(self):
+        raise NotImplementedError
+
+    def approver(self):
+        raise NotImplementedError
+
+    def summary(self):
+        raise NotImplementedError
+
+    def review_buttons(self):
+        raise NotImplementedError
+
+    def running_buttons(self):
+        return [("Home (it keeps running)", None)]
+
+    def prepare_run_args(self, args):
+        """Last changes to the arguments of the real run (which earlier run to carry on, for instance)."""
 
     # -- where it stands
     def key(self, session):
-        return (session.profile.name if session.profile else "", session.address.strip(), session.target.strip())
+        return (session.profile.name if session.profile else "", session.address.strip(), session.target.strip(), tuple(self.extra_args()))
 
     def busy(self):
         return self.stage in ("reading", "running")
@@ -578,7 +584,7 @@ class PrepareScreen(Screen):
     def reset(self):
         if self.busy():
             return                                       # never lose track of work that is going on
-        self.stage, self.job, self.bundle, self.lines, self.note, self.typed = "idle", None, None, [], "", ""
+        self.stage, self.job, self.bundle, self.lines, self.note, self.typed, self.mode = "idle", None, None, [], "", "", None
 
     def profile_changed(self):
         self.reset()
@@ -595,13 +601,17 @@ class PrepareScreen(Screen):
     def tick(self):
         return self.busy()
 
+    def where(self):
+        session = self.shell.session
+        return session.profile.name if session.profile else session.address.strip()
+
     # -- the three steps
     def _check(self):
         session = self.shell.session
         if not session.address.strip():
             return "Choose or make a Panorama profile, or type its address, on the home screen first (Alt-H)."
         if not session.target.strip():
-            return "Type the target PAN-OS version on the home screen first (Alt-H): the images for it are what gets pre-downloaded."
+            return "Type the target PAN-OS version on the home screen first (Alt-H)."
         return ""
 
     def read_plan(self):
@@ -611,12 +621,12 @@ class PrepareScreen(Screen):
         if self.note:
             return
         session = self.shell.session
-        self.args = args = session.args_for("prepare", "--target", session.target.strip())
+        self.args = args = session.args_for(self.verb, "--target", session.target.strip(), *self.extra_args())
         self.key_ = self.key(session)
-        self.lines, self.offset, self.bundle, self.typed = [], 0, None, ""
+        self.lines, self.offset, self.bundle, self.typed, self.mode = [], 0, None, "", None
         self.stage = "reading"
-        where = session.profile.name if session.profile else session.address.strip()
-        self.job = self.shell.start_job(f"Prepare plan ({where})", lambda: self.shell.prepare_review(args), self._planned)
+        review = getattr(self.shell, f"{self.verb}_review")
+        self.job = self.shell.start_job(f"{self.verb.capitalize()} plan ({self.where()})", lambda: review(args), self._planned)
 
     def _planned(self, job):
         if self.job is not job or self.stage != "reading":
@@ -631,12 +641,12 @@ class PrepareScreen(Screen):
             self.stage, self.bundle = "review", job.value
         self.bar = 0
 
-    def begin_approval(self):
+    def begin_approval(self, mode=None):
         age = time.time() - self.bundle.created
         if age > PLAN_MAX_AGE:
             self.note = f"The plan was read {ago(age)[:-4]} ago and the fleet may have changed. Read it again before approving."
             return
-        self.note, self.typed, self.stage, self.offset = "", "", "approving", 0
+        self.note, self.typed, self.stage, self.offset, self.mode = "", "", "approving", 0, mode
 
     def run(self):
         """Typed APPROVE: carry out exactly the plan that was read."""
@@ -644,58 +654,48 @@ class PrepareScreen(Screen):
         if time.time() - bundle.created > PLAN_MAX_AGE:
             self.stage, self.note = "review", "That plan is now too old to approve. Read it again."
             return
-        plan, args, session = bundle.plan, self.args, self.shell.session
-
-        def approve(journal_path):
-            return cli._new_approval(plan["hash"], plan["serials"], [], journal_path, "typed APPROVE on the prepare screen")
+        args, approve = self.args, self.approver()
+        self.prepare_run_args(args)
         self.stage, self.note, self.offset, self.lines = "running", "", 0, []
-        where = session.profile.name if session.profile else session.address.strip()
-        self.job = self.shell.start_job(f"Prepare ({where})", lambda: self.shell.prepare_execute(args, bundle, approve), self._ran, changes=True)
+        execute = getattr(self.shell, f"{self.verb}_execute")
+        self.job = self.shell.start_job(f"{self.verb.capitalize()} ({self.where()})", lambda: execute(args, bundle, approve), self._ran, changes=True)
 
     def rehearse(self):
         """A dry run: the same steps against a model of the fleet. Nothing is sent to any firewall and nothing is asked."""
         session = self.shell.session
-        args = session.args_for("prepare", "--target", session.target.strip(), "--dry-run")
+        args = session.args_for(self.verb, "--target", session.target.strip(), "--dry-run", *self.extra_args())
         self.args, self.stage, self.note, self.offset, self.lines = args, "running", "", 0, []
-        where = session.profile.name if session.profile else session.address.strip()
-        self.job = self.shell.start_job(f"Prepare rehearsal ({where})", lambda: self.shell.run_command(args), self._ran)
+        self.job = self.shell.start_job(f"{self.verb.capitalize()} rehearsal ({self.where()})", lambda: self.shell.run_command(args), self._ran)
 
     def _ran(self, job):
         if self.job is not job or self.stage != "running":
             return
         self.stage, self.lines, self.offset, self.result, self.finished = "done", job.text.rstrip("\n").split("\n"), 0, job.code, time.time()
-        self.bundle, self.bar = None, 0
-        for name in ("report", "plan"):
-            self.shell.screens[name].reset()               # the fleet has changed, so what was read before is out of date
-
-    def execute_nothing_to_prepare(self):
-        """Nothing needs preparing: go straight on to the upgrade review and kit, which change no firewall."""
-        self.run()
+        self.bundle, self.bar, self.mode = None, 0, None
+        for name in ("report", "plan", "prepare", "upgrade"):
+            if self.shell.screens[name] is not self:
+                self.shell.screens[name].reset()           # the fleet has changed, so what was read before is out of date
 
     # -- drawing
     def buttons(self):
         if self.stage == "review":
-            tasks = bool(self.bundle and self.bundle.plan["serials"])
-            return [("Approve and run..." if tasks else "Continue to the upgrade kit", self.begin_approval if tasks else self.run),
-                    ("Rehearse (dry run)", self.rehearse), ("Read the plan again", self.read_plan), ("Home", None)]
+            return self.review_buttons()
         if self.stage == "running":
-            return [("Home (it keeps running)", None)]
+            return self.running_buttons()
         if self.stage in ("done", "failed", "idle"):
             return [("Read the plan again" if self.stage != "idle" else "Read the plan", self.read_plan), ("Home", None)]
         return [("Home", None)]
 
     def body(self):
         if self.stage == "approving":
-            from . import prepare as prepare_mod
-            plan = self.bundle.plan
-            return [cli._prepare_heading(plan), ""] + [f"  {line}" for line in prepare_mod.describe(plan)]
+            return self.approval_body()
         if self.stage == "running" and self.job is not None:
             text = self.job.live().rstrip("\n")
             return text.split("\n") if text else []
         return self.lines
 
     def render(self, width, height):
-        lines = [[("bold", " panupgrade - prepare")]] + (wrapped("dim", self.INTRO, width) if height >= 24 else [])
+        lines = [[("bold", f" panupgrade - {self.verb}")]] + (wrapped("dim", self.INTRO, width) if height >= 24 else [])
         if self.note:
             lines += wrapped("error", self.note, width)
         spin = SPIN[int(time.monotonic() * 4) % 4]
@@ -703,15 +703,11 @@ class PrepareScreen(Screen):
         if self.stage == "reading":
             lines.append([("warn", f" {spin} reading the fleet and building the plan... {job.elapsed()}s {job.latest()}")])
         elif self.stage == "review":
-            tasks = len(self.bundle.plan["serials"])
-            lines.append([("ok", f" Plan read at {clock(self.bundle.created)} ({ago(time.time() - self.bundle.created)}): "
-                                 + (f"{tasks} firewall{'s' if tasks != 1 else ''} to prepare. Nothing has been changed yet." if tasks
-                                    else "nothing to prepare. Nothing has been changed.")),
-                          ("dim", f"   {self.bundle.label}")])
+            lines += wrapped(*self.summary(), width)
         elif self.stage == "approving":
             lines.append([("warn", " Nothing starts until you type APPROVE below. Esc goes back without doing anything.")])
         elif self.stage == "running":
-            lines.append([("warn", f" {spin} {'preparing' if job.changes else 'rehearsing'}... {job.elapsed()}s {job.latest()}"),
+            lines.append([("warn", f" {spin} {'running' if job.changes else 'rehearsing'}... {job.elapsed()}s {job.latest()}"),
                           ("dim", "   leaving this screen does not stop it; Alt-J shows it")])
         elif self.stage == "done":
             ok = not self.result
@@ -720,14 +716,10 @@ class PrepareScreen(Screen):
         elif self.stage == "failed":
             lines.append([("error", " The plan could not be built; the reason is below.")])
         lines.append([])
-        footer = []
         if self.stage == "approving":
             footer = [[("bold", " Type APPROVE to go ahead: "), ("focus", f"[{self.typed}_]".ljust(14)), ("dim", "   Enter confirms, Esc goes back")]]
         else:
-            bar = [("", " ")]
-            for n, (label, _action) in enumerate(self.buttons()):
-                bar += [("focus" if self.bar == n else "bold", f"[ {label} ]"), ("", "  ")]
-            footer = [bar]
+            footer = self._bar_lines(width)
         body_lines = self._wrap_all(self.body(), width - 3)
         lines = lines[:max(height - len(footer) - 4, 2)]
         room = max(height - len(lines) - len(footer) - 1, 3)
@@ -740,6 +732,18 @@ class PrepareScreen(Screen):
         lines += [[]] * max(height - len(lines) - len(footer), 0)
         lines += footer
         return [cut(line, width - 1) for line in lines[:height]]
+
+    def _bar_lines(self, width):
+        """The buttons, wrapped onto as many lines as the window needs."""
+        rows, row, used = [], [("", " ")], 1
+        for n, (label, _action) in enumerate(self.buttons()):
+            piece = f"[ {label} ]"
+            if used + len(piece) + 2 > width - 1 and used > 1:
+                rows.append(row)
+                row, used = [("", " ")], 1
+            row += [("focus" if self.bar == n else "bold", piece), ("", "  ")]
+            used += len(piece) + 2
+        return rows + [row]
 
     @staticmethod
     def _wrap_all(lines, width):
@@ -775,7 +779,8 @@ class PrepareScreen(Screen):
         elif key in ("right", "tab"):
             self.bar = min(self.bar + 1, len(self.buttons()) - 1)
         elif key in ("enter", " "):
-            action = self.buttons()[min(self.bar, len(self.buttons()) - 1)][1]
+            buttons = self.buttons()
+            action = buttons[min(self.bar, len(buttons) - 1)][1]
             if action is None:
                 return "home"
             self.bar = 0
@@ -801,6 +806,148 @@ class PrepareScreen(Screen):
         elif len(key) == 1 and key.isprintable():
             self.typed += key
         return None
+
+
+class PrepareScreen(ChangeScreen):
+    name, title, verb = "prepare", "prepare", "prepare"
+    INTRO = ("Gets the firewalls ready ahead of the window: brings HA members' content level, forces a passive member's configuration to "
+             "match its active, and downloads the images for the target. It changes the firewalls, so nothing starts until you have read the "
+             "plan and typed APPROVE. It never installs PAN-OS, reboots or fails anything over.")
+
+    def tasks(self):
+        return bool(self.bundle and self.bundle.plan["serials"])
+
+    def approval_body(self):
+        from . import prepare as prepare_mod
+        plan = self.bundle.plan
+        return [cli._prepare_heading(plan), ""] + [f"  {line}" for line in prepare_mod.describe(plan)]
+
+    def approver(self):
+        plan = self.bundle.plan
+        return lambda journal_path: cli._new_approval(plan["hash"], plan["serials"], [], journal_path, "typed APPROVE on the prepare screen")
+
+    def summary(self):
+        count = len(self.bundle.plan["serials"])
+        return "ok", (f"Plan read at {clock(self.bundle.created)} ({ago(time.time() - self.bundle.created)}), {self.bundle.label}: "
+                      + (f"{count} firewall{'s' if count != 1 else ''} to prepare. Nothing has been changed yet." if count
+                         else "nothing to prepare. Nothing has been changed."))
+
+    def review_buttons(self):
+        tasks = self.tasks()
+        return [("Approve and run..." if tasks else "Continue to the upgrade kit", self.begin_approval if tasks else self.run),
+                ("Rehearse (dry run)", self.rehearse), ("Read the plan again", self.read_plan), ("Home", None)]
+
+    def status(self):
+        if self.stage == "reading":
+            return "warn", "reading the plan..."
+        if self.stage == "review":
+            count = len(self.bundle.plan["serials"])
+            return "warn", (f"plan ready: {count} firewall{'s' if count != 1 else ''} to prepare - waiting for your approval" if count
+                            else "plan ready: nothing to prepare")
+        if self.stage == "approving":
+            return "warn", "waiting for you to type APPROVE"
+        if self.stage == "running":
+            return "warn", "RUNNING - changing firewalls now"
+        if self.stage == "done":
+            return ("ok" if not self.result else "error"), f"finished at {clock(self.finished, False)}" + ("" if not self.result else f" with an error (code {self.result})")
+        return "dim", "not started - open this to read the plan"
+
+
+class UpgradeScreen(ChangeScreen):
+    name, title, verb = "upgrade", "upgrade", "upgrade"
+    INTRO = ("Upgrades the chosen firewalls. An HA pair is one unit and the passive member goes first; each member is backed up, installed, "
+             "rebooted and checked, and the run stops by itself after too many failures. It reboots real firewalls, so nothing starts until you "
+             "have read the plan and typed APPROVE. Stop lets the steps in progress finish and starts nothing new; a stopped run can be continued.")
+
+    def __init__(self, shell):
+        super().__init__(shell)
+        self.standalone = False
+
+    def extra_args(self):
+        return ["--accept-standalone-outage"] if self.standalone else []
+
+    def tasks(self):
+        return bool(self.bundle and self.bundle.ready())
+
+    def toggle_standalone(self):
+        self.standalone = not self.standalone
+        self.reset()
+        self.read_plan()
+
+    def stop(self):
+        if self.bundle is not None and self.stage == "running":
+            self.bundle.stop.set()
+            self.note = ("Stopping: steps already going will finish and nothing new starts. The journal records where it got to; "
+                         "read the plan again later to continue it.")
+
+    def running_buttons(self):
+        if self.job is not None and self.job.changes and self.bundle is not None:
+            return [("Stop after the steps in progress", self.stop), ("Home (it keeps running)", None)]
+        return [("Home (it keeps running)", None)]
+
+    def prepare_run_args(self, args):
+        if self.bundle.previous:
+            if self.mode == "resume":
+                args.resume = True
+            else:
+                args.fresh = True
+
+    def approval_body(self):
+        bundle, plan = self.bundle, self.bundle.plan
+        names = {d["serial"]: d["hostname"] for d in plan["devices"]}
+        ready = bundle.ready()
+        out = ["Approval needed. You are being asked to approve exactly this:"]
+        if bundle.label == "LIVE":
+            out.append("LIVE: this changes real firewalls. Each member is rebooted; an HA pair fails over, passive member first.")
+        out += [""] + [f"  {d['hostname']} ({d['serial']}) {d['ha_state'] or 'standalone'}  {d['current_version']} -> {plan['target']}" for d in ready]
+        s = plan["summary"]
+        out += ["", f"  {s['outage_steps']} outage step(s) and {s['failover_steps']} HA failover(s)."]
+        for n, batch in enumerate(plan["order"], 1):
+            out.append(f"  batch {n}: " + "; ".join(" then ".join(names[x] for x in unit) for unit in batch))
+        if plan["cautions"]:
+            out += ["", "Cautions that approving acknowledges:"]
+            out += [f"  [{c['code']}] {'whole fleet' if c['scope'] == 'fleet' else names.get(c['scope'], c['scope'])}: {c['text']}" for c in plan["cautions"]]
+        if bundle.previous:
+            out += ["", ("Continues the earlier run " if self.mode == "resume" else "Starts a NEW run, leaving the earlier one ") + f"{bundle.previous[0]} ({bundle.previous[1]})."]
+        return out
+
+    def approver(self):
+        bundle = self.bundle
+        plan, serials, acks = bundle.plan, [d["serial"] for d in bundle.ready()], bundle.acks()
+        return lambda journal_path: cli._new_approval(plan["hash"], serials, acks, journal_path, "typed APPROVE on the upgrade screen")
+
+    def summary(self):
+        s = self.bundle.plan["summary"]
+        line = (f"Plan read at {clock(self.bundle.created)} ({ago(time.time() - self.bundle.created)}), {self.bundle.label}: {s['ready']} ready, "
+                f"{s['caution']} need acknowledgement, {s['blocked']} blocked, {s['skipped']} not planned. Nothing has been changed yet.")
+        return ("ok" if self.tasks() else "error"), line + ("" if self.tasks() else " Nothing is ready to upgrade.")
+
+    def review_buttons(self):
+        standalone = ("Standalone firewalls: included (each is OFFLINE while it reboots)" if self.standalone else "Standalone firewalls: left out")
+        out = []
+        if self.tasks():
+            if self.bundle.previous:
+                out += [("Approve and CONTINUE the earlier run...", lambda: self.begin_approval("resume")),
+                        ("Approve and start a NEW run...", lambda: self.begin_approval("fresh"))]
+            else:
+                out += [("Approve and run...", self.begin_approval)]
+            out += [("Rehearse (dry run)", self.rehearse)]
+        return out + [(standalone, self.toggle_standalone), ("Read the plan again", self.read_plan), ("Home", None)]
+
+    def status(self):
+        if self.stage == "reading":
+            return "warn", "reading the plan..."
+        if self.stage == "review":
+            s = self.bundle.plan["summary"]
+            return ("warn" if self.tasks() else "error"), (f"plan ready: {s['ready'] + s['caution']} to upgrade, {s['blocked']} blocked - waiting for your approval"
+                                                           if self.tasks() else f"plan ready: nothing is ready ({s['blocked']} blocked)")
+        if self.stage == "approving":
+            return "warn", "waiting for you to type APPROVE"
+        if self.stage == "running":
+            return "warn", "RUNNING - upgrading firewalls now"
+        if self.stage == "done":
+            return ("ok" if not self.result else "error"), f"finished at {clock(self.finished, False)}" + ("" if not self.result else f" with an error (code {self.result})")
+        return "dim", "not started - open this to read the plan"
 
 
 def job_lines(job, width, recent=0):
@@ -1008,12 +1155,15 @@ class Shell:
     titles = {"auth": "Sign in", "select": "Choose firewalls", "report": "Fleet report", "plan": "Plan the upgrade",
               "prepare": "Prepare", "upgrade": "Upgrade", "settings": "Settings", "releases": "PAN-OS releases", "jobs": "Jobs"}
 
-    def __init__(self, session, run_command=None, read_devices=None, prepare_review=None, prepare_execute=None):
+    def __init__(self, session, run_command=None, read_devices=None, prepare_review=None, prepare_execute=None,
+                 upgrade_review=None, upgrade_execute=None):
         self.session = session
         self.run_command = run_command or self._run_command
         self.read_devices = read_devices or self._read_devices
         self.prepare_review = prepare_review or self._prepare_review
         self.prepare_execute = prepare_execute or self._prepare_execute
+        self.upgrade_review = upgrade_review or self._upgrade_review
+        self.upgrade_execute = upgrade_execute or self._upgrade_execute
         self.message, self.note, self._armed, self.after_sign_in = "", "", None, None
         self._quit_armed, self._quit_key, self._pressed = False, "", ""
         self.jobs = []
@@ -1025,7 +1175,7 @@ class Shell:
             "plan": JobScreen(self, "plan", "plan the upgrade", "plan", needs_target=True,
                               intro="What would an upgrade do to each firewall, and why? Read-only: nothing is changed."),
             "prepare": PrepareScreen(self),
-            "upgrade": StaticScreen(self, "upgrade", "upgrade", lambda: self._not_yet("upgrade")),
+            "upgrade": UpgradeScreen(self),
             "settings": FormScreen(self, "settings", "settings", self._settings_form),
             "releases": JobScreen(self, "releases", "PAN-OS releases", "releases", needs_address=False,
                                   intro="The list of PAN-OS releases used to count minor versions."),
@@ -1105,7 +1255,8 @@ class Shell:
         if self._quit_armed == how:
             return True
         self._quit_armed, self._quit_key = how, self._pressed
-        self.message = ("Prepare is changing firewalls. Quitting now leaves a step unfinished (it is recorded; --resume continues it). "
+        what = " and ".join(job.title.split(" (")[0] for job in self.changing())
+        self.message = (f"{what} is changing firewalls. Quitting now leaves a step unfinished (it is recorded; --resume continues it). "
                         "Press the same key again to quit anyway.")
         return False
 
@@ -1252,23 +1403,10 @@ class Shell:
         return ("warn", f"running for {session.target}...") if job else ("dim", f"not run yet for {session.target}")
 
     def _status_prepare(self, session):
-        screen = self.screens["prepare"]
-        if screen.stage == "reading":
-            return "warn", "reading the plan..."
-        if screen.stage == "review":
-            tasks = len(screen.bundle.plan["serials"])
-            return "warn", (f"plan ready: {tasks} firewall{'s' if tasks != 1 else ''} to prepare - waiting for your approval" if tasks
-                            else "plan ready: nothing to prepare")
-        if screen.stage == "approving":
-            return "warn", "waiting for you to type APPROVE"
-        if screen.stage == "running":
-            return "warn", "RUNNING - changing firewalls now"
-        if screen.stage == "done":
-            return ("ok" if not screen.result else "error"), f"finished at {clock(screen.finished, False)}" + ("" if not screen.result else f" with an error (code {screen.result})")
-        return "dim", "not started - open this to read the plan"
+        return self.screens["prepare"].status()
 
     def _status_upgrade(self, session):
-        return "dim", "not on this screen yet: use the command line"
+        return self.screens["upgrade"].status()
 
     def _status_settings(self, session):
         path = session.ws(cli.DEFAULT_SETTINGS)
@@ -1295,14 +1433,6 @@ class Shell:
         except Exception as exc:
             return None, f"cannot open the settings: {exc}"
 
-    def _not_yet(self, step):
-        profile, target = self.session.profile, self.session.target.strip() or "<version>"
-        where = f"--profile {profile.name}" if profile else f"--panorama {self.session.address.strip() or '<panorama>'}"
-        what = "run the upgrade"
-        return (f"This step is not on the screen yet. Until it is, it runs from the command line, where you type APPROVE to confirm it.\n\n"
-                f"To {what}:\n\n    panupgrade {step} {where} --target {target}\n\n"
-                f"It uses {cli.DEFAULT_LIST} for the firewalls and the same sign-in and settings you have just set up.")
-
     @staticmethod
     def _run_command(args):
         return args.func(args)
@@ -1311,13 +1441,25 @@ class Shell:
     def _prepare_review(args):
         """Read the fleet and build the prepare plan (changes nothing). A PrepareBundle, or an exit code when it failed."""
         style = cli._style(args)
-        return cli._guarded_prepare(style, lambda: cli._prepare_review(args, style))
+        return cli._guarded(style, lambda: cli._prepare_review(args, style))
+
+    @staticmethod
+    def _upgrade_review(args):
+        """Read the fleet and build the upgrade plan, printing it as `plan` does (changes nothing). An UpgradeBundle, or an exit code."""
+        style = cli._style(args)
+        return cli._guarded(style, lambda: cli._upgrade_review(args, style, show=True))
+
+    @staticmethod
+    def _upgrade_execute(args, bundle, approve):
+        """Carry out the plan that was read and approved. An exit code."""
+        style = cli._style(args)
+        return cli._guarded(style, lambda: cli._upgrade_execute(args, style, bundle, approve))
 
     @staticmethod
     def _prepare_execute(args, bundle, approve):
         """Carry out the plan that was read and approved. An exit code."""
         style = cli._style(args)
-        return cli._guarded_prepare(style, lambda: cli._prepare_execute(args, style, bundle, approve))
+        return cli._guarded(style, lambda: cli._prepare_execute(args, style, bundle, approve))
 
     @staticmethod
     def _read_devices(args):

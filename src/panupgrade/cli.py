@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from datetime import date, datetime, timezone
 from dataclasses import asdict
@@ -714,59 +715,83 @@ def _backend_and_source(args):
     return SimBackend(data, fail=fail), fleet, label
 
 
+class UpgradeBundle:
+    """What the review of an upgrade found, kept for the run that follows: the plan, the connection to carry it out, and any earlier run of
+    this exact plan that did not finish. ``stop`` asks the run to start nothing new (steps already going finish)."""
+
+    def __init__(self, plan, settings, backend, fleet, label, previous):
+        self.plan, self.settings, self.backend, self.fleet, self.label, self.previous = plan, settings, backend, fleet, label, previous
+        self.created, self.stop = time.time(), threading.Event()
+
+    def ready(self):
+        return [d for d in self.plan["devices"] if d["verdict"] in ("ready", "caution")]
+
+    def acks(self):
+        return [f"{c['scope']}:{c['code']}" for c in self.plan["cautions"]]
+
+
 def _upgrade(args):
     style = _style(args)
+    return _guarded(style, lambda: _upgrade_execute(args, style, _upgrade_review(args, style)))
+
+
+def _upgrade_review(args, style, show=False):
+    """Read the fleet and build the upgrade plan. Changes nothing. With ``show`` the plan is printed as `plan` prints it."""
+    backend, fleet, label = _backend_and_source(args)
+    plan, settings = _build(args, fleet)
+    runs = Path(args.runs_dir) if args.runs_dir else _ws(args, "runs")
+    previous = None if args.dry_run else _unfinished_run(runs, "upgrade", plan)
+    if show:
+        sys.stdout.write(console.render_plan(plan, style))
+        if previous is not None:
+            print()
+            print(style.line("warn", f"an earlier run of this exact plan did not finish: {previous[1]} ({previous[2]})"))
+    return UpgradeBundle(plan, settings, backend, fleet, label, previous and (str(previous[1]), previous[2]))
+
+
+def _upgrade_execute(args, style, bundle, approve=None):
+    """Carry out a reviewed upgrade. ``approve(journal_path)`` returns the Approval (or None to stop); by default the person is asked at the terminal.
+    When it is given the journal is chosen first, so the approval is recorded next to it, and the keyboard is never read."""
+    plan, settings, backend, label = bundle.plan, bundle.settings, bundle.backend, bundle.label
+    approval = None
+    if args.dry_run and not args.approval:
+        approval = approval_mod.Approval(plan["hash"], [d["serial"] for d in bundle.ready()], bundle.acks(),
+                                         "dry run: nothing changes, so nothing was asked", "")
+        print(style.line("info", "dry run: nothing changes, so no approval is asked"))
+    elif args.approval:
+        approval = approval_mod.Approval.from_file(args.approval)
+        _print_cautions(style, plan, "Proceeding on the approval's acceptance of these cautions:", approval.acks)
+    elif approve is None:
+        ready = bundle.ready()
+        approval = _interactive_approval(
+            style, plan["hash"], [d["serial"] for d in ready], bundle.acks(),
+            [f"{d['hostname']} ({d['serial']})  {d['current_version']} -> {plan['target']}" for d in ready], args.journal,
+            [f"[{c['code']}] {c['scope']}: {c['text']}" for c in plan["cautions"]])
+        if approval is None:
+            print("No approval given. Run `panupgrade prepare` first (it writes the approval and a run script), "
+                  "or re-run this in a terminal and type APPROVE, or pass --approval FILE.")
+            return 3
+    journal_path, resuming = _choose_journal(args, plan, "upgrade", style, tty=None if approve is None else False)
+    if approval is None:
+        approval = approve(journal_path)
+        if approval is None:
+            return 3
+    journal = (Journal.resume if resuming else Journal.create)(journal_path, plan["hash"])
+    print(style.line("info", f"journal: {journal_path}" + (" (continuing)" if resuming else "")))
+    names = {d["serial"]: d["hostname"] for d in plan["devices"]}
+    journal.listener, close_view = _listener(style, names, [s for batch in plan["order"] for unit in batch for s in unit], settings)
+    if label == "LIVE":
+        print(style.line("stop", f"LIVE RUN - this will change real firewalls: {len(plan['order'])} batch(es), journal {journal_path}"))
+    else:
+        print(style.line("info", f"{label} - no write command is sent to any real device; the run is rehearsed against a model"
+                         + (" seeded from live state" if label == "DRY RUN" else "")))
     try:
-        backend, fleet, label = _backend_and_source(args)
-        plan, settings = _build(args, fleet)
-        if args.dry_run and not args.approval:
-            approval = approval_mod.Approval(plan["hash"], [d["serial"] for d in plan["devices"] if d["verdict"] in ("ready", "caution")],
-                                             [f"{c['scope']}:{c['code']}" for c in plan["cautions"]], "dry run: nothing changes, so nothing was asked", "")
-            print(style.line("info", "dry run: nothing changes, so no approval is asked"))
-        elif args.approval:
-            approval = approval_mod.Approval.from_file(args.approval)
-            _print_cautions(style, plan, "Proceeding on the approval's acceptance of these cautions:", approval.acks)
-        else:
-            ready = [d for d in plan["devices"] if d["verdict"] in ("ready", "caution")]
-            approval = _interactive_approval(
-                style, plan["hash"], [d["serial"] for d in ready], [f"{c['scope']}:{c['code']}" for c in plan["cautions"]],
-                [f"{d['hostname']} ({d['serial']})  {d['current_version']} -> {plan['target']}" for d in ready], args.journal,
-                [f"[{c['code']}] {c['scope']}: {c['text']}" for c in plan["cautions"]])
-            if approval is None:
-                print("No approval given. Run `panupgrade prepare` first (it writes the approval and a run script), "
-                      "or re-run this in a terminal and type APPROVE, or pass --approval FILE.")
-                return 3
-        journal_path, resuming = _choose_journal(args, plan, "upgrade", style)
-        journal = (Journal.resume if resuming else Journal.create)(journal_path, plan["hash"])
-        print(style.line("info", f"journal: {journal_path}" + (" (continuing)" if resuming else "")))
-        names = {d["serial"]: d["hostname"] for d in plan["devices"]}
-        journal.listener, close_view = _listener(style, names, [s for batch in plan["order"] for unit in batch for s in unit], settings)
-        if label == "LIVE":
-            print(style.line("stop", f"LIVE RUN - this will change real firewalls: {len(plan['order'])} batch(es), journal {journal_path}"))
-        else:
-            print(style.line("info", f"{label} - no write command is sent to any real device; the run is rehearsed against a model"
-                             + (" seeded from live state" if label == "DRY RUN" else "")))
-        try:
-            result = executor.run(plan, approval, backend, journal, settings)
-        except executor.ExecutionRefused:
-            _discard_if_empty(journal, resuming)
-            raise
-        finally:
-            close_view()
-    except KeyboardInterrupt:
-        print(style.line("stop", "stopped by you (Ctrl-C). The step in progress, if any, is marked started-but-unfinished in the "
-                                 "journal: check that device, then continue with --resume. Nothing was undone."), file=sys.stderr)
-        return 130
-    except executor.ExecutionRefused as exc:
-        print(style.line("stop", "refused:"), file=sys.stderr)
-        for problem in exc.problems:
-            print(problem if problem.startswith(" ") else f"  - {problem}", file=sys.stderr)
-        print(style.line("info", "nothing was changed and no journal was left behind, so the same command can simply be run again once the plan is re-approved"),
-              file=sys.stderr)
-        return 3
-    except (settings_mod.SettingsError, PlanError, SourceError, JournalError, OSError, ValueError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
+        result = executor.run(plan, approval, backend, journal, settings, stop=bundle.stop)
+    except executor.ExecutionRefused:
+        _discard_if_empty(journal, resuming)
+        raise
+    finally:
+        close_view()
     sys.stdout.write(console.render_outcomes(result, names, style))
     return 0 if result["failures"] == 0 else 1
 
@@ -779,8 +804,8 @@ class PrepareBundle:
         self.created = time.time()
 
 
-def _guarded_prepare(style, fn):
-    """Run one phase of prepare and turn the trouble a person can act on into a message and an exit code."""
+def _guarded(style, fn):
+    """Run one phase of prepare or upgrade and turn the trouble a person can act on into a message and an exit code."""
     try:
         return fn()
     except KeyboardInterrupt:
@@ -794,14 +819,14 @@ def _guarded_prepare(style, fn):
         print(style.line("info", "nothing was changed and no journal was left behind, so the same command can simply be run again once the plan is re-approved"),
               file=sys.stderr)
         return 3
-    except (settings_mod.SettingsError, prepare_mod.PrepareError, SourceError, JournalError, OSError, ValueError) as exc:
+    except (settings_mod.SettingsError, prepare_mod.PrepareError, PlanError, SourceError, JournalError, OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
 
 def _prepare(args):
     style = _style(args)
-    return _guarded_prepare(style, lambda: _prepare_execute(args, style, _prepare_review(args, style)))
+    return _guarded(style, lambda: _prepare_execute(args, style, _prepare_review(args, style)))
 
 
 def _prepare_heading(plan):

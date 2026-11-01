@@ -1648,6 +1648,67 @@ class TheRunFirewallByFirewall(ShellCase):
         self.assertNotIn("View: combined output", self.text(ui, 130, 30))
 
 
+class StagesInPlainWords(ShellCase):
+    """The headline beside the spinner names the stage ("Reading firewall 3 of 6: e2"), not the command behind it."""
+
+    def slow(self, review=False):
+        gate, shown = threading.Event(), threading.Event()
+
+        def work(args, *rest):
+            progress.say("asking firewall SIM0001: show session info")
+            progress.phase("Reading firewall 1 of 2: fw-east-1")
+            progress.say("asking firewall SIM0001: show system info")
+            shown.set()
+            gate.wait(3)
+            return FakeBundle() if review else 0
+        return gate, shown, work
+
+    def test_the_report_headline_is_the_stage_and_the_raw_calls_stay_in_the_jobs_log(self):
+        gate, shown, work = self.slow()
+        ui = self.make(run=work)
+        ui.press("alt-r"); ui.press("enter"); shown.wait(3)
+        text = self.text(ui)
+        self.assertIn("Reading firewall 1 of 2: fw-east-1", text)
+        self.assertNotIn("show session info", text)
+        self.assertNotIn("show system info", text)
+        ui.press("alt-j")
+        self.assertIn("show session info", self.text(ui, 130, 24))      # the detail is one Tab away
+        gate.set(); wait(ui)
+
+    def test_reading_the_plan_on_prepare_and_upgrade_says_the_same_in_the_same_words(self):
+        for key, make in (("alt-5", "review"), ("alt-6", "up_review")):
+            gate, shown, work = self.slow(review=True)
+            ui = self.make(**{make: work})
+            ui.press(key); ui.press("enter"); shown.wait(3)
+            text = self.text(ui)
+            self.assertIn("Reading firewall 1 of 2: fw-east-1", text)
+            self.assertNotIn("show session info", text)
+            gate.set(); wait(ui)
+
+    def test_the_pane_shows_the_stages_not_every_call_while_it_runs(self):
+        gate, shown, work = self.slow()
+        ui = self.make(run=work)
+        ui.press("alt-r"); ui.press("enter"); shown.wait(3); ui.press("alt-h")
+        pane = self.text(ui, 140, 30)
+        self.assertIn("Reading firewall 1 of 2: fw-east-1", pane)
+        self.assertNotIn("show session info", pane)
+        gate.set(); wait(ui)
+
+    def test_abort_is_noticed_at_the_next_stage_too(self):
+        go, ready = threading.Event(), threading.Event()
+
+        def work(args):
+            ready.set()
+            go.wait(3)
+            progress.phase("Reading firewall 2 of 2: fw-east-2")        # never reached: the person pressed Abort first
+            return 0
+        ui = self.make(run=work)
+        ui.press("alt-r"); ui.press("enter"); ready.wait(3)
+        ui.press("enter")                                                # Abort
+        go.set(); wait(ui)
+        self.assertTrue(ui.jobs[0].aborted)
+
+
 class WhatTheWorkerThreadsPrint(unittest.TestCase):
     """The run's events are printed by the executor's own threads, not the job's; they must still reach the job's screen."""
 

@@ -96,14 +96,20 @@ def snapshot(source, include=None):
     Devices that cannot be read keep ``connected`` as reported and carry a ``collect_error``; nothing is invented.
     """
     from dataclasses import asdict
-    devices = []
-    for ref in source.list_devices():
+    from . import progress
+    progress.phase("Asking Panorama for the list of firewalls")
+    refs = source.list_devices()
+    total = sum(1 for r in refs if r.connected and (include is None or r.serial in include))
+    devices, read = [], 0
+    for ref in refs:
         entry = {"serial": ref.serial, "hostname": ref.hostname, "model": ref.model, "sw_version": ref.sw_version,
                  "connected": ref.connected, "device_group": ref.device_group, "tags": list(ref.tags),
                  "ha_state": ref.ha_state, "peer_serial": ref.peer_serial}
         if include is not None and ref.serial not in include:
             entry["facts"] = {}          # not selected and not a selected device's HA peer: never read
         elif ref.connected:
+            read += 1
+            progress.phase(f"Reading firewall {read} of {total}: {ref.hostname}")
             try:
                 entry["facts"] = {k: v for k, v in asdict(source.facts(ref.serial)).items() if v is not None}
             except SourceError as exc:
@@ -111,4 +117,5 @@ def snapshot(source, include=None):
         else:
             entry["facts"] = {}
         devices.append(entry)
+    progress.phase("Reading Panorama's version")
     return {"panorama": {"version": source.panorama_version()}, "devices": devices}

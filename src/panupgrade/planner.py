@@ -19,7 +19,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from . import __version__, checks, paths
+from . import __version__, checks, paths, progress
 from .model import (ERROR, EXCLUDED, FAIL, INFO, NO_DATA, NOT_APPLICABLE, SKIP, WARN, CheckResult)
 from .sources import SourceError
 from .versions import Version, VersionError
@@ -101,12 +101,16 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
 
     devices = {}
     ctxs = {}
+    wanted = sum(1 for r in refs if selection.matches(r))
+    checked = 0
     for ref in refs:
         if not selection.matches(ref):
             devices[ref.serial] = _device(ref, "skipped", [CheckResult("selection", SKIP, "not in the selection", kind=EXCLUDED)],
                                           skip_kind=EXCLUDED)
             continue
         facts, error = None, ""
+        checked += 1
+        progress.phase(f"Checking firewall {checked} of {wanted}: {ref.hostname}")
         if ref.connected:
             try:
                 facts = source.facts(ref.serial)

@@ -133,7 +133,8 @@ class Job:
         self.started, self.finished, self.text, self.code, self.value = time.monotonic(), None, "", None, None
         self.began = time.time()
         self.stage = ""                                   # the latest words from progress.say
-        self.activity = []                                # every progress note, with the time: [(HH:MM:SS, words)]
+        self.activity = []                                # every progress note, with the time: [(HH:MM:SS, words, is a stage)]
+        self.phase_text = ""                              # the named stage it is in now ("Reading firewall 3 of 6: e2")
         self.abort_requested = False
         self._out, self._err = io.StringIO(), io.StringIO()
         self._fn = fn
@@ -150,18 +151,22 @@ class Job:
     def aborted(self):
         return self.abort_requested and self.code == 130
 
-    def _note(self, text):
+    def _note(self, text, is_stage=False):
         if self.abort_requested:
             raise progress.Aborted()
         self.stage = text
         if not self.activity or self.activity[-1][1] != text:
-            self.activity.append((time.strftime("%H:%M:%S"), text))
+            self.activity.append((time.strftime("%H:%M:%S"), text, is_stage))
             del self.activity[:-LOG_LIMIT]
+
+    def _phase(self, text):
+        self._note(text, True)
+        self.phase_text = text
 
     def _run(self):
         out, err = self._out, self._err
         _capture_start(out, err)
-        progress.listen(self._note)
+        progress.listen(self._note, self._phase)
         progress.set_output(out)
         try:
             self.value = self._fn()
@@ -201,15 +206,22 @@ class Job:
 
     def log(self, stamps=True):
         """The whole history: what it was doing (with the time, unless ``stamps`` is off), in order, then everything it printed."""
-        lines = [f"{when}  {words}" if stamps else words for when, words in self.activity]
+        lines = [f"{when}  {words}" if stamps else words for when, words, _stage in self.activity]
         text = self.live().rstrip("\n")
         if text:
             lines += ([""] if lines else []) + text.split("\n")
         return lines
 
     def recent(self, count=5):
-        """The last few lines of the log that say anything."""
+        """The last few lines of the log that say anything. When the work names its stages those are what is worth seeing, not every call."""
+        stages = [words for _when, words, is_stage in self.activity if is_stage]
+        if stages and self.running:
+            return stages[-count:]
         return [line for line in self.log(stamps=False) if line.strip()][-count:]
+
+    def words(self):
+        """What to show beside the spinner: the stage it is in, else the latest thing it did."""
+        return (self.phase_text if self.running else "") or self.latest()
 
     def latest(self):
         """A few words on what it is doing now (running) or how it ended."""
@@ -452,7 +464,7 @@ class JobScreen(Screen):
             lines += wrapped("dim", "Nothing has been read yet. Press Start to read it; this only reads, it changes nothing.", width)
         if job is not None:
             seen = f"   (the result from {clock(record.when)} stays on show until this finishes)" if record else ""
-            lines.append([("warn", f" {SPIN[int(time.monotonic() * 4) % 4]} working... {job.elapsed()}s {job.latest()}"), ("dim", seen)])
+            lines.append([("warn", f" {SPIN[int(time.monotonic() * 4) % 4]} working... {job.elapsed()}s {job.words()}"), ("dim", seen)])
         elif record is not None:
             ok = not record.code
             lines.append([("" if ok else "error", f" result from {clock(record.when)} ({ago(time.time() - record.when)}), finished in {record.seconds}s"
@@ -558,7 +570,7 @@ class SelectScreen(Screen):
             return self.form.render(width, height, "panupgrade - choose the firewalls")
         lines = [[("bold", " panupgrade - choose the firewalls")], []]
         if self.job is not None and self.job.running:
-            lines.append([("warn", f" {SPIN[int(time.monotonic() * 4) % 4]} reading the firewall list from Panorama... {self.job.elapsed()}s {self.job.latest()}")])
+            lines.append([("warn", f" {SPIN[int(time.monotonic() * 4) % 4]} reading the firewall list from Panorama... {self.job.elapsed()}s {self.job.words()}")])
         elif self.note:
             lines += wrapped("error", self.note, width)
             lines += wrapped("dim", "Alt-H goes home; Alt-A changes how this signs in; Enter tries again.", width)
@@ -771,13 +783,13 @@ class ChangeScreen(Screen):
         spin = SPIN[int(time.monotonic() * 4) % 4]
         job = self.job
         if self.stage == "reading":
-            lines.append([("warn", f" {spin} reading the fleet and building the plan... {job.elapsed()}s {job.latest()}")])
+            lines.append([("warn", f" {spin} {job.elapsed()}s  {job.words() if job.phase_text else 'starting: reading the fleet and building the plan...'}")])
         elif self.stage == "review":
             lines += wrapped(*self.summary(), width)
         elif self.stage == "approving":
             lines.append([("warn", " Nothing starts until you type APPROVE below. Esc goes back without doing anything.")])
         elif self.stage == "running":
-            lines.append([("warn", f" {spin} {'running' if job.changes else 'rehearsing'}... {job.elapsed()}s {job.latest()}"),
+            lines.append([("warn", f" {spin} {'running' if job.changes else 'rehearsing'}... {job.elapsed()}s {job.words()}"),
                           ("dim", "   leaving this screen does not stop it; Alt-J shows it")])
         elif self.stage == "done":
             ok = not self.result
@@ -1176,7 +1188,7 @@ def job_lines(job, width, recent=0):
     what it is doing or how it ended."""
     if job.running:
         head, state = [("warn", ">> "), ("bold", job.title)], [("dim", f"    running {job.elapsed()}s")]
-        tail = [("dim", f"    {job.elapsed()}s  {job.latest()}")]
+        tail = [("dim", f"    {job.elapsed()}s  {job.words()}")]
     elif job.failed:
         head, state = [("error", "!! "), ("bold", job.title)], [("error", f"    failed {clock(job.began, False)}, {job.elapsed()}s")]
         tail = [("error", f"    {clock(job.began, False)}  {job.latest()}")]

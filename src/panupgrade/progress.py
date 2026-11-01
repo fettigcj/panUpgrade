@@ -32,9 +32,17 @@ class Aborted(BaseException):
     raised in work that changes firewalls (that stops at a step boundary instead), because it could land in the middle of a step."""
 
 
-def listen(callback):
-    """Send this thread's progress words to ``callback`` (or stop doing so, with None)."""
-    _local.callback = callback
+def listen(callback, phase=None):
+    """Send this thread's progress words to ``callback``, and the names of its stages to ``phase`` (or stop doing so, with None)."""
+    _local.callback, _local.phase = callback, phase
+
+
+def phase(text):
+    """The work has moved on to a named stage, in plain words ("Reading firewall 3 of 6: e2"). This is what a person watching sees as the
+    headline; the individual calls (``say``) are the detail behind it."""
+    callback = getattr(_local, "phase", None)
+    if callback is not None:
+        callback(text)
 
 
 def say(text):

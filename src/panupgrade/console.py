@@ -185,7 +185,7 @@ class EventPrinter:
         print(f"{self.style.dim(stamp)}  {self.style.glyph(kind)}{self.style.bold(name)}  {text}", file=self.out, flush=True)
 
 
-def render_outcomes(result, names, style):
+def render_outcomes(result, names, style, finished="finished all their steps"):
     mapping = {"done": "ok", "failed": "fail", "held": "held", "needs_attention": "stop", "stopped": "stop",
                "not_started": "skip", "not_approved": "skip"}
     lines = ["", style.bold("Result")]
@@ -198,7 +198,7 @@ def render_outcomes(result, names, style):
             lines += [style.bullet(p) for p in parts]
     done = sum(1 for state, _ in result["outcome"].values() if state == "done")
     upgraded = result.get("upgraded")
-    verdict = (f"{done} of {len(result['outcome'])} firewalls finished all their steps"
+    verdict = (f"{done} of {len(result['outcome'])} firewalls {finished}"
                + (f", {len(upgraded)} are now on the target version" if upgraded is not None else "") + f", {result['failures']} failed")
     if result["stopped"]:
         verdict += ". Stopped early: the failure limit was reached, so nothing further was started"

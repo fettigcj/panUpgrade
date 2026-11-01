@@ -805,6 +805,16 @@ class SelectCommandAndDryRun(unittest.TestCase):
         self.assertIn("by running the generated script", record["approved_by"])
         self.assertIn("running the script is the approval", record["note"])
 
+    def test_the_result_line_does_not_look_like_the_end_when_the_verifications_are_still_to_come(self):
+        code, out, _ = self._prepare_with_typed_answers(["APPROVE"])
+        self.assertEqual(code, 0, out)
+        prepared = out.index("firewalls prepared")
+        ready = out.index("Downloaded and ready to upgrade. Running post-preparation verifications")
+        kit = out.index("the upgrade kit is ready")
+        self.assertLess(prepared, ready)
+        self.assertLess(ready, kit)
+        self.assertNotIn("finished all their steps", out)            # that wording is the upgrade's; a prepare "finishes" only after the kit
+
     def test_declining_the_preparation_writes_no_kit(self):
         code, _, _ = self._prepare_with_typed_answers(["no"])
         self.assertEqual(code, 3)

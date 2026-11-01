@@ -683,6 +683,7 @@ def _backend_and_source(args):
             data = json.load(handle)
         label = "SIMULATION"
     else:
+        progress.phase("Connecting to Panorama")
         live = _source(args)
         refs = live.list_devices()
         chosen = [r for r in refs if _selection(args).matches(r)]
@@ -748,6 +749,7 @@ def _upgrade_review(args, style, show=False):
     """Read the fleet and build the upgrade plan. Changes nothing. With ``show`` the plan is printed as `plan` prints it."""
     backend, fleet, label = _backend_and_source(args)
     plan, settings = _build(args, fleet)
+    progress.phase("Looking for an earlier run of this plan")
     runs = Path(args.runs_dir) if args.runs_dir else _ws(args, "runs")
     previous = None if args.dry_run else _unfinished_run(runs, "upgrade", plan)
     if show:
@@ -894,7 +896,7 @@ def _prepare_execute(args, style, bundle, approve=None):
         result = _prepare_tasks(args, style, plan, names, backend, settings, label, approve, bundle.stop)
         if isinstance(result, int):
             return result
-        sys.stdout.write(console.render_outcomes(result, names, style))
+        sys.stdout.write(console.render_outcomes(result, names, style, finished="prepared"))
     else:
         print(style.line("ok", "nothing to prepare" + ("" if args.target else " (give --target to also pre-download images)")))
     if result is not None and result["failures"]:
@@ -910,6 +912,9 @@ def _prepare_execute(args, style, bundle, approve=None):
         # A failed preparation does not veto the kit: the upgrade plan below is judged on what the firewalls look like NOW.
         print(style.line("warn", "The upgrade batch developed below may not include firewalls that failed to prepare for upgrade properly."))
     if args.target:
+        ready = "" if result is not None and result["failures"] else "Downloaded and ready to upgrade. "
+        print(style.line("info", f"{ready}Running post-preparation verifications: reading the fleet again to check the upgrade plan "
+                                 f"(this takes up to a minute or two)..."))
         return _issue_kit(args, style, label)
     print(style.line("info", "give --target VERSION to also review the upgrade and get its approval and run script"))
     return 0
@@ -954,7 +959,9 @@ def _issue_kit(args, style, label):
         print(style.line("info", f"dry run: after a real prepare you would now see the upgrade to {args.target} as it then stands, "
                                  f"be asked once to acknowledge its cautions, and get the approval and run script in {args.kit_dir}"))
         return 0
+    progress.phase("Post-preparation verifications: reading the fleet again")
     plan, settings = _build(args)
+    progress.phase("Writing the upgrade kit")
     ready = [d for d in plan["devices"] if d["verdict"] in ("ready", "caution")]
     blocked = [d for d in plan["devices"] if d["verdict"] == "blocked"]
     s = plan["summary"]

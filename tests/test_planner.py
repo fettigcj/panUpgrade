@@ -17,6 +17,40 @@ def actions(d):
     return [s["action"] for s in d["steps"]]
 
 
+class StagesWhileThePlanIsBuilt(unittest.TestCase):
+    def test_each_firewall_is_announced_as_it_is_checked(self):
+        from panupgrade import progress
+        heard = []
+        progress.listen(lambda text: None, heard.append)
+        try:
+            plan(fleet(pair("A1", "A2"), device("S1", version="20.1.4")))
+        finally:
+            progress.listen(None)
+        self.assertEqual(heard, ["Checking firewall 1 of 3: a1", "Checking firewall 2 of 3: a2", "Checking firewall 3 of 3: s1"])
+
+    def test_only_the_selected_firewalls_are_counted(self):
+        from panupgrade import progress
+        heard = []
+        progress.listen(lambda text: None, heard.append)
+        try:
+            plan(fleet(pair("A1", "A2"), device("S1", version="20.1.4")), Selection(serials=["S1"]))
+        finally:
+            progress.listen(None)
+        self.assertEqual(heard, ["Checking firewall 1 of 1: s1"])
+
+    def test_reading_a_snapshot_says_how_far_it_has_got(self):
+        from panupgrade import progress
+        from panupgrade.sources import snapshot
+        heard = []
+        progress.listen(lambda text: None, heard.append)
+        try:
+            snapshot(fleet(pair("A1", "A2")), {"A1", "A2"})
+        finally:
+            progress.listen(None)
+        self.assertEqual(heard, ["Asking Panorama for the list of firewalls", "Reading firewall 1 of 2: a1", "Reading firewall 2 of 2: a2",
+                                 "Reading Panorama's version"])
+
+
 class HappyPaths(unittest.TestCase):
     def test_pair_is_one_unit_passive_first(self):
         p = plan(fleet(pair("A1", "A2")))

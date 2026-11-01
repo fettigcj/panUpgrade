@@ -11,3 +11,5 @@ panupgrade-data/
 upgradeList.txt
 settings.toml
 releases.json
+build/
+dist/

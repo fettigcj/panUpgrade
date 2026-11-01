@@ -41,6 +41,32 @@ class Base(unittest.TestCase):
         return plan, s, backend, journal, executor.run(plan, approve(plan, serials, acks), backend, journal, s)
 
 
+class WaitForPassive(Base):
+    def test_a_pair_runs_start_to_finish_with_the_checkpoint_recorded_in_the_journal(self):
+        data = fleet_data(pair("A1", "A2"))
+        plan, s, backend, journal, result = self.go(data)
+        self.assertEqual(result["failures"], 0)
+        entries = [e for e in journal.steps_of("A1") if "wait for the passive firewall's upgrade to finish" in e["step"] and e["state"] == "ok"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["detail"]["peer_version"], str(TARGET))
+
+    def test_it_refuses_to_hand_over_to_a_peer_that_is_not_on_the_version_this_member_is_going_to(self):
+        class Peer:
+            def state(self, serial):
+                return {"version": "10.1.1"}
+        steps = [{"action": "install 20.2.9", "traffic": "none", "note": ""}, {"action": "wait for the passive firewall's upgrade to finish", "traffic": "none", "note": ""}]
+        dev = {"serial": "A1", "peer_serial": "A2", "steps": steps}
+        with self.assertRaisesRegex(executor.StepFailed, "refusing to hand over"):
+            executor._do("wait for the passive firewall's upgrade to finish", 1, dev, Peer(), None, None)
+
+    def test_with_nothing_to_install_there_is_nothing_to_compare_and_it_passes(self):
+        class Peer:
+            def state(self, serial):
+                return {"version": "10.1.1"}
+        dev = {"serial": "A1", "peer_serial": "A2", "steps": [{"action": "wait for the passive firewall's upgrade to finish", "traffic": "none", "note": ""}]}
+        self.assertEqual(executor._do("wait for the passive firewall's upgrade to finish", 0, dev, Peer(), None, None), {"peer_version": "10.1.1"})
+
+
 class ApprovalGate(Base):
     def test_nothing_runs_without_a_matching_complete_approval(self):
         data = fleet_data(pair("A1", "A2"), device("S1", version="20.1.4"))

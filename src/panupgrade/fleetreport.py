@@ -9,7 +9,8 @@ running where, and what each firewall looks like. It reads only; it has no targe
 
 from collections import Counter
 
-from . import console
+from . import checks, console, releases as releases_mod, report as report_mod
+from .versions import Version, VersionError
 
 
 CHECKED_CONTENT = ("app", "threat", "av")
@@ -76,7 +77,32 @@ def _attention(devices):
     return sorted(found.items())
 
 
-def build(snap):
+def lagging(devices, panorama_version, settings, table=None):
+    """The firewalls more than ``spread_limit`` releases behind Panorama, as ONE advice item (or None), exactly as the plan words it."""
+    if not panorama_version or settings is None:
+        return None
+    table, unit, limit = table or releases_mod.default(), settings.panorama_compare, settings.spread_limit
+    try:
+        pano = Version.parse(panorama_version)
+    except VersionError:
+        return None
+    rows, seen = [], []
+    for dev in devices:
+        raw = _facts(dev).get("sw_version") or dev["sw_version"]
+        try:
+            version = Version.parse(raw)
+        except (VersionError, TypeError, AttributeError):
+            continue
+        if table.behind(pano, version, unit) > limit:
+            rows.append({"serial": dev["serial"], "hostname": dev["hostname"], "version": raw})
+            seen.append(version)
+    if not rows:
+        return None
+    return {"scope": "fleet", "code": "version_lagging", "title": checks.LAGGING_TITLE, "devices": rows,
+            "text": checks.lagging_text(len(rows), limit, unit, panorama_version) + checks._stale_note(table, pano, *seen)}
+
+
+def build(snap, settings=None, table=None):
     devices = snap["devices"]
     by_serial = {d["serial"]: d for d in devices}
     versions = Counter((_facts(d).get("sw_version") or d["sw_version"] or "unknown") for d in devices)
@@ -84,7 +110,7 @@ def build(snap):
     standalone = sum(1 for d in devices if len(_pair_key(d, by_serial)) == 1)
     return {"panorama_version": (snap.get("panorama") or {}).get("version"),
             "devices": devices, "versions": dict(versions), "pairs": pairs, "standalone": standalone,
-            "attention": _attention(devices)}
+            "attention": _attention(devices), "advice": [a for a in [lagging(devices, (snap.get("panorama") or {}).get("version"), settings, table)] if a]}
 
 
 def _sync(facts):
@@ -105,6 +131,9 @@ def render(report, style, address=""):
             out += [style.bullet(p, 6) for p in problems]
     else:
         out.append(style.line("ok", "Nothing needs attention."))
+    for note in report.get("advice", []):
+        out += ["", style.line("info", f"{style.bold(note['title'])} ({len(note['devices'])})"), style.bullet(note["text"], 4)]
+        out += report_mod.device_rows(note["devices"], "      ")
     out += ["", style.bold("PAN-OS versions")]
     for version, count in sorted(report["versions"].items(), key=lambda kv: kv[0]):
         out.append(f"  {version}  {count} firewall{'s' if count != 1 else ''}")

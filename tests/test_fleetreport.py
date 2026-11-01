@@ -15,6 +15,41 @@ def dev(serial, name, version="10.2.1", peer="", **facts):
             "ha_state": facts.get("ha_state", ""), "facts": facts}
 
 
+class Lagging(unittest.TestCase):
+    """The report says which firewalls lag behind Panorama, once, without waiting for a plan."""
+
+    def build(self, *devices, panorama="12.2.0", **over):
+        from panupgrade import settings
+        return fleetreport.build({"panorama": {"version": panorama}, "devices": list(devices)}, settings.load(None, [f"{k}={v}" for k, v in over.items()]))
+
+    def test_every_firewall_more_than_the_limit_behind_is_named_in_one_note(self):
+        r = self.build(dev("A", "a1", "10.2.1"), dev("B", "a2", "10.2.2"), dev("C", "c1", "12.1.4"))
+        [note] = r["advice"]
+        self.assertEqual(note["title"], "PAN-OS version lagging behind Panorama")
+        self.assertEqual([(d["serial"], d["hostname"], d["version"]) for d in note["devices"]], [("A", "a1", "10.2.1"), ("B", "a2", "10.2.2")])
+        out = fleetreport.render(r, STYLE)
+        self.assertEqual(out.count("PAN-OS version lagging behind Panorama"), 1)
+        self.assertEqual(out.count("Panorama converts"), 1)
+        self.assertRegex(out, r"\n      A  a1  10\.2\.1\n      B  a2  10\.2\.2")
+        self.assertNotIn("c1  12.1.4", out.split("PAN-OS versions")[0])           # one release behind: within the limit
+
+    def test_the_limit_and_the_unit_are_the_settings(self):
+        self.assertEqual(self.build(dev("A", "a1", "10.2.1"), spread_limit=9)["advice"], [])
+        self.assertEqual(len(self.build(dev("A", "a1", "11.2.3"), panorama="12.2.0", panorama_compare="minor", spread_limit=1)["advice"]), 1)
+
+    def test_nothing_is_said_when_nobody_lags_or_there_are_no_settings_to_judge_by(self):
+        self.assertEqual(self.build(dev("A", "a1", "12.2.1"))["advice"], [])
+        self.assertEqual(fleetreport.build({"panorama": {"version": "12.2"}, "devices": [dev("A", "a1", "10.2.1")]})["advice"], [])
+
+    def test_a_version_that_cannot_be_read_is_skipped_not_fatal(self):
+        self.assertEqual(self.build(dev("A", "a1", "unknown"), dev("B", "b1", ""))["advice"], [])
+
+    def test_the_plan_words_it_the_same_way(self):
+        from panupgrade import checks
+        [note] = self.build(dev("A", "a1", "10.2.1"))["advice"]
+        self.assertTrue(note["text"].startswith(checks.lagging_text(1, 2, "minor", "12.2.0")))
+
+
 class FleetReport(unittest.TestCase):
     def report(self, *devices):
         return fleetreport.build({"panorama": {"version": "12.1"}, "devices": list(devices)})

@@ -286,9 +286,14 @@ def _steps(dev, settings, devices=None):
     if syncing and (role == "passive" or not peer_planned):
         add("sync to peer", "none", "after this member's own config is backed up, on the ACTIVE member: force its running configuration onto the passive member, then confirm "
                                      "HA1 config sync reads synchronized")
+    if role == "active" and peer_planned:
+        peer = devices[dev["peer_serial"]]["hostname"]
+        add("wait for the passive firewall's upgrade to finish", note=f"this member does not start until {peer} (the passive member) has finished its own upgrade and checks; "
+                                     f"its version is confirmed before this member hands over")
     if role == "active":
+        takes_over = "its already upgraded passive peer takes over" if peer_planned else "its peer takes over"
         add("fail over", "failover",
-            f"suspend this member; compare the new active node's sessions with this one's, within {int(settings.failover_band * 100)}%; revert if out of band")
+            f"suspend this member so {takes_over}; compare the new active node's sessions with this one's, within {int(settings.failover_band * 100)}%; revert if out of band")
     if hold:
         add("hold suspended", note="preemption is on: keep this member suspended until go-live")
     installs = [p for p in _path_steps(dev) if p["install"]]
@@ -338,9 +343,6 @@ def _cautions(devices, fleet):
     return out
 
 
-LAGGING_TITLE = "PAN-OS version lagging behind Panorama"
-
-
 def _advice(devices, panorama_version=None, table=None):
     """Notes that never need acknowledging and never hold an upgrade.
 
@@ -364,11 +366,9 @@ def _advice(devices, panorama_version=None, table=None):
             pass
         tail = (f" The target {evidence['target']} would still be {evidence['after']} {checks._unit_names(unit)} behind Panorama; "
                 f"consider a newer target.") if evidence.get("after", 0) > (limit or 0) else ""
-        out.append({"scope": "fleet", "code": "version_lagging", "title": LAGGING_TITLE, "devices": lagging,
-                    "text": f"These {len(lagging)} firewall{'s' if len(lagging) != 1 else ''} run more than {limit} {checks._unit_names(unit)} behind "
-                            f"Panorama {panorama_version or ''}".rstrip() + ". Panorama converts its configuration to each firewall's version, "
-                            "and that is least trustworthy far back. This does not hold the upgrade; catching up is the fix. Panorama must not be "
-                            "upgraded further while these lag." + tail + stale})
+        out.append({"scope": "fleet", "code": "version_lagging", "title": checks.LAGGING_TITLE, "devices": lagging,
+                    "text": checks.lagging_text(len(lagging), limit, unit, panorama_version)
+                            + " Panorama must not be upgraded further while these lag." + tail + stale})
     for serial, dev in devices.items():
         out += [{"scope": serial, "code": "advise_upgrade", "text": r["reason"]}
                 for r in dev["results"] if r["check"] in ("certificate_advisory", "device_certificate", "clock_skew")

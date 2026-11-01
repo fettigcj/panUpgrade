@@ -502,11 +502,16 @@ def _report(args):
     except (SourceError, OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    report = fleetreport.build(snap)
+    try:
+        settings, table = _load_settings(args), _load_releases(args)
+    except (settings_mod.SettingsError, SourceError, OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    report = fleetreport.build(snap, settings, table)
     sys.stdout.write(fleetreport.render(report, style, args.source.split(":", 1)[-1] if args.source.startswith("panorama:") else ""))
     if args.out:
         Path(args.out).write_text(json.dumps({"panorama_version": report["panorama_version"], "versions": report["versions"],
-                                              "attention": report["attention"], "devices": report["devices"]}, indent=1) + chr(10), encoding="utf-8")
+                                              "attention": report["attention"], "advice": report["advice"], "devices": report["devices"]}, indent=1) + chr(10), encoding="utf-8")
         print(f"Wrote {args.out}")
     return 0
 
@@ -1282,6 +1287,9 @@ def build_parser():
 
     rep = sub.add_parser("report", help="show the state of the fleet right now (versions, HA, sync, content); changes nothing")
     _selection_args(rep)
+    rep.add_argument("--settings", help="settings TOML file (spread_limit and panorama_compare decide which firewalls are called behind Panorama)")
+    rep.add_argument("--set", action="append", help="override a setting: name=value")
+    rep.add_argument("--releases", help=f"PAN-OS release table JSON (default ./{DEFAULT_RELEASES} if present, else the one that ships with the tool)")
     rep.add_argument("--out", help="also save the full report as JSON")
     rep.set_defaults(func=_report)
 

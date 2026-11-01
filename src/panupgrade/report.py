@@ -74,13 +74,14 @@ def gaps_line(plan):
 
 
 def step_groups(plan):
-    """[(firewall names, steps, is a downgrade)]: firewalls with identical steps share one listing instead of repeating it."""
+    """[(firewall names with their HA role, steps, is a downgrade)]: firewalls with identical steps share one listing instead of repeating it."""
     groups = {}
     for dev in plan["devices"]:
         if dev["steps"]:
             downgrade = any(r.get("ack") == "downgrade" for r in dev["results"])
             key = json.dumps([[(st["action"], st["traffic"], st["note"]) for st in dev["steps"]], downgrade])
-            groups.setdefault(key, ([], dev["steps"], downgrade))[0].append(dev["hostname"])
+            role = "standalone" if dev.get("ha_mode") == "none" else f"currently {dev.get('ha_state') or 'unknown'}"
+            groups.setdefault(key, ([], dev["steps"], downgrade))[0].append(f"{dev['hostname']} ({role})")
     return list(groups.values())
 
 

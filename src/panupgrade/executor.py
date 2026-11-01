@@ -171,6 +171,11 @@ def _backup_verified(journal, serial, steps):
                for i, st in enumerate(steps))
 
 
+def _target_version(steps):
+    """The version a device ends on: the last install in its steps."""
+    return _expected_version(steps, len(steps))
+
+
 def _expected_version(steps, index):
     for st in reversed(steps[:index]):
         m = re.fullmatch(r"install (\S+)", st["action"])
@@ -212,6 +217,13 @@ def _do(action, index, dev, backend, journal, settings):
         if after["ha_config_sync"] is not True:
             raise StepFailed(f"after the sync, HA1 config sync reads {after['ha_config_sync']!r}, not synchronized")
         return {"synced_from": active, "to": passive}
+    elif action == "wait for the passive firewall's upgrade to finish":
+        # The unit runs the passive member first and never starts this one unless it finished. This is the checkpoint that proves it:
+        # failing over to a peer that is not on the version this member is going to is refused.
+        want, got = _target_version(steps), backend.state(dev["peer_serial"])["version"]
+        if want and got != want:
+            raise StepFailed(f"the passive member {dev['peer_serial']} runs {got}, not {want}; refusing to hand over to a peer that is not upgraded")
+        return {"peer_version": got}
     elif action == "fail over":
         now = backend.state(serial)
         if now["ha_state"] != "active":

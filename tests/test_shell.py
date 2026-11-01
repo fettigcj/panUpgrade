@@ -836,6 +836,104 @@ class TheJobsScreenAndPane(ShellCase):
         for line in ui.render(130, 30):
             self.assertLessEqual(sum(len(t) for _s, t in line), 130)
 
+    def test_a_job_keeps_a_timestamped_log_of_what_it_was_doing(self):
+        job = shell.Job(lambda: [progress.say(f"step {i}") for i in range(3)] and print("printed at the end") or 0)
+        end = time.monotonic() + 3
+        while job.running and time.monotonic() < end:
+            time.sleep(0.01)
+        log = job.log()
+        self.assertRegex(log[0], r"^\d\d:\d\d:\d\d  step 0$")
+        self.assertEqual([line[10:] for line in log[:3]], ["step 0", "step 1", "step 2"])
+        self.assertEqual(log[-1], "printed at the end")
+        self.assertEqual(job.recent(2), ["step 2", "printed at the end"])
+
+    def test_the_pane_shows_the_last_five_lines_of_the_newest_and_of_every_running_job_and_one_line_for_the_rest(self):
+        gate = threading.Event()
+
+        def run(args):
+            for i in range(12):
+                progress.say(f"call number {i}")
+            if args.command == "plan":
+                gate.wait(3)
+            return 0
+        ui = self.make(run=run)
+        ui.press("alt-r"); wait(ui)
+        ui.press("alt-p"); time.sleep(0.2)
+        ui.press("alt-h")
+        pane = self.text(ui, 140, 40)
+        for shown in (7, 8, 9, 10, 11):
+            self.assertIn(f"call number {shown}", pane)
+        self.assertNotIn("call number 6", pane)                       # five, not more
+        self.assertIn("ok Fleet report (lab)", pane)                  # the finished older one: a line, not its log
+        self.assertEqual(pane.count("call number 11"), 1)
+        gate.set(); wait(ui)
+
+    def test_tab_moves_into_the_log_of_the_chosen_job_and_the_whole_history_scrolls(self):
+        ui = self.make(run=lambda args: [progress.say(f"call number {i}") for i in range(80)] and 0)
+        ui.press("alt-r"); wait(ui)
+        ui.press("alt-j")
+        first = self.text(ui, 130, 24)
+        self.assertIn("call number 79", first)                         # a log follows its end
+        self.assertNotRegex(first, r"call number 0\b")                 # the start is off the top of the screen
+        self.assertIn("Tab or Right: into its log", first)
+        ui.press("tab")
+        self.assertEqual(ui.screen.focus, "log")
+        self.assertIn("scroll the log", self.text(ui, 130, 24))
+        ui.press("home")
+        top = self.text(ui, 130, 24)
+        self.assertIn("call number 0", top)
+        self.assertNotIn("call number 79", top)
+        ui.press("pgdn")
+        self.assertIn("call number 1", self.text(ui, 130, 24).replace("call number 10", ""))     # moved on, not stuck
+        ui.press("end")
+        self.assertIn("call number 79", self.text(ui, 130, 24))
+        ui.press("up")
+        self.assertIn("call number 78", self.text(ui, 130, 24))
+        ui.press("left")
+        self.assertEqual(ui.screen.focus, "list")
+        ui.press("esc")
+        self.assertEqual(ui.screen.name, "home")
+
+    def test_in_the_log_up_and_down_scroll_and_in_the_list_they_choose_a_job(self):
+        ui = self.make(run=lambda args: [progress.say(f"{args.command} line {i}") for i in range(60)] and 0)
+        ui.press("alt-r"); wait(ui); ui.press("alt-p"); wait(ui)
+        ui.press("alt-j")
+        self.assertIn("plan line 59", self.text(ui, 130, 24))
+        ui.press("down")                                               # list focus: the next job
+        self.assertIn("report line 59", self.text(ui, 130, 24))
+        ui.press("tab"); ui.press("up")                                # log focus: scroll, the job stays
+        text = self.text(ui, 130, 24)
+        self.assertIn("report line 58", text)
+        self.assertNotIn("plan line", text.split("| ", 1)[1])
+
+    def test_a_running_jobs_log_follows_new_lines_until_you_scroll_up(self):
+        gate, second = threading.Event(), threading.Event()
+
+        def run(args):
+            for i in range(40):
+                progress.say(f"early {i}")
+            gate.wait(3)
+            progress.say("late line")
+            second.set()
+            return 0
+        ui = self.make(run=run)
+        ui.press("alt-r"); time.sleep(0.2); ui.press("alt-j"); ui.press("tab")
+        self.assertIn("early 39", self.text(ui, 130, 24))
+        gate.set(); second.wait(3)
+        self.assertIn("late line", self.text(ui, 130, 24))             # followed
+        ui.press("pgup")
+        self.assertNotIn("late line", self.text(ui, 130, 24))          # scrolled away and stays put
+        wait(ui)
+
+    def test_the_log_fits_a_narrow_window_with_the_list_above_it(self):
+        ui = self.make(run=lambda args: [progress.say(f"call number {i}") for i in range(50)] and 0)
+        ui.press("alt-r"); wait(ui); ui.press("alt-j"); ui.press("tab")
+        lines = ui.render(80, 24)
+        self.assertEqual(len(lines), 24)
+        self.assertIn("call number 49", tui.plain(lines))
+        for line in lines:
+            self.assertLessEqual(sum(len(t) for _s, t in line), 80)
+
     def test_the_forms_keep_their_room_and_only_share_a_very_wide_window(self):
         ui = self.make(run=lambda args: print("x") or 0)
         ui.press("alt-r"); wait(ui)

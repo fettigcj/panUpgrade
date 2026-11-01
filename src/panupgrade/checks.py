@@ -370,6 +370,16 @@ def _unit_names(unit):
     return "major versions" if unit == "major" else "minor versions (feature releases)"
 
 
+LAGGING_TITLE = "PAN-OS version lagging behind Panorama"
+
+
+def lagging_text(count, limit, unit, panorama_version):
+    """The advice for firewalls that run too far behind Panorama, said once for all of them."""
+    return (f"{'This firewall runs' if count == 1 else f'These {count} firewalls run'} more than {limit} {_unit_names(unit)} behind Panorama "
+            f"{panorama_version or ''}".rstrip() + ". Panorama converts its configuration to each firewall's version, and that is least "
+            "trustworthy far back. This does not hold the upgrade; catching up is the fix.")
+
+
 def _stale_note(table, *versions):
     """A sentence to add when a release is missing from the table, so a stale table is noticed rather than trusted."""
     missing = table.unlisted(*versions)

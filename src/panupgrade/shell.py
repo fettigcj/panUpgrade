@@ -36,6 +36,8 @@ STEP_ORDER = ["auth", "select", "report", "plan", "prepare", "upgrade", "setting
 PANE_FROM = 120                  # a window this wide gets the jobs pane on the right
 FORM_PANE_FROM = 170             # the forms (sign-in table, settings) need their room, so they only share a very wide window
 KEPT_JOBS = 30                   # finished jobs remembered for the Jobs screen
+LOG_LIMIT = 5000                 # progress notes kept per job
+RECENT = 5                       # lines of a job's log shown in the pane
 PLAN_MAX_AGE = 30 * 60           # a prepare plan older than this (seconds) must be read again before it can be approved
 
 
@@ -131,12 +133,16 @@ class Job:
         self.started, self.finished, self.text, self.code, self.value = time.monotonic(), None, "", None, None
         self.began = time.time()
         self.stage = ""                                   # the latest words from progress.say
+        self.activity = []                                # every progress note, with the time: [(HH:MM:SS, words)]
         self._out, self._err = io.StringIO(), io.StringIO()
         self._fn = fn
         threading.Thread(target=self._run, daemon=True).start()
 
     def _note(self, text):
         self.stage = text
+        if not self.activity or self.activity[-1][1] != text:
+            self.activity.append((time.strftime("%H:%M:%S"), text))
+            del self.activity[:-LOG_LIMIT]
 
     def _run(self):
         out, err = self._out, self._err
@@ -173,6 +179,18 @@ class Job:
         if not self.running:
             return self.text
         return self._out.getvalue() + self._err.getvalue()
+
+    def log(self, stamps=True):
+        """The whole history: what it was doing (with the time, unless ``stamps`` is off), in order, then everything it printed."""
+        lines = [f"{when}  {words}" if stamps else words for when, words in self.activity]
+        text = self.live().rstrip("\n")
+        if text:
+            lines += ([""] if lines else []) + text.split("\n")
+        return lines
+
+    def recent(self, count=5):
+        """The last few lines of the log that say anything."""
+        return [line for line in self.log(stamps=False) if line.strip()][-count:]
 
     def latest(self):
         """A few words on what it is doing now (running) or how it ended."""
@@ -785,28 +803,35 @@ class PrepareScreen(Screen):
         return None
 
 
-def job_lines(job, width):
-    """One job as it appears in a list: what it is and how it stands, then what it is doing or how it ended."""
+def job_lines(job, width, recent=0):
+    """One job as it appears in a list: what it is and how it stands, then (``recent`` > 0) the last lines of its log, else one line on
+    what it is doing or how it ended."""
     if job.running:
-        head = [("warn", ">> "), ("bold", job.title)]
+        head, state = [("warn", ">> "), ("bold", job.title)], [("dim", f"    running {job.elapsed()}s")]
         tail = [("dim", f"    {job.elapsed()}s  {job.latest()}")]
     elif job.failed:
-        head = [("error", "!! "), ("bold", job.title)]
+        head, state = [("error", "!! "), ("bold", job.title)], [("error", f"    failed {clock(job.began, False)}, {job.elapsed()}s")]
         tail = [("error", f"    {clock(job.began, False)}  {job.latest()}")]
     else:
-        head = [("ok", "ok "), ("bold", job.title)]
+        head, state = [("ok", "ok "), ("bold", job.title)], [("dim", f"    finished {clock(job.began, False)}, took {job.elapsed()}s")]
         tail = [("dim", f"    {clock(job.began, False)}  took {job.elapsed()}s")]
-    return [cut(head, width), cut(tail, width)]
+    if not recent:
+        return [cut(head, width), cut(tail, width)]
+    lines = job.recent(recent)
+    return [cut(head, width), cut(state, width)] + [cut([("dim", "      " + line)], width) for line in lines]
 
 
 class JobsScreen(Screen):
-    """Every piece of background work: the list on the left, what the chosen one printed on the right."""
+    """Every piece of background work: the list on the left, the whole log of the chosen one on the right.
+
+    Tab (or Right) moves into the log, where Up / Down / PgUp / PgDn / Home / End scroll all of it; Tab (or Left) goes back to the list.
+    The log follows the newest line until you scroll up, and follows again when you reach the end."""
     name, title = "jobs", "background jobs"
     LIST = 46
 
     def __init__(self, shell):
         super().__init__(shell)
-        self.chosen, self.offset = None, 0
+        self.chosen, self.offset, self.focus = None, None, "list"          # offset None: following the end of the log
 
     def ordered(self):
         return list(reversed(self.shell.jobs))               # newest first
@@ -816,25 +841,28 @@ class JobsScreen(Screen):
         return self.chosen if self.chosen in jobs else (jobs[0] if jobs else None)
 
     def enter(self):
-        self.chosen, self.offset = None, 0
+        self.chosen, self.offset, self.focus = None, None, "list"
 
     def tick(self):
         return bool(self.shell.running_jobs())
 
     def render(self, width, height):
         jobs, current = self.ordered(), self.current()
-        top = [[("bold", " panupgrade - background jobs")],
-               [("dim", " Up / Down choose a job   PgUp / PgDn scroll its output   Esc home")], []]
+        hint = (" Up / Down choose a job   Tab or Right: into its log   Esc home" if self.focus == "list"
+                else " Up / Down / PgUp / PgDn / Home / End scroll the log   Tab or Left: back to the list   Esc home")
+        top = [[("bold", " panupgrade - background jobs")], [("dim", hint)], []]
         room = max(height - len(top) - 1, 3)
         listing = []
         for job in jobs:
             rows = job_lines(job, self.LIST - 3)
             mark = ">" if job is current else " "
-            listing += [[("focus" if job is current else "bold", f" {mark}")] + rows[0], [("", "  ")] + rows[1]]
+            on = job is current and self.focus == "list"
+            listing += [[("focus" if on else "bold", f" {mark}")] + rows[0], [("", "  ")] + rows[1]]
         if not jobs:
             listing = [[("dim", " nothing has run yet: reading the fleet or the firewall list shows up here")]]
-        detail = self._detail(current, max(width - self.LIST - 2, 20), room)
-        if width < 100:                                      # too narrow for two columns: the list, then the output
+        narrow = width < 100
+        detail = self._detail(current, width - 2 if narrow else max(width - self.LIST - 2, 20), room // 2 if narrow else room)
+        if narrow:                                           # too narrow for two columns: the list, then the log
             body = (listing[:max(room // 2, 2)] + [[]] + detail)[:room]
         else:
             body = self._beside(listing[:room], detail, self.LIST, room)
@@ -844,17 +872,16 @@ class JobsScreen(Screen):
         if job is None:
             return []
         state = "running" if job.running else ("failed" if job.failed else "finished")
-        out = [[("bold", f" {job.title}")],
-               [("dim", f" started {clock(job.began)}   {state}   {job.elapsed()}s")], []]
-        text = job.live().rstrip("\n")
-        lines = text.split("\n") if text else ["(nothing printed yet)" if job.running else "(it printed nothing)"]
-        if job.running and job.stage:
-            lines = [f"now: {job.stage}", ""] + lines
+        on = self.focus == "log"
+        out = [[("focus" if on else "bold", f" {'>' if on else ' '} {job.title}")],
+               [("dim", f"   started {clock(job.began)}   {state}   {job.elapsed()}s")], []]
+        lines = job.log() or ["(nothing printed yet)" if job.running else "(it printed nothing)"]
         space = max(room - len(out) - 1, 2)
-        self.offset = max(0, min(self.offset, max(len(lines) - space, 0)))
-        out += [[("", " " + line)] for line in lines[self.offset:self.offset + space]]
-        if len(lines) > space:
-            out.append([("dim", f" lines {self.offset + 1}-{min(self.offset + space, len(lines))} of {len(lines)}")])
+        end = max(len(lines) - space, 0)
+        start = end if self.offset is None else max(0, min(self.offset, end))
+        out += [[("", " " + line)] for line in lines[start:start + space]]
+        where = "the end (following)" if start >= end and job.running else "the end" if start >= end else f"lines {start + 1}-{min(start + space, len(lines))}"
+        out.append([("dim", f" {where} of {len(lines)}")] if len(lines) > space else [])
         return out
 
     @staticmethod
@@ -866,23 +893,40 @@ class JobsScreen(Screen):
             rows.append(a + [("", " " * max(left_width - width_of(a), 0)), ("dim", "| ")] + b)
         return rows
 
+    def _scroll(self, key):
+        """Move the log. The current position is worked out from what was last drawn, so a followed log scrolls up from its end."""
+        job = self.current()
+        total = len(job.log()) if job else 0
+        end = max(total - self.visible, 0)
+        at = end if self.offset is None else min(self.offset, end)
+        at = {"up": at - 1, "down": at + 1, "pgup": at - self.visible, "pgdn": at + self.visible, "home": 0, "end": end}[key]
+        at = max(0, at)
+        self.offset = None if at >= end else at
+
+    visible = 10                                              # lines the log shows; set while drawing is not needed for the keys' sake
+
     def press(self, key):
         jobs, current = self.ordered(), self.current()
         at = jobs.index(current) if current in jobs else 0
-        if key == "up" and jobs:
-            self.chosen, self.offset = jobs[max(at - 1, 0)], 0
-        elif key == "down" and jobs:
-            self.chosen, self.offset = jobs[min(at + 1, len(jobs) - 1)], 0
-        elif key == "pgup":
-            self.offset = max(self.offset - 10, 0)
-        elif key == "pgdn":
-            self.offset += 10
-        elif key == "home":
-            self.offset = 0
-        elif key == "end":
-            self.offset = 10 ** 6
-        elif key in ("esc", "enter", "q", "Q"):
+        if key in ("tab", "right") and self.focus == "list" and jobs:
+            self.focus = "log"
+        elif key in ("tab", "left", "shift-tab") and self.focus == "log":
+            self.focus = "list"
+        elif key in ("esc", "q", "Q"):
             return "home"
+        elif self.focus == "list":
+            if key == "up" and jobs:
+                self.chosen, self.offset = jobs[max(at - 1, 0)], None
+            elif key == "down" and jobs:
+                self.chosen, self.offset = jobs[min(at + 1, len(jobs) - 1)], None
+            elif key == "enter":
+                self.focus = "log"
+            elif key in ("pgup", "pgdn", "home", "end"):
+                self._scroll(key)                            # the log can still be scrolled without leaving the list
+        elif key in ("up", "down", "pgup", "pgdn", "home", "end"):
+            self._scroll(key)
+        elif key == "enter":
+            self.focus = "list"
         return None
 
 
@@ -1046,8 +1090,8 @@ class Shell:
     def _pane(self, width, room):
         """The side pane: what is running and what has finished, newest first."""
         lines = [[("bold", "Background jobs"), ("dim", "   Alt-J for more")], []]
-        for job in reversed(self.jobs):
-            lines += job_lines(job, width) + [[]]
+        for n, job in enumerate(reversed(self.jobs)):
+            lines += job_lines(job, width, recent=RECENT if job.running or n == 0 else 0) + [[]]
         return [cut(line, width) for line in lines[:room]]
 
     def changing(self):

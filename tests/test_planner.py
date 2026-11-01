@@ -26,6 +26,31 @@ class HappyPaths(unittest.TestCase):
         self.assertNotIn("fail over", actions(dev(p, "A2")))
         self.assertTrue(p["mode"].startswith("REPORT ONLY"))
 
+    def test_the_active_member_waits_for_the_passive_one_and_says_so_before_it_fails_over(self):
+        p = plan(fleet(pair("A1", "A2")))
+        active, passive = actions(dev(p, "A1")), actions(dev(p, "A2"))
+        self.assertIn("wait for the passive firewall's upgrade to finish", active)
+        self.assertLess(active.index("wait for the passive firewall's upgrade to finish"), active.index("fail over"))
+        self.assertNotIn("wait for the passive firewall's upgrade to finish", passive)                       # the passive goes first and waits for nobody
+        wait_step = next(s for s in dev(p, "A1")["steps"] if s["action"] == "wait for the passive firewall's upgrade to finish")
+        self.assertIn("a2 (the passive member)", wait_step["note"])
+        fail_over = next(s for s in dev(p, "A1")["steps"] if s["action"] == "fail over")
+        self.assertIn("already upgraded passive peer takes over", fail_over["note"])
+
+    def test_a_standalone_firewall_has_no_peer_to_wait_for(self):
+        self.assertNotIn("wait for the passive firewall's upgrade to finish", actions(dev(plan(fleet(device("S1", version="20.1.4")), Selection(accept_standalone_outage=True)), "S1")))
+
+    def test_the_step_listing_names_each_firewall_with_the_role_it_has_now(self):
+        from panupgrade import console, report
+        p = plan(fleet(pair("A1", "A2")))
+        names = [n for group in report.step_groups(p) for n in group[0]]
+        self.assertIn("a1 (currently active)", names)
+        self.assertIn("a2 (currently passive)", names)
+        text = report.to_text(p)
+        self.assertIn("a1 (currently active):", text)
+        self.assertIn("wait for the passive firewall's upgrade to finish", text)
+        self.assertIn("a2 (currently passive)", console.render_plan(p, console.Style()))
+
     def test_preemption_holds_member_until_go_live(self):
         p = plan(fleet(pair("A1", "A2", preemption=True)))
         for s in ("A1", "A2"):

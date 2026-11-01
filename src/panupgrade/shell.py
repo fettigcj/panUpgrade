@@ -621,6 +621,10 @@ class ChangeScreen(Screen):
             self.note = ("Stopping: steps already going will finish and nothing new starts. The journal records where it got to; "
                          "read the plan again later to continue it.")
 
+    def custom_body(self, width, room):
+        """Styled lines to show instead of the plain text body, or None."""
+        return None
+
     def prepare_run_args(self, args):
         """Last changes to the arguments of the real run (which earlier run to carry on, for instance)."""
 
@@ -784,13 +788,15 @@ class ChangeScreen(Screen):
             footer = [[("bold", " Type APPROVE to go ahead: "), ("focus", f"[{self.typed}_]".ljust(14)), ("dim", "   Enter confirms, Esc goes back")]]
         else:
             footer = self._bar_lines(width)
-        body_lines = self._wrap_all(self.body(), width - 3)
         lines = lines[:max(height - len(footer) - 4, 2)]
         room = max(height - len(lines) - len(footer) - 1, 3)
-        self.offset = max(0, min(self.offset, max(len(body_lines) - room, 0)))
-        shown = [[("", " " + line)] for line in body_lines[self.offset:self.offset + room]]
-        if len(body_lines) > room:
-            shown.append([("dim", f" lines {self.offset + 1}-{min(self.offset + room, len(body_lines))} of {len(body_lines)}  (Up / Down / PgUp / PgDn scroll)")])
+        shown = self.custom_body(width, room)
+        if shown is None:
+            body_lines = self._wrap_all(self.body(), width - 3)
+            self.offset = max(0, min(self.offset, max(len(body_lines) - room, 0)))
+            shown = [[("", " " + line)] for line in body_lines[self.offset:self.offset + room]]
+            if len(body_lines) > room:
+                shown.append([("dim", f" lines {self.offset + 1}-{min(self.offset + room, len(body_lines))} of {len(body_lines)}  (Up / Down / PgUp / PgDn scroll)")])
         lines += shown
         lines = lines[:max(height - len(footer), 0)]
         lines += [[]] * max(height - len(lines) - len(footer), 0)
@@ -926,9 +932,168 @@ class UpgradeScreen(ChangeScreen):
     def __init__(self, shell):
         super().__init__(shell)
         self.standalone = False
+        self.kept = None                                  # the bundle of the last real run, so its log can still be read after it ends
+        self.view, self.unit_at, self.unit_pinned, self.log_offset = "units", 0, False, None
 
     def extra_args(self):
         return ["--accept-standalone-outage"] if self.standalone else []
+
+    def reset(self):
+        if not self.busy():
+            self.kept = None
+        super().reset()
+
+    def _ran(self, job):
+        if self.job is job and self.stage == "running" and job.changes:
+            self.kept = self.bundle
+        super()._ran(job)
+
+    # -- the run, firewall by firewall (an HA pair is one unit: passive first, then active)
+    def source(self):
+        """The bundle whose events are shown: the one running now, or the last one that ran."""
+        return self.bundle if self.stage == "running" and self.job is not None and self.job.changes else self.kept
+
+    def units(self):
+        source = self.source()
+        if source is None:
+            return []
+        devices = {d["serial"]: d for d in source.plan["devices"]}
+        return [[devices[x] for x in unit if x in devices] for batch in source.plan["order"] for unit in batch]
+
+    @staticmethod
+    def step_name(record):
+        return re.sub(r"^\d+:", "", record.get("step", ""))
+
+    def unit_events(self, unit):
+        serials = {d["serial"] for d in unit}
+        return [(when, rec) for when, rec in self.source().events_snapshot() if rec.get("serial") in serials and rec.get("type") == "step"]
+
+    def unit_state(self, unit):
+        """(state, words): waiting, running, done or failed, and what it is on or where it went wrong."""
+        events = self.unit_events(unit)
+        final = self.stage == "done"
+        if not events:
+            return ("idle", "not started") if final else ("waiting", "waiting its turn")
+        for _when, rec in events:
+            if rec["state"] == "failed":
+                return "failed", f"{self._name(unit, rec)}: {self.step_name(rec)}"
+        finished = []
+        for dev in unit:
+            steps = dev["steps"]
+            last = f"{len(steps) - 1}:{steps[-1]['action']}" if steps else ""
+            finished.append(bool(steps) and any(rec["serial"] == dev["serial"] and rec["step"] == last and rec["state"] == "ok" for _w, rec in events))
+        if all(finished):
+            return "done", "all steps done"
+        if final:
+            return "stopped", "stopped before it finished"
+        _when, rec = events[-1]
+        return "running", f"{self._name(unit, rec)}: {self.step_name(rec)}"
+
+    @staticmethod
+    def _name(unit, rec):
+        return next((d["hostname"] for d in unit if d["serial"] == rec.get("serial")), rec.get("serial", ""))
+
+    def event_line(self, unit, when, rec):
+        detail = rec.get("detail") or {}
+        extra = ", ".join(f"{k}={v}" for k, v in detail.items() if k in ("version", "sessions_before", "sessions_after", "ha_state", "synced_from",
+                                                                         "skipped", "peer_version"))
+        words = {"started": "started", "ok": "ok", "failed": "FAILED", "note": "note"}.get(rec["state"], rec["state"])
+        text = f"{clock(when)}  {self._name(unit, rec).ljust(14)} {self.step_name(rec)}  {words}"
+        if rec["state"] == "failed":
+            text += f": {detail.get('error', '')}"
+        elif extra:
+            text += f"  {extra}"
+        return ("error" if rec["state"] == "failed" else "dim" if rec["state"] == "started" else ""), text
+
+    def shown_unit(self, units):
+        if self.unit_pinned and self.unit_at < len(units):
+            return self.unit_at
+        states = [self.unit_state(unit)[0] for unit in units]
+        for wanted in ("running", "failed"):
+            if wanted in states:
+                return states.index(wanted)
+        return len(units) - 1 if states and all(state == "done" for state in states) else 0
+
+    def showing_units(self):
+        """The by-firewall view is on: asked for (the default), there is a real run to show, and either it is still going or it left events.
+        A run that ended without doing anything (refused, failed to start) shows its plain output, where the reason is."""
+        source = self.source()
+        if self.view != "units" or source is None or self.stage not in ("running", "done"):
+            return False
+        return self.stage == "running" or bool(source.events_snapshot())
+
+    @property
+    def pane_from(self):
+        return FORM_PANE_FROM if self.showing_units() else PANE_FROM            # this view has its own list of units and wants the room
+
+    def custom_body(self, width, room):
+        units = self.units() if self.showing_units() else []
+        if not units:
+            return None
+        at = self.shown_unit(units)
+        listing = []
+        for n, unit in enumerate(units):
+            state, words = self.unit_state(unit)
+            mark = {"waiting": ("dim", ".. "), "idle": ("dim", ".. "), "running": ("warn", ">> "), "done": ("ok", "ok "), "failed": ("error", "!! "),
+                    "stopped": ("error", "-- ")}[state]
+            label = " + ".join(d["hostname"] for d in unit)
+            listing += [[("focus" if n == at else "bold", f" {'>' if n == at else ' '}"), mark, ("bold", label)],
+                        [("", "     "), (mark[0] if state != "waiting" else "dim", words)]]
+        unit = units[at]
+        state, words = self.unit_state(unit)
+        log = [(style, text) for style, text in (self.event_line(unit, when, rec) for when, rec in self.unit_events(unit))]
+        log = log or [("dim", "(nothing has happened here yet)")]
+        left = 40
+        space = max(room - 3, 2)
+        end = max(len(log) - space, 0)
+        start = end if self.log_offset is None else max(0, min(self.log_offset, end))
+        detail = [[("bold", f" {' + '.join(d['hostname'] for d in unit)}"), ("dim", f"   {state}: {words}")], []]
+        detail += [[(style, " " + text)] for style, text in log[start:start + space]]
+        detail.append([("dim", f" lines {start + 1}-{min(start + space, len(log))} of {len(log)}  (PgUp / PgDn scroll)")] if len(log) > space else [])
+        if width < 100:                                   # two columns do not fit: the list, then the log
+            listing = [row for row in listing][:max(room // 2, 2)]
+            return (listing + [[]] + detail)[:room]
+        rows = []
+        for n in range(room):
+            a = cut(listing[n], left - 1) if n < len(listing) else []
+            b = detail[n] if n < len(detail) else []
+            rows.append(a + [("", " " * max(left - width_of(a), 0)), ("dim", "| ")] + b)
+        return rows
+
+    def toggle_view(self):
+        self.view = "text" if self.view == "units" else "units"
+
+    def buttons(self):
+        out = super().buttons()
+        source = self.source()
+        if self.stage in ("running", "done") and source is not None and (self.stage == "running" or source.events_snapshot()):
+            out.insert(len(out) - 1, ("View: combined output" if self.view == "units" else "View: by firewall", self.toggle_view))
+        return out
+
+    def press(self, key):
+        if self.stage in ("running", "done") and self.source() is not None:
+            if key in ("v", "V"):
+                self.toggle_view()
+                return None
+            if self.showing_units():
+                units = self.units()
+                at = self.shown_unit(units) if units else 0
+                if key in ("up", "down") and units:
+                    self.unit_at, self.unit_pinned, self.log_offset = max(0, min(at + (1 if key == "down" else -1), len(units) - 1)), True, None
+                    return None
+                if key in ("pgup", "pgdn", "home", "end"):
+                    self._scroll_log(key, units[at] if units else None)
+                    return None
+        return super().press(key)
+
+    visible = 12
+
+    def _scroll_log(self, key, unit):
+        total = len(self.unit_events(unit)) if unit else 0
+        end = max(total - self.visible, 0)
+        at = end if self.log_offset is None else min(self.log_offset, end)
+        at = max(0, {"pgup": at - self.visible, "pgdn": at + self.visible, "home": 0, "end": end}[key])
+        self.log_offset = None if at >= end else at
 
     def tasks(self):
         return bool(self.bundle and self.bundle.ready())

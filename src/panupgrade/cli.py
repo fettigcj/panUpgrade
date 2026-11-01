@@ -722,6 +722,15 @@ class UpgradeBundle:
     def __init__(self, plan, settings, backend, fleet, label, previous):
         self.plan, self.settings, self.backend, self.fleet, self.label, self.previous = plan, settings, backend, fleet, label, previous
         self.created, self.stop = time.time(), threading.Event()
+        self.events, self._events_lock = [], threading.Lock()            # [(time, journal record)] of the run, for the screen to sort by firewall
+
+    def record(self, record):
+        with self._events_lock:
+            self.events.append((time.time(), record))
+
+    def events_snapshot(self):
+        with self._events_lock:
+            return list(self.events)
 
     def ready(self):
         return [d for d in self.plan["devices"] if d["verdict"] in ("ready", "caution")]
@@ -780,6 +789,12 @@ def _upgrade_execute(args, style, bundle, approve=None):
     print(style.line("info", f"journal: {journal_path}" + (" (continuing)" if resuming else "")))
     names = {d["serial"]: d["hostname"] for d in plan["devices"]}
     journal.listener, close_view = _listener(style, names, [s for batch in plan["order"] for unit in batch for s in unit], settings)
+    printer = journal.listener
+
+    def listener(record):                       # the screen keeps every event too, so it can show them firewall by firewall
+        bundle.record(record)
+        printer(record)
+    journal.listener = listener
     if label == "LIVE":
         print(style.line("stop", f"LIVE RUN - this will change real firewalls: {len(plan['order'])} batch(es), journal {journal_path}"))
     else:

@@ -31,16 +31,27 @@ class FakeUpgrade:
     """Stands in for what the review of an upgrade finds."""
 
     def __init__(self, ready=("A2", "A1"), blocked=(), previous=None, label="LIVE"):
-        names = {"A1": "fw-one", "A2": "fw-two", "B1": "fw-three"}
-        devices = [{"serial": x, "hostname": names[x], "ha_state": "active" if x == "A1" else "passive", "current_version": "10.2.1", "verdict": "ready"}
-                   for x in ready]
+        names = {"A1": "fw-one", "A2": "fw-two", "B1": "fw-three", "B2": "fw-four"}
+        steps = [{"action": "backup", "traffic": "none", "note": ""}, {"action": "install 10.2.3", "traffic": "none", "note": ""}]
+        devices = [{"serial": x, "hostname": names[x], "ha_state": "active" if x == "A1" else "passive", "current_version": "10.2.1", "verdict": "ready",
+                    "steps": steps} for x in ready]
         devices += [{"serial": x, "hostname": names[x], "ha_state": "", "current_version": "10.2.1", "verdict": "blocked"} for x in blocked]
         self.plan = {"hash": "cd" * 32, "target": "10.2.3", "devices": devices,
                      "summary": {"ready": len(ready), "caution": 0, "blocked": len(blocked), "skipped": 0, "outage_steps": 0, "failover_steps": 1},
-                     "order": [[list(ready)]] if ready else [],
+                     "order": [[[x for x in ready if x.startswith("A")]] + [[x] for x in ready if not x.startswith("A")]] if ready else [],
                      "cautions": [{"scope": "A1", "code": "failover_band", "text": "sessions may move"}] if ready else []}
         self.label, self.previous, self.created = label, previous, time.time()
         self.stop = threading.Event()
+        self.events = []
+
+    def record(self, record):
+        self.events.append((time.time(), record))
+
+    def events_snapshot(self):
+        return list(self.events)
+
+    def step(self, serial, step, state, **detail):
+        self.record({"type": "step", "serial": serial, "step": step, "state": state, "detail": detail})
 
     def ready(self):
         return [d for d in self.plan["devices"] if d["verdict"] in ("ready", "caution")]
@@ -1414,7 +1425,7 @@ class TheUpgradeScreen(ShellCase):
         ui = self.at_review(up_execute=execute)
         self.approve(ui)
         started.wait(3)
-        self.assertEqual([label for label, _ in ui.screen.buttons()], ["Stop after the steps in progress", "Home (it keeps running)"])
+        self.assertEqual(ui.screen.buttons()[0][0], "Stop after the steps in progress")
         ui.press("enter")
         self.assertTrue(self.up_executed[-1][1].stop.is_set())
         self.assertIn("Stopping: steps already going will finish", self.text(ui))
@@ -1463,6 +1474,180 @@ class TheUpgradeScreen(ShellCase):
             self.assertIn("Approve and run", tui.plain(lines))
 
 
+class TheRunFirewallByFirewall(ShellCase):
+    """While an upgrade runs, each firewall (an HA pair is one unit, passive first) has its own log beside the list of units."""
+
+    def run_with(self, script, ready=("A2", "A1", "B1")):
+        """An upgrade whose steps are written by ``script(bundle, gate)``; the test releases ``gate`` to let it finish."""
+        gate, begun = threading.Event(), threading.Event()
+        holder = {}
+
+        def review(args):
+            holder["bundle"] = FakeUpgrade(ready=ready)
+            print("plan")
+            return holder["bundle"]
+
+        def execute(args, bundle, approve):
+            script(bundle, gate, begun)
+            gate.wait(3)
+            return 0
+        ui = self.make(up_review=review, up_execute=execute)
+        ui.press("alt-6"); ui.press("enter"); wait(ui)
+        ui.press("enter")
+        for ch in "APPROVE":
+            ui.press(ch)
+        ui.press("enter")
+        begun.wait(3)
+        return ui, holder["bundle"], gate
+
+    def test_each_unit_is_listed_with_where_it_is_and_the_pair_is_one_unit_named_passive_first(self):
+        def script(bundle, gate, begun):
+            bundle.step("A2", "preflight", "started"); bundle.step("A2", "preflight", "ok", version="10.2.1")
+            bundle.step("A2", "0:backup", "started")
+            begun.set()
+        ui, bundle, gate = self.run_with(script)
+        text = self.text(ui, 130, 30)
+        self.assertIn(">> fw-two + fw-one", text)
+        self.assertIn("fw-two: backup", text)                             # what the running unit is on
+        self.assertIn(".. fw-three", text)
+        self.assertIn("waiting its turn", text)
+        self.assertIn("View: combined output", text)
+        gate.set(); wait(ui)
+
+    def test_the_log_beside_the_list_is_the_chosen_units_events_with_the_time_and_the_firewall(self):
+        def script(bundle, gate, begun):
+            bundle.step("A2", "0:backup", "started"); bundle.step("A2", "0:backup", "ok")
+            bundle.step("A2", "1:install 10.2.3", "started"); bundle.step("A2", "1:install 10.2.3", "ok", version="10.2.3")
+            bundle.step("A1", "0:backup", "started")
+            bundle.step("B1", "0:backup", "started")
+            begun.set()
+        ui, bundle, gate = self.run_with(script)
+        text = self.text(ui, 130, 30)
+        right = "\n".join(line.split("| ", 1)[1] for line in text.splitlines() if "| " in line and "Background jobs" not in line)
+        self.assertRegex(right, r"\d\d:\d\d:\d\d  fw-two\s+backup  started")
+        self.assertIn("fw-two         install 10.2.3  ok  version=10.2.3", right)
+        self.assertIn("fw-one         backup  started", right)         # the active member of the same unit
+        self.assertNotIn("fw-three", right)                            # another unit's events are not mixed in
+        ui.press("down")                                               # choose the next unit
+        right = "\n".join(line.split("| ", 1)[1] for line in self.text(ui, 130, 30).splitlines() if "| " in line)
+        self.assertIn("fw-three       backup  started", right)
+        self.assertNotIn("fw-two", right)
+        gate.set(); wait(ui)
+
+    def test_the_view_follows_the_unit_that_is_running_until_you_choose_one(self):
+        def script(bundle, gate, begun):
+            for serial in ("A2", "A1"):
+                for i, action in enumerate(("backup", "install 10.2.3")):
+                    bundle.step(serial, f"{i}:{action}", "started"); bundle.step(serial, f"{i}:{action}", "ok")
+            bundle.step("B1", "0:backup", "started")
+            begun.set()
+        ui, bundle, gate = self.run_with(script)
+        right = "\n".join(line.split("| ", 1)[1] for line in self.text(ui, 130, 30).splitlines() if "| " in line)
+        self.assertIn("fw-three", right)                               # the first unit is done: the running one is shown
+        self.assertIn("ok fw-two + fw-one", self.text(ui, 130, 30))
+        gate.set(); wait(ui)
+
+    def test_a_long_step_name_is_cut_at_the_list_edge_and_never_runs_into_the_log(self):
+        def script(bundle, gate, begun):
+            bundle.step("A1", "0:wait for the passive firewall's upgrade to finish", "started")
+            begun.set()
+        ui, bundle, gate = self.run_with(script, ready=("A2", "A1"))
+        for line in self.text(ui, 124, 24).splitlines():
+            if "| " in line and "fw-one" in line and "wait for the passive" in line.split("| ", 1)[0]:
+                self.assertEqual(line.index("|"), 40)
+        gate.set(); wait(ui)
+
+    def test_a_failure_marks_its_unit_and_shows_the_reason_in_its_log(self):
+        def script(bundle, gate, begun):
+            bundle.step("A2", "0:backup", "started"); bundle.step("A2", "0:backup", "failed", error="backup was not verified")
+            begun.set()
+        ui, bundle, gate = self.run_with(script)
+        text = self.text(ui, 130, 30)
+        self.assertIn("!! fw-two + fw-one", text)
+        self.assertIn("fw-two: backup", text)
+        self.assertIn("FAILED: backup was not verified", text)
+        gate.set(); wait(ui)
+
+    def test_after_the_run_ends_the_logs_can_still_be_read(self):
+        def script(bundle, gate, begun):
+            for serial in ("A2", "A1"):
+                for i, action in enumerate(("backup", "install 10.2.3")):
+                    bundle.step(serial, f"{i}:{action}", "started"); bundle.step(serial, f"{i}:{action}", "ok")
+            begun.set()
+        ui, bundle, gate = self.run_with(script, ready=("A2", "A1"))
+        gate.set(); wait(ui)
+        text = self.text(ui, 130, 30)
+        self.assertIn("finished at", text)
+        self.assertIn("ok fw-two + fw-one", text)
+        self.assertIn("all steps done", text)
+        self.assertIn("fw-one         install 10.2.3  ok", text)
+
+    def test_a_unit_that_never_started_says_so_once_the_run_is_over(self):
+        def script(bundle, gate, begun):
+            bundle.step("A2", "0:backup", "started"); bundle.step("A2", "0:backup", "ok")
+            begun.set()
+        ui, bundle, gate = self.run_with(script)
+        gate.set(); wait(ui)
+        text = self.text(ui, 130, 30)
+        self.assertIn("stopped before it finished", text)
+        self.assertIn("not started", text)
+
+    def test_up_and_down_choose_a_unit_and_stay_there_and_v_switches_to_the_plain_output(self):
+        def script(bundle, gate, begun):
+            bundle.step("A2", "0:backup", "started")
+            bundle.step("B1", "0:backup", "started")
+            print("combined text line")
+            begun.set()
+        ui, bundle, gate = self.run_with(script)
+        ui.press("down")
+        bundle.step("A2", "1:install 10.2.3", "started")                # the running unit changes under the chosen one
+        right = "\n".join(line.split("| ", 1)[1] for line in self.text(ui, 130, 30).splitlines() if "| " in line)
+        self.assertIn("fw-three", right)                                # the chosen unit stays chosen
+        self.assertEqual(ui.screen.unit_at, 1)
+        ui.press("v")
+        text = self.text(ui, 130, 30)
+        self.assertIn("combined text line", text)
+        self.assertIn("View: by firewall", text)
+        ui.press("v")
+        self.assertIn("fw-three", self.text(ui, 130, 30))
+        gate.set(); wait(ui)
+
+    def test_a_long_log_scrolls_with_page_keys(self):
+        def script(bundle, gate, begun):
+            for i in range(60):
+                bundle.step("A2", f"0:call {i}", "started")
+            begun.set()
+        ui, bundle, gate = self.run_with(script, ready=("A2", "A1"))
+        def log_side():
+            return "\n".join(line.split("| ", 1)[1] for line in self.text(ui, 130, 24).splitlines() if "| " in line)
+        self.assertIn("call 59  started", log_side())
+        ui.press("home")
+        self.assertIn("call 0 ", log_side())
+        self.assertNotIn("call 59  started", log_side())                          # (the list on the left names the step it is on, which is 59)
+        ui.press("end")
+        self.assertIn("call 59  started", log_side())
+        gate.set(); wait(ui)
+
+    def test_a_narrow_window_puts_the_list_above_the_log_and_fits(self):
+        def script(bundle, gate, begun):
+            bundle.step("A2", "0:backup", "started")
+            begun.set()
+        ui, bundle, gate = self.run_with(script)
+        lines = ui.render(80, 24)
+        self.assertEqual(len(lines), 24)
+        for line in lines:
+            self.assertLessEqual(sum(len(t) for _s, t in line), 80)
+        self.assertIn("fw-two: backup", tui.plain(lines))
+        gate.set(); wait(ui)
+
+    def test_a_rehearsal_has_no_per_firewall_log_to_offer(self):
+        ui = self.make()
+        ui.press("alt-6"); ui.press("enter"); wait(ui)
+        ui.press("right"); ui.press("enter"); wait(ui)
+        self.assertNotIn("View: by firewall", self.text(ui, 130, 30))
+        self.assertNotIn("View: combined output", self.text(ui, 130, 30))
+
+
 class TheUpgradeCommandPhases(Home):
     """The same code the screen runs, against the simulator: review, then execute with a typed approval, never reading the keyboard."""
 
@@ -1477,6 +1662,20 @@ class TheUpgradeCommandPhases(Home):
     def args(self, *extra):
         return cli.parse_args(["upgrade", "--source", f"fake:{self.fleet}", "--target", "20.2.9", "--runs-dir", self.runs,
                                "--color", "never", "--ascii", *extra])
+
+    def test_the_real_run_hands_every_journal_event_to_the_bundle_for_the_screen(self):
+        args = self.args()
+        style = cli._style(args)
+        with redirect_stdout(io.StringIO()):
+            bundle = cli._upgrade_review(args, style)
+            cli._upgrade_execute(args, style, bundle, lambda jp: cli._new_approval(
+                bundle.plan["hash"], [d["serial"] for d in bundle.ready()], bundle.acks(), jp, "test"))
+        events = [rec for _when, rec in bundle.events_snapshot()]
+        self.assertEqual({rec["serial"] for rec in events}, {"A1", "A2"})
+        names = {(rec["serial"], rec["step"].split(":", 1)[-1]) for rec in events if rec["state"] == "ok"}
+        self.assertIn(("A1", "wait for the passive firewall's upgrade to finish"), names)
+        first = {rec["serial"]: i for i, rec in reversed(list(enumerate(events)))}
+        self.assertLess(first["A2"], first["A1"])                                 # the passive member's events come first
 
     def test_review_prints_the_plan_changes_nothing_and_finds_no_earlier_run(self):
         buffer = io.StringIO()

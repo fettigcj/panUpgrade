@@ -156,6 +156,8 @@ def _standing(dev, journal, index):
     reboots = [i for i in range(index) if steps[i]["action"] == "reboot" and ok(i)]
     if installs and reboots and reboots[-1] > installs[-1]:
         return f"already on {steps[installs[-1]]['action'].split(' ', 1)[1]}"
+    if installs and index < len(steps) and steps[index]["action"] == "reboot":
+        return "the new image is installed and the reboot did not finish as far as the tool could see (the firewall may well have come back since: check it)"
     if installs:
         return "the new image is installed but it has not rebooted into it"
     return f"not upgraded (still on {dev['current_version']})"

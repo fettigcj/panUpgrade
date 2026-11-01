@@ -164,7 +164,8 @@ class WhereAFailedFirewallStands(Base):
         for i, a in enumerate(("backup", "install 10.2.3", "reboot", "verify")):
             journal.record("E1", f"{i}:{a}", "ok")
         self.assertEqual(executor._standing(dev, journal, 4), "already on 10.2.3")
-        self.assertEqual(executor._standing(dev, journal, 2), "the new image is installed but it has not rebooted into it")
+        self.assertEqual(executor._standing(dev, journal, 2), "the new image is installed and the reboot did not finish as far as the tool could see "
+                                                              "(the firewall may well have come back since: check it)")        # (the reboot step itself is the one at index 2)
         self.assertTrue(executor._standing(dev, Journal.create(os.path.join(tempfile.mkdtemp(), "k.jsonl"), "h" * 64), 3).startswith("not upgraded"))
 
 

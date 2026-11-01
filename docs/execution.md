@@ -24,7 +24,7 @@
 
 ## UNVERIFIED (assumed, to be confirmed against a real firewall)
 - Response shapes in the canned XML come from Upgrade Assurance's parsers, not from a recording. In particular the HA2 element `state-sync` and the `preemptive` field are guesses.
-- Whether a suspended state survives a reboot; what the simulator does for roles after `go live` with preemption (it hands the active role back to the original active).
+- Whether a suspended state survives a reboot: one observation says it does not (a lab member suspended by the tool whose reboot step timed out came back as passive, without the tool ever releasing it; no preemption, PAN-OS 10.2.3). `go live` still releases it explicitly, which is harmless if there is nothing to release. Not known for a pair with preemption on. What the simulator does for roles after `go live` with preemption (it hands the active role back to the original active).
 - Exact commands for suspend/functional, restoring roles, and rollback; a rollback is not automated.
 - Timing, job progress and timeouts are not modelled.
 - Units run in parallel, up to `max_parallel` (default 5) at a time: each HA pair (or standalone firewall) is one job whose members go in series, passive first, and the next unit starts as soon as one finishes. The simulator does not model timing, so it shows the interleaving but not how long a reboot takes.

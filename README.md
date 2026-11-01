@@ -14,7 +14,7 @@ At a terminal, just type:
 panupgrade
 ```
 
-One screen walks through the whole job, in order: **sign in**, **choose firewalls**, **read the fleet**, **plan**, then (from the command line for now) **prepare** and **upgrade**. Each step shows where it stands. Alt-H goes home, Alt-A signs in, Alt-F chooses firewalls, Alt-R reads the fleet, Alt-P plans, Alt-S opens the settings, Alt-J lists the background jobs, and Alt-1 to Alt-9 jump to the steps in order. Reading Panorama happens in the background while the screen stays live; the last answer is kept when you leave a screen, and a wide window shows the running and finished jobs down the right-hand side. Everything the screen does is also available as a command, listed below, for scripts and for anyone who prefers them.
+One screen walks through the whole job, in order: **sign in**, **choose firewalls**, **read the fleet**, **plan**, **prepare** (with your typed APPROVE), then (from the command line for now) **upgrade**. Each step shows where it stands. Alt-H goes home, Alt-A signs in, Alt-F chooses firewalls, Alt-R reads the fleet, Alt-P plans, Alt-S opens the settings, Alt-J lists the background jobs, and Alt-1 to Alt-9 jump to the steps in order. Reading Panorama happens in the background while the screen stays live; the last answer is kept when you leave a screen, and a wide window shows the running and finished jobs down the right-hand side. Everything the screen does is also available as a command, listed below, for scripts and for anyone who prefers them.
 
 ## How it works
 

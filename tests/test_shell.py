@@ -4,6 +4,7 @@
 """The one-screen workflow: home, hotkeys between steps, background reads, and the way back from a sign-in problem."""
 
 import io
+import json
 import os
 import tempfile
 import threading
@@ -24,6 +25,17 @@ def ref(serial, name, version="10.2.1"):
 
 
 REFS = [ref("S1", "fw-one"), ref("S2", "fw-two")]
+
+
+class FakeBundle:
+    """Stands in for what the review of a prepare finds. The shell tests never reach a real Panorama or firewall."""
+
+    def __init__(self, serials=("S1", "S2"), content=False):
+        self.plan = {"hash": "ab" * 32, "serials": list(serials),
+                     "units": [{"active": "S1", "active_name": "fw-one", "passive": "S2", "passive_name": "fw-two", "content": ["content"] if content else [],
+                                "sync_config": True, "content_diffs": [], "content_reason": ""}] if serials else [],
+                     "downloads": [{"serial": "S1", "hostname": "fw-one", "version": "10.2.3"}] if serials else [], "content_tasks": []}
+        self.label, self.created = "LIVE", time.time()
 
 
 def wait(ui, seconds=3):
@@ -48,9 +60,9 @@ class ShellCase(Home):
         self.addCleanup(patcher.stop)
         self.lab = profiles.create("lab", "192.0.2.1")
         credstore.write(self.lab.creds_file, {"tool": "pw"})
-        self.commands, self.reads = [], []
+        self.commands, self.reads, self.reviews, self.executed = [], [], [], []
 
-    def make(self, address="192.0.2.1", target="12.1.10", run=None, read=None):
+    def make(self, address="192.0.2.1", target="12.1.10", run=None, read=None, review=None, execute=None):
         def run_command(args):
             self.commands.append((args.command, getattr(args, "target", None)))
             return run(args) if run else (print(f"output of {args.command}") or 0)
@@ -58,8 +70,16 @@ class ShellCase(Home):
         def read_devices(args):
             self.reads.append(args.command)
             return read(args) if read else REFS
+        def prepare_review(args):
+            self.reviews.append(args.target)
+            return review(args) if review else (print("PREPARE PLAN TEXT: 2 config syncs") or FakeBundle())
+
+        def prepare_execute(args, bundle, approve):
+            approval = approve(None) if approve else None
+            self.executed.append((bundle, approval))
+            return execute(args, bundle, approve) if execute else (print("PREPARE RAN") or 0)
         session = shell.Session(cli.parse_args(["shell"]), address, target, self.lab)
-        return shell.Shell(session, run_command=run_command, read_devices=read_devices)
+        return shell.Shell(session, run_command=run_command, read_devices=read_devices, prepare_review=prepare_review, prepare_execute=prepare_execute)
 
     def text(self, ui, width=110, height=30):
         return tui.plain(ui.render(width, height))
@@ -485,15 +505,12 @@ class ChoosingFirewalls(ShellCase):
 
 
 class OtherSteps(ShellCase):
-    def test_prepare_and_upgrade_say_how_to_run_them_for_now_with_the_address_and_target_filled_in(self):
+    def test_upgrade_says_how_to_run_it_for_now_with_the_address_and_target_filled_in(self):
         ui = self.make(address="pano.example", target="10.2.11-h1")
-        ui.press("alt-5")
-        text = self.text(ui)
-        self.assertIn("panupgrade prepare --profile lab --target 10.2.11-h1", text)
-        self.assertIn("not on the screen yet", text)
-        ui.press("enter")
         ui.press("alt-6")
-        self.assertIn("panupgrade upgrade --profile lab --target 10.2.11-h1", self.text(ui))
+        text = self.text(ui)
+        self.assertIn("panupgrade upgrade --profile lab --target 10.2.11-h1", text)
+        self.assertIn("not on the screen yet", text)
 
     def test_settings_open_in_the_shell_and_save_to_settings_toml(self):
         ui = self.make()
@@ -902,6 +919,231 @@ class TheJobsScreenAndPane(ShellCase):
         self.assertLessEqual(len([j for j in ui.jobs if not j.running]), shell.KEPT_JOBS)
         self.assertIn("slow", [j.title for j in ui.jobs])
         gate.set()
+
+
+class ThePrepareScreen(ShellCase):
+    def at_review(self, **kw):
+        ui = self.make(**kw)
+        ui.press("alt-5"); wait(ui)
+        return ui
+
+    def approve(self, ui, word="APPROVE"):
+        ui.press("enter")                                         # the first button: Approve and run...
+        for ch in word:
+            ui.press(ch)
+        ui.press("enter")
+
+    def test_opening_it_reads_the_plan_and_changes_nothing(self):
+        ui = self.at_review()
+        text = self.text(ui)
+        self.assertIn("PREPARE PLAN TEXT", text)
+        self.assertIn("2 firewalls to prepare. Nothing has been changed yet.", text)
+        self.assertIn("[ Approve and run... ]", text)
+        self.assertEqual((self.reviews, self.executed), (["12.1.10"], []))
+
+    def test_it_says_what_is_missing_instead_of_reading(self):
+        ui = self.make(target="")
+        ui.press("alt-5")
+        self.assertIn("Type the target PAN-OS version", self.text(ui))
+        ui2 = self.make(address="")
+        ui2.press("alt-5")
+        self.assertIn("type its address", self.text(ui2))
+        self.assertEqual(self.reviews, [])
+
+    def test_nothing_runs_until_approve_is_typed_and_anything_else_does_nothing(self):
+        ui = self.at_review()
+        ui.press("enter")
+        text = self.text(ui)
+        self.assertIn("approve exactly this", text)
+        self.assertIn("fw-one (active) -> fw-two (passive): force the active member's configuration", text)
+        self.assertIn("fw-one: download 10.2.3 (does not install it)", text)
+        self.assertIn("Type APPROVE to go ahead", text)
+        for ch in "yes":
+            ui.press(ch)
+        ui.press("enter")
+        self.assertIn("Nothing was started", self.text(ui))
+        self.assertEqual(self.executed, [])
+        ui.press("esc")                                           # back to the plan without doing anything
+        self.assertIn("[ Approve and run... ]", self.text(ui))
+        self.assertEqual(self.executed, [])
+
+    def test_typing_the_word_in_any_case_runs_exactly_the_plan_that_was_read_with_an_approval_bound_to_it(self):
+        ui = self.at_review()
+        self.approve(ui, "approve")
+        wait(ui)
+        self.assertEqual(len(self.executed), 1)
+        bundle, approval = self.executed[0]
+        self.assertEqual((approval.plan_hash, approval.serials), ("ab" * 32, ["S1", "S2"]))
+        self.assertIn("typed APPROVE on the prepare screen", approval.approved_by)
+        text = self.text(ui)
+        self.assertIn("PREPARE RAN", text)
+        self.assertIn("finished at", text)
+        self.assertEqual(self.reviews, ["12.1.10"])                # it did not read a second plan to run
+
+    def test_what_is_being_approved_wraps_so_none_of_it_is_cut_off(self):
+        ui = self.at_review()
+        ui.press("enter")
+        flat = " ".join(tui.plain(ui.render(70, 30)).split())
+        self.assertIn("force the active member's configuration onto the passive, once the content versions match", flat)
+
+    def test_a_plan_that_has_gone_stale_cannot_be_approved(self):
+        ui = self.at_review()
+        ui.screens["prepare"].bundle.created -= shell.PLAN_MAX_AGE + 60
+        ui.press("enter")
+        self.assertIn("Read it again before approving", self.text(ui))
+        self.assertEqual(ui.screen.stage, "review")
+        self.assertEqual(self.executed, [])
+
+    def test_a_plan_that_goes_stale_while_the_approval_is_being_typed_is_refused_at_the_last_moment(self):
+        ui = self.at_review()
+        ui.press("enter")
+        ui.screens["prepare"].bundle.created -= shell.PLAN_MAX_AGE + 60
+        for ch in "APPROVE":
+            ui.press(ch)
+        ui.press("enter")
+        self.assertEqual(self.executed, [])
+        self.assertIn("too old to approve", self.text(ui))
+
+    def test_a_different_address_or_target_means_the_old_plan_is_not_the_one_to_approve(self):
+        ui = self.at_review()
+        ui.press("alt-h")
+        ui.session.target = "12.1.11"
+        ui.press("alt-5"); wait(ui)
+        self.assertEqual(self.reviews, ["12.1.10", "12.1.11"])
+        self.assertEqual(self.executed, [])
+
+    def test_leaving_and_coming_back_keeps_the_plan_and_does_not_read_again(self):
+        ui = self.at_review()
+        ui.press("alt-h"); ui.press("alt-5")
+        self.assertIn("PREPARE PLAN TEXT", self.text(ui))
+        self.assertEqual(self.reviews, ["12.1.10"])
+
+    def test_while_it_runs_the_screen_shows_the_live_output_and_quitting_asks_first(self):
+        gate, started = threading.Event(), threading.Event()
+
+        def execute(args, bundle, approve):
+            print("syncing fw-one -> fw-two")
+            started.set()
+            gate.wait(3)
+            return 0
+        ui = self.at_review(execute=execute)
+        self.approve(ui)
+        started.wait(3)
+        text = self.text(ui)
+        self.assertIn("syncing fw-one -> fw-two", text)
+        self.assertIn("preparing...", text)
+        self.assertIn("RUNNING", ui.status("prepare")[1])
+        self.assertIsNone(ui.press("ctrl-c"))                     # not by accident
+        self.assertIn("Prepare is changing firewalls", ui.message)
+        self.assertEqual(ui.press("ctrl-c"), "cancel")            # the same key again means it
+        ui.press("alt-h")
+        ui.screen.at = ui.screen.stops() - 1
+        self.assertIsNone(ui.press("enter"))                      # Quit on the home screen asks as well
+        self.assertEqual(ui.press("enter"), "accept")
+        gate.set(); wait(ui)
+
+    def test_a_key_in_between_disarms_the_quit_question(self):
+        gate = threading.Event()
+        ui = self.at_review(execute=lambda a, b, c: gate.wait(3) and 0)
+        self.approve(ui)
+        self.assertIsNone(ui.press("ctrl-c"))
+        ui.press("down")
+        self.assertIsNone(ui.press("ctrl-c"))                     # asks again
+        gate.set(); wait(ui)
+        self.assertEqual(ui.press("ctrl-c"), "cancel")            # nothing is changing any more
+
+    def test_leaving_while_it_runs_is_safe_the_job_is_listed_and_it_finishes_on_its_own(self):
+        gate = threading.Event()
+        ui = self.at_review(execute=lambda a, b, c: gate.wait(3) and print("all done") or 0)
+        self.approve(ui)
+        ui.press("alt-h")
+        self.assertIn("RUNNING", self.text(ui))
+        self.assertIn(">> Prepare (lab)", self.text(ui, 130, 30))
+        gate.set(); wait(ui)
+        ui.press("alt-5")
+        self.assertIn("all done", self.text(ui))
+
+    def test_a_second_run_cannot_be_started_while_one_is_going(self):
+        gate = threading.Event()
+        ui = self.at_review(execute=lambda a, b, c: gate.wait(3) and 0)
+        self.approve(ui)
+        ui.press("alt-h"); ui.press("alt-5")
+        self.assertEqual(ui.screen.stage, "running")
+        self.assertEqual([label for label, _ in ui.screen.buttons()], ["Home (it keeps running)"])
+        ui.screen.read_plan()
+        self.assertEqual(self.reviews, ["12.1.10"])
+        gate.set(); wait(ui)
+
+    def test_nothing_to_prepare_goes_straight_on_without_an_approval_to_type(self):
+        ui = self.at_review(review=lambda a: print("nothing to prepare") or FakeBundle(serials=()))
+        self.assertIn("nothing to prepare", self.text(ui))
+        self.assertIn("[ Continue to the upgrade kit ]", self.text(ui))
+        ui.press("enter"); wait(ui)
+        self.assertEqual(len(self.executed), 1)
+
+    def test_a_rehearsal_is_a_dry_run_through_the_command_and_never_the_real_run(self):
+        ui = self.at_review()
+        ui.press("right"); ui.press("enter"); wait(ui)
+        self.assertEqual(self.executed, [])
+        self.assertEqual(self.commands, [("prepare", "12.1.10")])
+        self.assertIn("output of prepare", self.text(ui))
+
+    def test_after_a_run_the_report_and_plan_are_out_of_date_and_are_forgotten(self):
+        ui = self.make()
+        ui.press("alt-r"); wait(ui)
+        self.assertIsNotNone(ui.screens["report"].record())
+        ui.press("alt-5"); wait(ui)
+        self.approve(ui); wait(ui)
+        self.assertIsNone(ui.screens["report"].record())
+
+    def test_a_plan_that_cannot_be_built_shows_why_and_offers_to_try_again(self):
+        ui = self.make(review=lambda a: print("error: cannot reach 192.0.2.1") or 2)
+        ui.press("alt-5"); wait(ui)
+        text = self.text(ui)
+        self.assertIn("cannot reach 192.0.2.1", text)
+        self.assertIn("could not be built", text)
+        self.assertIn("[ Read the plan again ]", text)
+        self.assertEqual(self.executed, [])
+
+    def test_a_sign_in_problem_while_reading_the_plan_goes_to_the_sign_in_screen(self):
+        ui = self.make(review=lambda a: setattr(a, "_sign_in_problem", "no usable account") or 2)
+        ui.press("alt-5"); wait(ui)
+        self.assertEqual(ui.screen.name, "auth")
+        self.assertIn("no usable account", self.text(ui))
+
+    def test_a_reset_from_elsewhere_cannot_lose_a_run_in_progress(self):
+        gate = threading.Event()
+        ui = self.at_review(execute=lambda a, b, c: gate.wait(3) and 0)
+        self.approve(ui)
+        ui.screens["prepare"].reset()
+        self.assertEqual(ui.screens["prepare"].stage, "running")
+        gate.set(); wait(ui)
+
+    def test_the_home_screen_says_where_it_stands(self):
+        ui = self.make()
+        self.assertIn("not started", ui.status("prepare")[1])
+        ui.press("alt-5"); wait(ui)
+        self.assertIn("2 firewalls to prepare - waiting for your approval", ui.status("prepare")[1])
+        self.approve(ui); wait(ui)
+        self.assertIn("finished at", ui.status("prepare")[1])
+
+    def test_the_screen_fits_a_small_window_and_keeps_its_buttons(self):
+        ui = self.at_review(review=lambda a: print("\n".join(f"line {i}" for i in range(80))) or FakeBundle())
+        for height in (12, 24):
+            lines = ui.render(80, height)
+            self.assertEqual(len(lines), height)
+            self.assertIn("[ Approve and run... ]", tui.plain(lines))
+
+
+class TheApprovalRecord(Home):
+    def test_it_is_bound_to_the_plan_and_written_next_to_the_journal(self):
+        journal = os.path.join(self.tmp.name, "prepare-1.jsonl")
+        approval = cli._new_approval("ff" * 32, ["S1"], [], journal, "typed APPROVE on the prepare screen")
+        self.assertEqual((approval.plan_hash, approval.serials), ("ff" * 32, ["S1"]))
+        with open(journal + ".approval.json", encoding="utf-8") as handle:
+            saved = json.load(handle)
+        self.assertEqual(saved["plan_hash"], "ff" * 32)
+        self.assertIn("typed APPROVE on the prepare screen", saved["approved_by"])
 
 
 class Jobs(unittest.TestCase):

@@ -116,7 +116,13 @@ def render_plan(plan, style, verbose=False):
         out += [style.line("warn", f"[{c['code']}] {c['scope']}: {c['text']}", 2) for c in plan["cautions"]]
     if plan.get("advice"):
         out += ["", style.bold("Advice (never blocks an upgrade, nothing to acknowledge):")]
-        out += [style.line("info", f"[{c['code']}] {c['scope']}: {c['text']}", 2) for c in plan["advice"]]
+        for c in plan["advice"]:
+            if c.get("devices"):
+                out.append(style.line("info", f"{style.bold(c['title'])} ({len(c['devices'])})", 2))
+                out.append(style.bullet(c["text"], 6))
+                out += report.device_rows(c["devices"], "        ")
+            else:
+                out.append(style.line("info", f"[{c['code']}] {c['scope']}: {c['text']}", 2))
     for heading, devs in report.grouped_devices(plan):
         out += ["", style.bold(f"{heading} ({len(devs)})")]
         for dev in devs:

@@ -44,6 +44,7 @@ def findings(dev, verbose=False):
     results = [r for r in dev["results"] if r["status"] != "pass"]
     if verbose:
         return results, ""
+    results = [r for r in results if not (r["check"] == "panorama_range" and r["status"] == "warn")]   # said once, for all of them, in the advice
     verdict = dev["verdict"]
     if verdict == "skipped":
         reason = next((r for r in results if r["status"] == "skip" and r.get("kind") == dev["skip_kind"]), None)
@@ -87,6 +88,12 @@ def _wrap(text, indent, width=100):
     return textwrap.fill(text, width=width, initial_indent=" " * indent, subsequent_indent=" " * (indent + 4))
 
 
+def device_rows(devices, indent):
+    """Firewalls in aligned columns: serial, hostname, PAN-OS version."""
+    widths = [max(len(d[k]) for d in devices) for k in ("serial", "hostname")]
+    return [f"{indent}{d['serial'].ljust(widths[0])}  {d['hostname'].ljust(widths[1])}  {d['version']}" for d in devices]
+
+
 def to_text(plan, verbose=False):
     s = plan["summary"]
     lines = [BANNER, "",
@@ -101,11 +108,17 @@ def to_text(plan, verbose=False):
     for r in plan["fleet_checks"]:
         if r["status"] != "pass":
             lines.append(_wrap(f"FLEET {r['status'].upper()}: {r['reason']}", 0))
-    for heading, items in (("Cautions that need acknowledgement before an apply:", plan["cautions"]),
-                           ("Advice (never blocks an upgrade, nothing to acknowledge):", plan.get("advice"))):
-        if items:
-            lines += ["", heading]
-            lines += [_wrap(f"- [{c['code']}] {c['scope']}: {c['text']}", 2) for c in items]
+    if plan["cautions"]:
+        lines += ["", "Cautions that need acknowledgement before an apply:"]
+        lines += [_wrap(f"- [{c['code']}] {c['scope']}: {c['text']}", 2) for c in plan["cautions"]]
+    if plan.get("advice"):
+        lines += ["", "Advice (never blocks an upgrade, nothing to acknowledge):"]
+        for c in plan["advice"]:
+            if c.get("devices"):
+                lines += [_wrap(f"- {c['title']} ({len(c['devices'])})", 2), _wrap(c["text"], 4)]
+                lines += device_rows(c["devices"], "      ")
+            else:
+                lines.append(_wrap(f"- [{c['code']}] {c['scope']}: {c['text']}", 2))
     for heading, devs in grouped_devices(plan):
         lines += ["", f"{heading} ({len(devs)})"]
         for dev in devs:

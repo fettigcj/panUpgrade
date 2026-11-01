@@ -145,7 +145,7 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
         "devices": list(devices.values()),
         "order": [[unit for unit in batch] for batch in batches],
         "cautions": cautions,
-        "advice": _advice(devices, fleet),
+        "advice": _advice(devices, pano_version, releases),
         "summary": _summary(devices, fleet),
     }
     plan["content_hash"] = _hash(plan)
@@ -338,13 +338,40 @@ def _cautions(devices, fleet):
     return out
 
 
-def _advice(devices, fleet):
-    """Notes that never need acknowledging and never hold an upgrade (for now: a firewall lagging behind Panorama)."""
-    out = [{"scope": "fleet", "code": "advise_upgrade", "text": r.reason} for r in fleet
-           if r.check == "version_spread" and r.status == WARN]
+LAGGING_TITLE = "PAN-OS version lagging behind Panorama"
+
+
+def _advice(devices, panorama_version=None, table=None):
+    """Notes that never need acknowledging and never hold an upgrade.
+
+    Every firewall that lags behind Panorama is named in ONE note (serial, hostname, version), with the advice said once; the
+    other advice is per firewall because it differs per firewall.
+    """
+    out = []
+    lagging, evidence = [], {}
+    for serial, dev in devices.items():
+        for r in dev["results"]:
+            if r["check"] == "panorama_range" and r["status"] == WARN and not r.get("ack"):
+                lagging.append({"serial": serial, "hostname": dev["hostname"], "version": dev["current_version"]})
+                evidence = r.get("evidence") or evidence
+    if lagging:
+        limit, unit = evidence.get("limit"), evidence.get("unit", "minor")
+        stale = ""
+        try:
+            stale = checks._stale_note(table or checks.releases_mod.default(), Version.parse(panorama_version),
+                                       *[Version.parse(d["version"]) for d in lagging])
+        except (VersionError, TypeError):
+            pass
+        tail = (f" The target {evidence['target']} would still be {evidence['after']} {checks._unit_names(unit)} behind Panorama; "
+                f"consider a newer target.") if evidence.get("after", 0) > (limit or 0) else ""
+        out.append({"scope": "fleet", "code": "version_lagging", "title": LAGGING_TITLE, "devices": lagging,
+                    "text": f"These {len(lagging)} firewall{'s' if len(lagging) != 1 else ''} run more than {limit} {checks._unit_names(unit)} behind "
+                            f"Panorama {panorama_version or ''}".rstrip() + ". Panorama converts its configuration to each firewall's version, "
+                            "and that is least trustworthy far back. This does not hold the upgrade; catching up is the fix. Panorama must not be "
+                            "upgraded further while these lag." + tail + stale})
     for serial, dev in devices.items():
         out += [{"scope": serial, "code": "advise_upgrade", "text": r["reason"]}
-                for r in dev["results"] if r["check"] in ("panorama_range", "certificate_advisory", "device_certificate", "clock_skew")
+                for r in dev["results"] if r["check"] in ("certificate_advisory", "device_certificate", "clock_skew")
                 and r["status"] == WARN and not r.get("ack")]
     return out
 

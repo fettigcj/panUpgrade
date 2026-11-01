@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import date, datetime, timezone
 from dataclasses import asdict
 from pathlib import Path
@@ -656,7 +657,12 @@ def _interactive_approval(style, plan_hash, serials, acks, lines, journal_path, 
     if answer.upper() != "APPROVE":
         print(style.line("stop", "not approved; nothing was done"))
         return None
-    approval = approval_mod.Approval(plan_hash, list(serials), list(acks), f"{getpass.getuser()} (typed APPROVE at the terminal)",
+    return _new_approval(plan_hash, serials, acks, journal_path, "typed APPROVE at the terminal")
+
+
+def _new_approval(plan_hash, serials, acks, journal_path, how):
+    """The record of a person's go-ahead, bound to one plan and written next to the journal so it is as auditable as a file handed in."""
+    approval = approval_mod.Approval(plan_hash, list(serials), list(acks), f"{getpass.getuser()} ({how})",
                                      datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z"),
                                      datetime.now(timezone.utc).isoformat(timespec="seconds"))
     if journal_path:
@@ -760,62 +766,18 @@ def _upgrade(args):
     return 0 if result["failures"] == 0 else 1
 
 
-def _prepare(args):
-    style = _style(args)
+class PrepareBundle:
+    """What the review of a prepare found, kept for the run that follows: the plan, who is who, and the connection to carry it out."""
+
+    def __init__(self, plan, names, backend, fleet, label, settings):
+        self.plan, self.names, self.backend, self.fleet, self.label, self.settings = plan, names, backend, fleet, label, settings
+        self.created = time.time()
+
+
+def _guarded_prepare(style, fn):
+    """Run one phase of prepare and turn the trouble a person can act on into a message and an exit code."""
     try:
-        settings = _load_settings(args)
-        rules = paths.load_rules(args.path_rules) if args.path_rules else None
-        _load_releases(args)                                  # so the upgrade script pins the same table
-        backend, fleet, label = _backend_and_source(args)
-        plan = prepare_mod.build(fleet, settings, _selection(args), args.target, rules)
-        names = {u[k]: u[k + "_name"] for u in plan["units"] for k in ("active", "passive")}
-        names.update({d["serial"]: d["hostname"] for d in plan["downloads"]})
-        names.update({t["serial"]: t["hostname"] for t in plan["content_tasks"]})
-        n_content = sum(1 for u in plan["units"] if u["content"])
-        n_config = sum(1 for u in plan["units"] if u["sync_config"])
-        print(style.bold(f"{label}: prepare plan {plan['hash'][:12]} - {n_content} content sync(s), {len(plan['content_tasks'])} minimum-content install(s), "
-                         f"{n_config} config sync(s), {len(plan['downloads'])} image download(s)" + (f" for {args.target}" if args.target else "")))
-        for u in plan["units"]:
-            if u["content"]:
-                print(style.line("start", f"{u['active_name']} + {u['passive_name']}: 'check now' on both, then install the latest "
-                                          f"{' and '.join(u['content'])} update only if PAN-OS still cannot confirm "
-                                          f"({u.get('content_reason') or 'versions differ'})"))
-            if u["sync_config"]:
-                print(style.line("sync", f"{u['active_name']} (active) -> {u['passive_name']} (passive), once the content versions match"))
-        for t in plan["content_tasks"]:
-            print(style.line("start", f"{t['hostname']}: install the latest content (has {t['have']}; {t['for_version']} needs {t['needed']} or newer)"))
-        for d in plan["downloads"]:
-            print(style.line("start", f"{d['hostname']}: download {d['version']}"))
-        for c in plan["content_report"]:
-            print(style.line("info", f"{c['hostname']} pair, content {c['text']}"))
-        for n in plan["notes"]:
-            print(style.line("warn", f"{n['hostname']}: {n['why']}"))
-        for s in plan["skipped"]:
-            print(style.line("skip", f"{s['hostname']}: {s['why']}"))
-        result = None
-        if plan["serials"]:
-            result = _prepare_tasks(args, style, plan, names, backend, settings, label)
-            if isinstance(result, int):
-                return result
-            sys.stdout.write(console.render_outcomes(result, names, style))
-        else:
-            print(style.line("ok", "nothing to prepare" + ("" if args.target else " (give --target to also pre-download images)")))
-        if result is not None and result["failures"]:
-            print()
-            print(style.bold("These preparation steps failed:"))
-            for serial, (state, detail) in result["outcome"].items():
-                if state in ("failed", "needs_attention"):
-                    print(style.bullet(f"{names.get(serial, serial)}: {detail}", 2))
-            print()
-            if not args.target:
-                print(style.line("fail", "Fix that and run prepare again."))
-                return 1
-            # A failed preparation does not veto the kit: the upgrade plan below is judged on what the firewalls look like NOW.
-            print(style.line("warn", "The upgrade batch developed below may not include firewalls that failed to prepare for upgrade properly."))
-        if args.target:
-            return _issue_kit(args, style, label)
-        print(style.line("info", "give --target VERSION to also review the upgrade and get its approval and run script"))
-        return 0
+        return fn()
     except KeyboardInterrupt:
         print(style.line("stop", "stopped by you (Ctrl-C). The step in progress, if any, is marked started-but-unfinished in the "
                                  "journal: check that device, then continue with --resume. Nothing was undone."), file=sys.stderr)
@@ -832,7 +794,83 @@ def _prepare(args):
         return 2
 
 
-def _prepare_tasks(args, style, plan, names, backend, settings, label):
+def _prepare(args):
+    style = _style(args)
+    return _guarded_prepare(style, lambda: _prepare_execute(args, style, _prepare_review(args, style)))
+
+
+def _prepare_heading(plan):
+    """What the approval is told it is approving; content updates are said plainly because they land outside the person's own change schedule."""
+    if any(u["content"] for u in plan["units"]):
+        return ("Approval needed. This includes dynamic CONTENT updates, installed on the firewalls NOW and therefore outside your "
+                "own change schedule for them (the config sync cannot happen until content is level):")
+    return "Approval needed. You are being asked to approve exactly this:"
+
+
+def _prepare_review(args, style):
+    """Read the fleet and say what prepare would do. Changes nothing. Returns a PrepareBundle for _prepare_execute."""
+    settings = _load_settings(args)
+    rules = paths.load_rules(args.path_rules) if args.path_rules else None
+    _load_releases(args)                                  # so the upgrade script pins the same table
+    backend, fleet, label = _backend_and_source(args)
+    plan = prepare_mod.build(fleet, settings, _selection(args), args.target, rules)
+    names = {u[k]: u[k + "_name"] for u in plan["units"] for k in ("active", "passive")}
+    names.update({d["serial"]: d["hostname"] for d in plan["downloads"]})
+    names.update({t["serial"]: t["hostname"] for t in plan["content_tasks"]})
+    n_content = sum(1 for u in plan["units"] if u["content"])
+    n_config = sum(1 for u in plan["units"] if u["sync_config"])
+    print(style.bold(f"{label}: prepare plan {plan['hash'][:12]} - {n_content} content sync(s), {len(plan['content_tasks'])} minimum-content install(s), "
+                     f"{n_config} config sync(s), {len(plan['downloads'])} image download(s)" + (f" for {args.target}" if args.target else "")))
+    for u in plan["units"]:
+        if u["content"]:
+            print(style.line("start", f"{u['active_name']} + {u['passive_name']}: 'check now' on both, then install the latest "
+                                      f"{' and '.join(u['content'])} update only if PAN-OS still cannot confirm "
+                                      f"({u.get('content_reason') or 'versions differ'})"))
+        if u["sync_config"]:
+            print(style.line("sync", f"{u['active_name']} (active) -> {u['passive_name']} (passive), once the content versions match"))
+    for t in plan["content_tasks"]:
+        print(style.line("start", f"{t['hostname']}: install the latest content (has {t['have']}; {t['for_version']} needs {t['needed']} or newer)"))
+    for d in plan["downloads"]:
+        print(style.line("start", f"{d['hostname']}: download {d['version']}"))
+    for c in plan["content_report"]:
+        print(style.line("info", f"{c['hostname']} pair, content {c['text']}"))
+    for n in plan["notes"]:
+        print(style.line("warn", f"{n['hostname']}: {n['why']}"))
+    for s_ in plan["skipped"]:
+        print(style.line("skip", f"{s_['hostname']}: {s_['why']}"))
+    return PrepareBundle(plan, names, backend, fleet, label, settings)
+
+
+def _prepare_execute(args, style, bundle, approve=None):
+    """Carry out a reviewed prepare. ``approve(journal_path)`` returns the Approval (or None to stop); by default the person is asked at the terminal."""
+    plan, names, backend, label, settings = bundle.plan, bundle.names, bundle.backend, bundle.label, bundle.settings
+    result = None
+    if plan["serials"]:
+        result = _prepare_tasks(args, style, plan, names, backend, settings, label, approve)
+        if isinstance(result, int):
+            return result
+        sys.stdout.write(console.render_outcomes(result, names, style))
+    else:
+        print(style.line("ok", "nothing to prepare" + ("" if args.target else " (give --target to also pre-download images)")))
+    if result is not None and result["failures"]:
+        print()
+        print(style.bold("These preparation steps failed:"))
+        for serial, (state, detail) in result["outcome"].items():
+            if state in ("failed", "needs_attention"):
+                print(style.bullet(f"{names.get(serial, serial)}: {detail}", 2))
+        print()
+        if not args.target:
+            print(style.line("fail", "Fix that and run prepare again."))
+            return 1
+        # A failed preparation does not veto the kit: the upgrade plan below is judged on what the firewalls look like NOW.
+        print(style.line("warn", "The upgrade batch developed below may not include firewalls that failed to prepare for upgrade properly."))
+    if args.target:
+        return _issue_kit(args, style, label)
+    print(style.line("info", "give --target VERSION to also review the upgrade and get its approval and run script"))
+    return 0
+
+
+def _prepare_tasks(args, style, plan, names, backend, settings, label, approve=None):
     """Approve and run the preparation tasks (config sync, image downloads). Returns the result, or an exit code."""
     if args.dry_run and not args.approval:
         approval = approval_mod.Approval(plan["hash"], list(plan["serials"]), [], "dry run: nothing changes, so nothing was asked", "")
@@ -840,12 +878,12 @@ def _prepare_tasks(args, style, plan, names, backend, settings, label):
     elif args.approval:
         approval = approval_mod.Approval.from_file(args.approval)
     else:
-        heading = "Approval needed. You are being asked to approve exactly this:"
-        if any(u["content"] for u in plan["units"]):
-            heading = ("Approval needed. This includes dynamic CONTENT updates, installed on the firewalls NOW and therefore outside your "
-                       "own change schedule for them (the config sync cannot happen until content is level):")
         journal_path, resuming = _choose_journal(args, plan, "prepare", style)
-        approval = _interactive_approval(style, plan["hash"], plan["serials"], [], prepare_mod.describe(plan), journal_path, heading=heading)
+        if approve is not None:
+            approval = approve(journal_path)
+        else:
+            approval = _interactive_approval(style, plan["hash"], plan["serials"], [], prepare_mod.describe(plan), journal_path,
+                                             heading=_prepare_heading(plan))
         if approval is None:
             return 3
     if args.approval or args.dry_run:
@@ -882,7 +920,12 @@ def _issue_kit(args, style, label):
         why = next((r["reason"] for r in d["results"] if r["status"] in ("fail", "error")), "see `plan`")
         print(style.line("fail", f"{d['hostname']}: BLOCKED - {why}", 2))
     for note in plan.get("advice", []):
-        print(style.line("info", f"{note['scope']}: {note['text']}", 2))
+        if note.get("devices"):
+            print(style.line("info", f"{style.bold(note['title'])} ({len(note['devices'])})", 2))
+            print(style.bullet(note["text"], 6))
+            print("\n".join(report.device_rows(note["devices"], "        ")))
+        else:
+            print(style.line("info", f"{note['scope']}: {note['text']}", 2))
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     args.kit_dir = args.kit_dir or str(_ws(args, "prepared"))
     kit_dir = Path(args.kit_dir)

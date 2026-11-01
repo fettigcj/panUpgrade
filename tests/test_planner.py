@@ -198,10 +198,33 @@ class FleetChecks(unittest.TestCase):
 
     def test_lagging_firewalls_get_advice_not_a_blocker_or_a_caution(self):
         p = plan(fleet(pair("A1", "A2"), panorama="23.0.0"), panorama_compare="major")   # 23 vs 20 = 3 > 2
-        self.assertIn(("A1", "advise_upgrade"), self.advice(p))
-        self.assertIn(("fleet", "advise_upgrade"), self.advice(p))
+        self.assertIn(("fleet", "version_lagging"), self.advice(p))
         self.assertNotIn("version_spread", self.codes(p))
         self.assertEqual(dev(p, "A1")["verdict"], "ready")      # the lag does not hold the upgrade
+
+    def test_every_lagging_firewall_is_named_once_in_one_note_and_the_advice_is_not_repeated(self):
+        p = plan(fleet(pair("A1", "A2"), device("OLD", version="20.1.4"), panorama="23.0.0"), panorama_compare="major")
+        notes = [a for a in p["advice"] if a["code"] == "version_lagging"]
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0]["title"], "PAN-OS version lagging behind Panorama")
+        self.assertEqual(sorted(d["serial"] for d in notes[0]["devices"]), ["A1", "A2", "OLD"])
+        self.assertEqual(set(notes[0]["devices"][0]), {"serial", "hostname", "version"})
+        self.assertEqual(sum(1 for a in p["advice"] if "Panorama converts" in a["text"]), 1)
+        self.assertEqual([a for a in p["advice"] if a["scope"] in ("A1", "A2", "OLD")], [])      # nothing repeated per firewall
+
+    def test_the_text_and_console_plans_list_them_in_columns_under_one_heading_and_not_again_per_firewall(self):
+        from panupgrade import console, report
+        p = plan(fleet(pair("A1", "A2"), panorama="23.0.0"), panorama_compare="major")
+        text = report.to_text(p)
+        self.assertEqual(text.count("PAN-OS version lagging behind Panorama"), 1)
+        self.assertEqual(text.count("Panorama converts"), 1)
+        self.assertRegex(text, r"\n      A1  \S+  20\.")
+        self.assertNotIn("panorama_range", text)
+        shown = console.render_plan(p, console.Style())
+        self.assertEqual(shown.count("PAN-OS version lagging behind Panorama"), 1)
+        self.assertEqual(shown.count("Panorama converts"), 1)
+        self.assertNotIn("panorama_range:", shown)
+        self.assertIn("panorama_range", report.to_text(p, verbose=True))                            # the detail is still there on request
 
     def test_spread_limit_is_tunable(self):
         p = plan(fleet(pair("A1", "A2"), panorama="23.0.0"), spread_limit=3, panorama_compare="major")
@@ -210,12 +233,12 @@ class FleetChecks(unittest.TestCase):
     def test_advice_covers_firewalls_left_behind_by_the_selection(self):
         src = fleet(pair("A1", "A2"), device("OLD", version="20.1.4"), panorama="23.0.0")
         p = plan(src, Selection(serials=["A1", "A2"]), panorama_compare="major")
-        self.assertIn(("fleet", "advise_upgrade"), self.advice(p))
+        self.assertIn(("fleet", "version_lagging"), self.advice(p))
 
     def test_advice_says_when_the_target_is_itself_out_of_range(self):
         p = plan(fleet(pair("A1", "A2"), panorama="23.0.0"), panorama_compare="major")     # target 20.2.9 is itself 3 behind 23
-        text = " ".join(a["text"] for a in p["advice"] if a["scope"] == "A1")
-        self.assertIn("consider a newer target", text)
+        text = " ".join(a["text"] for a in p["advice"] if a["code"] == "version_lagging")
+        self.assertEqual(text.count("consider a newer target"), 1)
 
     def test_panorama_older_is_judged_by_minor_version_by_default_and_by_major_if_told(self):
         # Panorama 20.2.5 vs target 20.2.9: same feature release, so not older

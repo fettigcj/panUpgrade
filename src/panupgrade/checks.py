@@ -331,7 +331,7 @@ def panorama_range(ctx):
                            f"advise upgrade: running {current}, {behind} {names} behind Panorama {pano} "
                            f"(limit {limit}). Panorama converts its configuration to each firewall's version, and that is "
                            f"least trustworthy far back. This does not hold the upgrade; catching up is the fix.{tail}{stale}",
-                           evidence={"behind": behind, "limit": limit, "unit": unit})
+                           evidence={"behind": behind, "limit": limit, "unit": unit, "after": after, "target": str(ctx.target)})
     return CheckResult("panorama_range", PASS, f"{current} is within {limit} {names} of Panorama {pano}{stale}")
 
 

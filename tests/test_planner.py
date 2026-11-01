@@ -20,7 +20,7 @@ def actions(d):
 class HappyPaths(unittest.TestCase):
     def test_pair_is_one_unit_passive_first(self):
         p = plan(fleet(pair("A1", "A2")))
-        self.assertEqual(p["order"], [[["A2", "A1"]]])
+        self.assertEqual(p["order"], [["A2", "A1"]])
         self.assertEqual((dev(p, "A1")["verdict"], dev(p, "A2")["verdict"]), ("ready", "ready"))
         self.assertIn("fail over", actions(dev(p, "A1")))
         self.assertNotIn("fail over", actions(dev(p, "A2")))
@@ -36,6 +36,26 @@ class HappyPaths(unittest.TestCase):
         self.assertIn("a2 (the passive member)", wait_step["note"])
         fail_over = next(s for s in dev(p, "A1")["steps"] if s["action"] == "fail over")
         self.assertIn("already upgraded passive peer takes over", fail_over["note"])
+
+    def pair_with_the_passive_already_upgraded(self):
+        a1, a2 = pair("A1", "A2", ha_config_sync=False)
+        a2["sw_version"] = "20.2.9"
+        a2["facts"]["sw_version"] = "20.2.9"
+        return fleet([a1, a2])
+
+    def test_an_active_whose_peer_is_already_upgraded_is_not_asked_to_sync_its_config_across_versions(self):
+        p = plan(self.pair_with_the_passive_already_upgraded(), Selection(serials=["A1"]))
+        a1 = dev(p, "A1")
+        check = next(r for r in a1["results"] if r["check"] == "ha_peer")
+        self.assertEqual(check["status"], "pass")
+        self.assertIn("different versions cannot sync", check["reason"])
+        self.assertNotIn("force_config_sync", [c["code"] for c in p["cautions"]])
+        self.assertNotIn("sync to peer", actions(a1))
+        self.assertNotIn("failover_to_unsynced_passive", [c["code"] for c in p["cautions"]])
+
+    def test_the_same_pair_on_the_same_version_still_gets_the_sync(self):
+        p = plan(fleet(pair("A1", "A2", ha_config_sync=False)))
+        self.assertIn("force_config_sync", [c["code"] for c in p["cautions"]])
 
     def test_a_standalone_firewall_has_no_peer_to_wait_for(self):
         self.assertNotIn("wait for the passive firewall's upgrade to finish", actions(dev(plan(fleet(device("S1", version="20.1.4")), Selection(accept_standalone_outage=True)), "S1")))
@@ -70,10 +90,10 @@ class HappyPaths(unittest.TestCase):
         p = plan(fleet(pair("A1", "A2", version="20.1.4")))
         self.assertEqual(actions(dev(p, "A2"))[:3], ["download 20.2.0", "download 20.2.9", "backup"])
 
-    def test_max_parallel_makes_batches(self):
+    def test_every_pair_is_its_own_unit_and_the_order_does_not_depend_on_how_many_run_at_once(self):
         src = fleet(pair("A1", "A2"), pair("B1", "B2"), pair("C1", "C2"))
-        self.assertEqual(len(plan(src)["order"]), 3)
-        self.assertEqual([len(b) for b in plan(src, max_parallel=2)["order"]], [2, 1])
+        self.assertEqual(plan(src)["order"], [["A2", "A1"], ["B2", "B1"], ["C2", "C1"]])         # a flat list of units, each in series
+        self.assertEqual(plan(src, max_parallel=2)["order"], plan(src)["order"])                 # no batches: the next unit starts when one finishes
 
     def test_image_source_is_recorded_in_download_step(self):
         d = dev(plan(fleet(pair("A1", "A2")), image_source="panorama"), "A2")

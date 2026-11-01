@@ -112,8 +112,9 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
                 facts = source.facts(ref.serial)
             except SourceError as exc:
                 error = str(exc)
+        peer = by_serial.get(getattr(ref, "peer_serial", None))
         ctx = checks.Context(ref, facts, target, settings, rules, pano_version, error, panorama_clock=source.panorama_clock(),
-                             releases=releases)
+                             releases=releases, peer_version=peer.sw_version if peer else None)
         ctxs[ref.serial] = ctx
         results = checks.run_device_checks(ctx)
         verdict, kind = _verdict(results)
@@ -129,7 +130,6 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
         if dev["verdict"] in ("ready", "caution"):
             dev["steps"], dev["rollback"] = _steps(dev, settings, devices)
     order = _order(devices, by_serial)
-    batches = [order[i:i + settings.max_parallel] for i in range(0, len(order), settings.max_parallel)]
 
     cautions = _cautions(devices, fleet)
     plan = {
@@ -143,7 +143,7 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
         "selection": selection.__dict__.copy(),
         "fleet_checks": [r.to_dict() for r in fleet],
         "devices": list(devices.values()),
-        "order": [[unit for unit in batch] for batch in batches],
+        "order": order,                              # the units (an HA pair in series, passive first; or one standalone), in the order they are started
         "cautions": cautions,
         "advice": _advice(devices, pano_version, releases),
         "summary": _summary(devices, fleet),

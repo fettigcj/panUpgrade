@@ -1,12 +1,13 @@
 """Phase 2: approval gate, executor, journal/resume, all against the simulator. No network anywhere."""
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
 from tests.support import TARGET, TEST_RULES, device, facts, fleet, fleet_data, pair
-from panupgrade import executor, settings
+from panupgrade import console, executor, settings
 from panupgrade.approval import Approval
 from panupgrade.executor import Backend, ExecutionRefused
 from panupgrade.journal import Journal, JournalError
@@ -39,6 +40,132 @@ class Base(unittest.TestCase):
         backend = backend or SimBackend(data)
         journal = Journal.create(self.jpath, plan["hash"])
         return plan, s, backend, journal, executor.run(plan, approve(plan, serials, acks), backend, journal, s)
+
+
+class Stub:
+    """Just enough of a backend for one step."""
+
+    def __init__(self, states):
+        self.states, self.installed = states, []
+
+    def state(self, serial):
+        value = self.states[serial]
+        return value.pop(0) if isinstance(value, list) and len(value) > 1 else (value[0] if isinstance(value, list) else value)
+
+    def install(self, serial, version):
+        self.installed.append((serial, version))
+
+
+def settled(**over):
+    """Default settings with the waiting made instant (the real ones validate to at least a second; the dataclass does not mind)."""
+    s = settings.load()
+    s.poll_interval_s, s.sync_timeout_s = 0, 1
+    for name, value in over.items():
+        setattr(s, name, value)
+    return s
+
+
+class ConfigSyncIsOnlyAskedBeforeTheFirstMemberIsUpgraded(unittest.TestCase):
+    """Members on different PAN-OS versions cannot sync configuration, so after the first one is upgraded there is nothing to decide."""
+
+    def verify(self, own_version, peer_version, config_sync, session_sync=True):
+        states = {"A2": {"version": own_version, "ha_state": "passive", "ha_config_sync": config_sync, "ha_session_sync": session_sync,
+                         "session_count": 0, "running_jobs": 0}, "A1": {"version": peer_version}}
+        dev = {"serial": "A2", "peer_serial": "A1", "ha_state": "passive", "results": [], "steps": []}
+        return executor._do("verify HA", 0, dev, Stub(states), Journal.__new__(Journal), settled())
+
+    def test_a_passive_that_is_ahead_of_its_peer_is_not_failed_for_an_unsynchronised_config(self):
+        detail = self.verify("10.2.3", "10.2.2", False)
+        self.assertEqual(detail["peer_version"], "10.2.2")
+        self.assertNotIn("config_sync", detail)                            # not asked, not recorded
+
+    def test_once_both_match_the_state_is_reported_but_never_a_reason_to_fail(self):
+        self.assertEqual(self.verify("10.2.3", "10.2.3", False)["config_sync"], False)
+        self.assertEqual(self.verify("10.2.3", "10.2.3", True)["config_sync"], True)
+
+    def test_session_sync_is_still_required(self):
+        with self.assertRaisesRegex(executor.StepFailed, "HA2 session sync"):
+            self.verify("10.2.3", "10.2.2", False, session_sync=False)
+
+
+class TheCommitQueue(unittest.TestCase):
+    """A config sync leaves a commit in the passive member's queue; the install is refused until it is empty. Wait, do not fail."""
+
+    def dev(self):
+        return {"serial": "A2", "peer_serial": "A1", "steps": [{"action": "install 20.2.9", "traffic": "none", "note": ""}]}
+
+    def test_the_install_waits_for_the_queue_to_empty(self):
+        backend = Stub({"A2": [{"running_jobs": 2}, {"running_jobs": 1}, {"running_jobs": 0}]})
+        journal = Journal.__new__(Journal)
+        journal.events = [{"type": "step", "serial": "A2", "step": "0:backup", "state": "ok"}]
+        steps = [{"action": "backup", "traffic": "none", "note": ""}, {"action": "install 20.2.9", "traffic": "none", "note": ""}]
+        dev = {"serial": "A2", "peer_serial": "A1", "steps": steps}
+        journal.last_state = lambda serial, key: "ok"
+        executor._do("install 20.2.9", 1, dev, backend, journal, settled())
+        self.assertEqual(backend.installed, [("A2", "20.2.9")])
+
+    def test_a_queue_that_never_empties_fails_the_step_with_a_clear_reason_and_installs_nothing(self):
+        backend = Stub({"A2": {"running_jobs": 3}})
+        journal = Journal.__new__(Journal)
+        journal.last_state = lambda serial, key: "ok"
+        steps = [{"action": "backup", "traffic": "none", "note": ""}, {"action": "install 20.2.9", "traffic": "none", "note": ""}]
+        with self.assertRaisesRegex(executor.StepFailed, "still has 3 job"):
+            executor._do("install 20.2.9", 1, {"serial": "A2", "peer_serial": "A1", "steps": steps}, backend, journal, settled(sync_timeout_s=0))
+        self.assertEqual(backend.installed, [])
+
+    def test_the_sync_step_waits_for_the_queue_before_it_reports_done(self):
+        states = {"A1": {"ha_state": "active"}, "A2": [{"ha_config_sync": True, "running_jobs": 1}, {"ha_config_sync": True, "running_jobs": 0}]}
+
+        class Syncing(Stub):
+            def sync_to_peer(self, serial):
+                self.synced = serial
+        backend = Syncing(states)
+        dev = {"serial": "A2", "peer_serial": "A1", "ha_state": "passive", "steps": [{"action": "sync to peer", "traffic": "none", "note": ""}]}
+        detail = executor._do("sync to peer", 0, dev, backend, Journal.__new__(Journal), settled())
+        self.assertEqual((backend.synced, detail["to"]), ("A1", "A2"))
+
+
+class TheFollowUpRun(Base):
+    def test_the_active_of_a_pair_whose_passive_is_already_upgraded_goes_through_without_any_config_sync(self):
+        a1, a2 = pair("A1", "A2", ha_config_sync=False)
+        a2["sw_version"] = a2["facts"]["sw_version"] = str(TARGET)          # the passive was upgraded by an earlier run
+        data = fleet_data([a1, a2])
+        sim = SimBackend(data)
+        plan, _, _, journal, result = self.go(data, backend=sim)
+        self.assertEqual(result["failures"], 0, result)
+        self.assertEqual(result["outcome"]["A1"][0], "done")
+        steps = [d["steps"] for d in plan["devices"] if d["serial"] == "A1"][0]
+        self.assertNotIn("sync to peer", [s["action"] for s in steps])
+        self.assertFalse([c for c in sim.calls if c[1] == "sync_to_peer"])
+
+
+class WhereAFailedFirewallStands(Base):
+    def test_a_run_says_which_firewalls_ended_on_the_target(self):
+        data = fleet_data(pair("A1", "A2"), device("S1"))
+        _, _, _, _, result = self.go(data)
+        self.assertEqual(sorted(result["upgraded"]), ["A1", "A2", "S1"])
+        text = console.render_outcomes(result, {"A1": "a1", "A2": "a2", "S1": "s1"}, console.Style())
+        self.assertIn("3 of 3 firewalls finished all their steps, 3 are now on the target version, 0 failed", text)
+
+    def test_a_failure_before_the_install_says_it_was_not_upgraded(self):
+        data = fleet_data(device("S1"))
+        sim = SimBackend(data, fail={("S1", "install"): "disk full"})
+        _, _, _, _, result = self.go(data, backend=sim)
+        state, detail = result["outcome"]["S1"]
+        self.assertEqual(state, "failed")
+        self.assertIn("not upgraded (still on", detail)
+        self.assertIn("install", detail)
+        self.assertEqual(result["upgraded"], [])
+
+    def test_a_failure_after_the_reboot_says_it_is_already_on_the_new_version(self):
+        journal = Journal.create(os.path.join(tempfile.mkdtemp(), "j.jsonl"), "h" * 64)
+        steps = [{"action": a, "traffic": "none", "note": ""} for a in ("backup", "install 10.2.3", "reboot", "verify", "verify HA")]
+        dev = {"serial": "E1", "current_version": "10.2.2", "steps": steps}
+        for i, a in enumerate(("backup", "install 10.2.3", "reboot", "verify")):
+            journal.record("E1", f"{i}:{a}", "ok")
+        self.assertEqual(executor._standing(dev, journal, 4), "already on 10.2.3")
+        self.assertEqual(executor._standing(dev, journal, 2), "the new image is installed but it has not rebooted into it")
+        self.assertTrue(executor._standing(dev, Journal.create(os.path.join(tempfile.mkdtemp(), "k.jsonl"), "h" * 64), 3).startswith("not upgraded"))
 
 
 class WaitForPassive(Base):
@@ -210,7 +337,7 @@ class HappyPath(Base):
     def test_stops_starting_new_devices_after_max_failures(self):
         data = fleet_data(device("S1"), device("S2"), device("S3"), device("S4"))
         sim = SimBackend(data, fail={("S1", "install"): "x", ("S2", "install"): "y"})
-        _, _, _, _, result = self.go(data, backend=sim, max_failures=2)
+        _, _, _, _, result = self.go(data, backend=sim, max_failures=2, max_parallel=1)      # one at a time, so which ones are never started is certain
         states = {k: v[0] for k, v in result["outcome"].items()}
         self.assertEqual(states, {"S1": "failed", "S2": "failed", "S3": "not_started", "S4": "not_started"})
         self.assertTrue(result["stopped"])

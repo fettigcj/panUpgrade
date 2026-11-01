@@ -16,6 +16,7 @@ Rules the code enforces, each with a test:
 
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 
@@ -93,7 +94,7 @@ def run(plan, approval, backend, journal, settings, stop=None):
                 blocker = blocker or serial
         return local
 
-    units = [unit for batch in plan["order"] for unit in batch]
+    units = plan["order"]
     outcome = {}
     pool = ThreadPoolExecutor(max_workers=max(1, settings.max_parallel), thread_name_prefix="unit")
     futures = [pool.submit(do_unit, unit) for unit in units]
@@ -107,7 +108,8 @@ def run(plan, approval, backend, journal, settings, stop=None):
         pool.shutdown(wait=True)
         raise
     pool.shutdown()
-    return {"outcome": outcome, "failures": state["failures"], "stopped": state["failures"] >= settings.max_failures}
+    upgraded = [serial for serial, dev in devices.items() if dev["steps"] and _standing(dev, journal, len(dev["steps"])).startswith("already on")]
+    return {"outcome": outcome, "failures": state["failures"], "stopped": state["failures"] >= settings.max_failures, "upgraded": upgraded}
 
 
 def _failed_in_journal(journal, serial):
@@ -140,8 +142,36 @@ def _run_device(dev, backend, journal, settings, stop=None):
             return "needs_attention", f"{st['action']} was started and not finished; check the device before resuming"
         err = _step(journal, serial, key, lambda: _do(st["action"], index, dev, backend, journal, settings))
         if err:
-            return "failed", f"{st['action']}: {err}"
+            return "failed", f"{_standing(dev, journal, index)}; {st['action']} failed: {err}"
     return "done", ""
+
+
+def _standing(dev, journal, index):
+    """Where a firewall stands when the step at ``index`` did not finish: which version it is on matters more than which step it was."""
+    serial, steps = dev["serial"], dev["steps"]
+
+    def ok(i):
+        return journal.last_state(serial, _key(i, steps[i]["action"])) == "ok"
+    installs = [i for i in range(index) if steps[i]["action"].startswith("install ") and ok(i)]
+    reboots = [i for i in range(index) if steps[i]["action"] == "reboot" and ok(i)]
+    if installs and reboots and reboots[-1] > installs[-1]:
+        return f"already on {steps[installs[-1]]['action'].split(' ', 1)[1]}"
+    if installs:
+        return "the new image is installed but it has not rebooted into it"
+    return f"not upgraded (still on {dev['current_version']})"
+
+
+def _wait_for_quiet(backend, serial, settings, what):
+    """A config sync queues a commit on the member it pushes to, and the install is refused while that is still in the queue
+    ("pending jobs in the commit task queue"). Wait for the queue to empty, up to the sync timeout, rather than fail a firewall that is merely busy."""
+    deadline = time.monotonic() + settings.sync_timeout_s
+    while True:
+        jobs = backend.state(serial).get("running_jobs")
+        if jobs == 0:
+            return
+        if time.monotonic() >= deadline:
+            raise StepFailed(f"{serial} still has {jobs!r} job(s) in its queue after {settings.sync_timeout_s}s, so {what} was not started")
+        time.sleep(settings.poll_interval_s)
 
 
 def _step(journal, serial, key, fn):
@@ -216,6 +246,7 @@ def _do(action, index, dev, backend, journal, settings):
         after = backend.state(passive)
         if after["ha_config_sync"] is not True:
             raise StepFailed(f"after the sync, HA1 config sync reads {after['ha_config_sync']!r}, not synchronized")
+        _wait_for_quiet(backend, passive, settings, "anything further")
         return {"synced_from": active, "to": passive}
     elif action == "wait for the passive firewall's upgrade to finish":
         # The unit runs the passive member first and never starts this one unless it finished. This is the checkpoint that proves it:
@@ -242,6 +273,7 @@ def _do(action, index, dev, backend, journal, settings):
         if backend.state(serial)["ha_state"] != "suspended":
             backend.suspend(serial)
     elif action.startswith("install "):
+        _wait_for_quiet(backend, serial, settings, "the install")
         backend.install(serial, action.split(" ", 1)[1])
     elif action == "reboot":
         return {"version": backend.reboot_and_wait(serial, settings.reboot_timeout_s)}
@@ -256,19 +288,21 @@ def _do(action, index, dev, backend, journal, settings):
         backend.functional(serial)
     elif action == "verify HA":
         got = backend.state(serial)
-        accepted_unsynced = any((r.get("evidence") or {}).get("config_unsynced") for r in dev["results"])
-        if got["ha_config_sync"] is not True and not accepted_unsynced:
-            raise StepFailed(f"HA1 config sync is {got['ha_config_sync']!r}")
         if got["ha_session_sync"] is not True:
             raise StepFailed(f"HA2 session sync is {got['ha_session_sync']!r}")
+        # Config sync is judged BEFORE the first member is upgraded (preflight and prepare). While the peer runs another version it cannot sync
+        # and nothing can be done about it, so it is not asked; once both match it is only reported, never a reason to fail a firewall.
+        peer = dev.get("peer_serial")
+        peer_version = backend.state(peer)["version"] if peer else None
+        said = {"config_sync": got["ha_config_sync"]} if peer_version == got["version"] else {"peer_version": peer_version}
         if got["ha_state"] == "active":
             base = _baseline(journal, dev)
             if base == 0:
-                return {"ha_state": got["ha_state"], "skipped": "no session baseline (acknowledged)"}
+                return {"ha_state": got["ha_state"], "skipped": "no session baseline (acknowledged)", **said}
             if not base or not _band_ok(base, got["session_count"] or 0, settings.post_upgrade_band):
                 raise StepFailed(f"active node has {got['session_count']} sessions vs baseline {base}, "
                                  f"outside {int(settings.post_upgrade_band * 100)}% or no baseline")
-        return {"ha_state": got["ha_state"]}
+        return {"ha_state": got["ha_state"], **said}
     elif action == "restore roles":
         peer = dev["peer_serial"]
         backend.suspend(peer)

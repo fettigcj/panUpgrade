@@ -8,9 +8,21 @@ nothing happens; the one-screen shell registers a listener for the thread a back
 beside that job. The listener belongs to the thread, so two jobs at once each show their own.
 """
 
+import sys
 import threading
 
 _local = threading.local()
+
+
+def set_output(stream):
+    """Where this thread's job wants what it prints to go (None: the real stdout)."""
+    _local.stream = stream
+
+
+def output():
+    """The stream to print to. Code that hands a stream to threads it starts (the run's event printer) asks for it here first, because those
+    threads are not the job's own and would otherwise print past the screen's capture."""
+    return getattr(_local, "stream", None) or sys.stdout
 
 
 class Aborted(BaseException):

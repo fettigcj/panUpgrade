@@ -162,6 +162,7 @@ class Job:
         out, err = self._out, self._err
         _capture_start(out, err)
         progress.listen(self._note)
+        progress.set_output(out)
         try:
             self.value = self._fn()
             self.code = self.value if isinstance(self.value, int) else 0
@@ -176,6 +177,7 @@ class Job:
             err.write(f"internal error: {type(exc).__name__}: {exc}\n" + traceback.format_exc(limit=3))
         finally:
             progress.listen(None)
+            progress.set_output(None)
             _capture_stop()
         self.text = out.getvalue() + (("\n" if out.getvalue() else "") + err.getvalue() if err.getvalue() else "")
         self.finished = time.monotonic()
@@ -958,7 +960,7 @@ class UpgradeScreen(ChangeScreen):
         if source is None:
             return []
         devices = {d["serial"]: d for d in source.plan["devices"]}
-        return [[devices[x] for x in unit if x in devices] for batch in source.plan["order"] for unit in batch]
+        return [[devices[x] for x in unit if x in devices] for unit in source.plan["order"]]
 
     @staticmethod
     def step_name(record):
@@ -996,7 +998,7 @@ class UpgradeScreen(ChangeScreen):
     def event_line(self, unit, when, rec):
         detail = rec.get("detail") or {}
         extra = ", ".join(f"{k}={v}" for k, v in detail.items() if k in ("version", "sessions_before", "sessions_after", "ha_state", "synced_from",
-                                                                         "skipped", "peer_version"))
+                                                                         "skipped", "peer_version", "config_sync"))
         words = {"started": "started", "ok": "ok", "failed": "FAILED", "note": "note"}.get(rec["state"], rec["state"])
         text = f"{clock(when)}  {self._name(unit, rec).ljust(14)} {self.step_name(rec)}  {words}"
         if rec["state"] == "failed":
@@ -1120,8 +1122,9 @@ class UpgradeScreen(ChangeScreen):
         out += [""] + [f"  {d['hostname']} ({d['serial']}) {d['ha_state'] or 'standalone'}  {d['current_version']} -> {plan['target']}" for d in ready]
         s = plan["summary"]
         out += ["", f"  {s['outage_steps']} outage step(s) and {s['failover_steps']} HA failover(s)."]
-        for n, batch in enumerate(plan["order"], 1):
-            out.append(f"  batch {n}: " + "; ".join(" then ".join(names[x] for x in unit) for unit in batch))
+        out.append(f"  Each unit is worked in series; up to {plan['settings']['max_parallel']} units run at the same time.")
+        for n, unit in enumerate(plan["order"], 1):
+            out.append(f"  {n}. " + " then ".join(names[x] for x in unit))
         if plan["cautions"]:
             out += ["", "Cautions that approving acknowledges:"]
             out += [f"  [{c['code']}] {'whole fleet' if c['scope'] == 'fleet' else names.get(c['scope'], c['scope'])}: {c['text']}" for c in plan["cautions"]]

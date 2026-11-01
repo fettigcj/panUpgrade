@@ -28,6 +28,7 @@ class Context:
     panorama_clock: str = None
     extra: dict = field(default_factory=dict)
     releases: object = None         # releases.Releases; the table that ships with the tool when None
+    peer_version: str = None        # the HA peer's PAN-OS version as Panorama lists it (None: no peer, or not visible)
 
 
 def _skip(name, kind, reason):
@@ -137,8 +138,12 @@ def ha_peer(ctx):
     if f.ha_mode in (None, "none"):
         return _skip("ha_peer", NOT_APPLICABLE, "not in an HA pair")
     problems, unknown = [], []
+    own = f.sw_version or ctx.ref.sw_version
+    mixed = bool(ctx.peer_version and own and ctx.peer_version != own)
     for label, value in (("HA2 session sync", f.ha_session_sync), ("HA1 config sync", f.ha_config_sync),
                          ("HA links", f.ha_links_ok)):
+        if label == "HA1 config sync" and mixed:
+            continue          # members on different PAN-OS versions cannot sync configuration (and the tool must not try): nothing to decide
         if value is None:
             unknown.append(label)
         elif value is False:
@@ -169,6 +174,9 @@ def ha_peer(ctx):
         return CheckResult("ha_peer", FAIL, "not healthy: " + ", ".join(problems))
     if unknown:
         return _skip("ha_peer", NO_DATA, "not collected: " + ", ".join(unknown))
+    if mixed:
+        return CheckResult("ha_peer", PASS, f"session sync (HA2) and links are healthy; config sync is not compared because this member runs {own} "
+                                            f"and its peer {ctx.peer_version}, and members on different versions cannot sync configuration")
     return CheckResult("ha_peer", PASS, "session sync (HA2), config sync (HA1) and links are healthy")
 
 

@@ -142,10 +142,10 @@ def render_plan(plan, style, verbose=False):
                 kind = "sync" if st["action"] == "sync to peer" else "down" if downgrade and st["action"].startswith("install") else "start"
                 out.append("        " + style.glyph(kind) + style.dim(st["action"]))
     if plan["order"]:
-        out += ["", style.bold("Order (an HA pair is one unit, passive first)")]
+        out += ["", style.bold(f"Order: each unit is worked in series (an HA pair, passive first); up to {plan['settings']['max_parallel']} units run at the same time")]
         names = {d["serial"]: d["hostname"] for d in plan["devices"]}
-        for i, batch in enumerate(plan["order"], 1):
-            out.append(f"  batch {i}: " + "; ".join(" + ".join(names[x] for x in unit) for unit in batch))
+        for i, unit in enumerate(plan["order"], 1):
+            out.append(f"  {i}. " + " > ".join(names[x] for x in unit))
     return "\n".join(out) + "\n"
 
 
@@ -174,7 +174,7 @@ class EventPrinter:
             kind, text = "ok", step
             if step.startswith("sync"):
                 kind = "sync"
-            extra = ", ".join(f"{k}={v}" for k, v in detail.items() if k in ("version", "sessions_before", "sessions_after", "ha_state", "synced_from", "skipped"))
+            extra = ", ".join(f"{k}={v}" for k, v in detail.items() if k in ("version", "sessions_before", "sessions_after", "ha_state", "synced_from", "skipped", "config_sync", "peer_version"))
             text = f"{step}  {extra}" if extra else step
         elif state == "failed":
             kind, text = "fail", f"{step}: {detail.get('error', '')}"
@@ -197,7 +197,9 @@ def render_outcomes(result, names, style):
             lines.append(style.line(kind, f"{names.get(serial, serial)}: {state}"))
             lines += [style.bullet(p) for p in parts]
     done = sum(1 for state, _ in result["outcome"].values() if state == "done")
-    verdict = f"{done} of {len(result['outcome'])} firewalls finished, {result['failures']} failed"
+    upgraded = result.get("upgraded")
+    verdict = (f"{done} of {len(result['outcome'])} firewalls finished all their steps"
+               + (f", {len(upgraded)} are now on the target version" if upgraded is not None else "") + f", {result['failures']} failed")
     if result["stopped"]:
         verdict += ". Stopped early: the failure limit was reached, so nothing further was started"
     lines += ["", style.line("stop" if result["stopped"] else ("fail" if result["failures"] else "ok"), verdict)]

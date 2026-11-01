@@ -17,7 +17,7 @@ panorama_compare   = "minor"   # the unit for that, and for "Panorama older than
 
 # ---- Failure handling ----------------------------------------------------------------------------------------
 max_failures       = 5         # stop starting new devices after this many have failed
-max_parallel       = 1         # units (an HA pair is one unit) per batch; the runner still goes one at a time for now
+max_parallel       = 5         # units (an HA pair is one unit, its members in series) worked on at the same time; the next starts as soon as one finishes
 pending_changes    = "block"   # uncommitted candidate config on a firewall: block | warn | ignore
 
 # ---- Downgrades ----------------------------------------------------------------------------------------------

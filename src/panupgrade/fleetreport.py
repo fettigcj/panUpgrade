@@ -42,7 +42,9 @@ def _attention(devices):
             continue
         if facts.get("ha_state") in ("suspended", "non-functional", "tentative"):
             note(dev, f"HA state is {facts['ha_state']}")
-        if facts.get("ha_config_sync") is False:
+        peer = by_serial.get(dev.get("peer_serial"))
+        mixed = peer is not None and (_facts(peer).get("sw_version") or peer["sw_version"]) != (facts.get("sw_version") or dev["sw_version"])
+        if facts.get("ha_config_sync") is False and not mixed:        # different versions cannot sync; the pair's version difference is called out below
             note(dev, "HA config is not synchronized with its peer")
         compat = facts.get("ha_content_compat") or {}
         # Only the content that moves with an upgrade, as prepare judges it. The PAN-DB URL version is left out: the standby

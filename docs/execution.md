@@ -27,4 +27,4 @@
 - Whether a suspended state survives a reboot; what the simulator does for roles after `go live` with preemption (it hands the active role back to the original active).
 - Exact commands for suspend/functional, restoring roles, and rollback; a rollback is not automated.
 - Timing, job progress and timeouts are not modelled.
-- The executor runs units one at a time; `max_parallel` batches are executed sequentially in the simulator.
+- Units run in parallel, up to `max_parallel` (default 5) at a time: each HA pair (or standalone firewall) is one job whose members go in series, passive first, and the next unit starts as soon as one finishes. The simulator does not model timing, so it shows the interleaving but not how long a reboot takes.

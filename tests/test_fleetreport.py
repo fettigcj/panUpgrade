@@ -15,6 +15,20 @@ def dev(serial, name, version="10.2.1", peer="", **facts):
             "ha_state": facts.get("ha_state", ""), "facts": facts}
 
 
+class MixedVersionPairs(unittest.TestCase):
+    def test_a_pair_on_different_versions_is_not_called_unsynchronised_because_it_cannot_be(self):
+        r = fleetreport.build({"panorama": {"version": "12.2.0"}, "devices": [
+            dev("A", "a1", "10.2.2", "B", ha_config_sync=False), dev("B", "a2", "10.2.3", "A", ha_config_sync=False)]})
+        text = " | ".join(p for _n, ps in r["attention"] for p in ps)
+        self.assertIn("different versions", text)
+        self.assertNotIn("not synchronized", text)
+
+    def test_the_same_pair_on_one_version_still_is(self):
+        r = fleetreport.build({"panorama": {"version": "12.2.0"}, "devices": [
+            dev("A", "a1", "10.2.2", "B", ha_config_sync=False), dev("B", "a2", "10.2.2", "A", ha_config_sync=False)]})
+        self.assertIn("not synchronized", " | ".join(p for _n, ps in r["attention"] for p in ps))
+
+
 class Lagging(unittest.TestCase):
     """The report says which firewalls lag behind Panorama, once, without waiting for a plan."""
 

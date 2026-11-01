@@ -13,7 +13,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest import mock
 
-from panupgrade import cli, credstore, profiles, progress, shell, site, trust, tui
+from panupgrade import cli, credstore, profiles, progress, settings, shell, site, trust, tui
 from panupgrade.trust import CertificateProblem
 from panupgrade.model import DeviceRef
 from panupgrade.sources import SourceError
@@ -36,9 +36,9 @@ class FakeUpgrade:
         devices = [{"serial": x, "hostname": names[x], "ha_state": "active" if x == "A1" else "passive", "current_version": "10.2.1", "verdict": "ready",
                     "steps": steps} for x in ready]
         devices += [{"serial": x, "hostname": names[x], "ha_state": "", "current_version": "10.2.1", "verdict": "blocked"} for x in blocked]
-        self.plan = {"hash": "cd" * 32, "target": "10.2.3", "devices": devices,
+        self.plan = {"hash": "cd" * 32, "target": "10.2.3", "devices": devices, "settings": {"max_parallel": 5},
                      "summary": {"ready": len(ready), "caution": 0, "blocked": len(blocked), "skipped": 0, "outage_steps": 0, "failover_steps": 1},
-                     "order": [[[x for x in ready if x.startswith("A")]] + [[x] for x in ready if not x.startswith("A")]] if ready else [],
+                     "order": ([[x for x in ready if x.startswith("A")]] + [[x] for x in ready if not x.startswith("A")]) if ready else [],
                      "cautions": [{"scope": "A1", "code": "failover_band", "text": "sessions may move"}] if ready else []}
         self.label, self.previous, self.created = label, previous, time.time()
         self.stop = threading.Event()
@@ -1334,7 +1334,7 @@ class TheUpgradeScreen(ShellCase):
         ui.press("enter")
         text = self.text(ui, 120, 40)
         for needle in ("approve exactly this", "LIVE: this changes real firewalls", "fw-one (A1) active  10.2.1 -> 10.2.3", "fw-two (A2) passive",
-                       "1 HA failover(s)", "batch 1: fw-two then fw-one", "Cautions that approving acknowledges", "[failover_band] fw-one: sessions may move",
+                       "1 HA failover(s)", "1. fw-two then fw-one", "units run at the same time", "Cautions that approving acknowledges", "[failover_band] fw-one: sessions may move",
                        "Type APPROVE to go ahead"):
             self.assertIn(needle, text)
         self.assertEqual(self.up_executed, [])
@@ -1646,6 +1646,30 @@ class TheRunFirewallByFirewall(ShellCase):
         ui.press("right"); ui.press("enter"); wait(ui)
         self.assertNotIn("View: by firewall", self.text(ui, 130, 30))
         self.assertNotIn("View: combined output", self.text(ui, 130, 30))
+
+
+class WhatTheWorkerThreadsPrint(unittest.TestCase):
+    """The run's events are printed by the executor's own threads, not the job's; they must still reach the job's screen."""
+
+    def test_the_event_printer_of_a_job_writes_into_the_jobs_capture_from_any_thread(self):
+        names = {"S1": "fw-one"}
+
+        def work():
+            printer, close = cli._listener(cli._style(cli.parse_args(["settings"])), names, ["S1"], settings.load(None, ["max_parallel=1"]))
+            thread = threading.Thread(target=lambda: printer({"type": "step", "serial": "S1", "step": "0:backup", "state": "started", "detail": {}}))
+            thread.start()
+            thread.join()
+            close()
+            return 0
+        job = shell.Job(work)
+        end = time.monotonic() + 3
+        while job.running and time.monotonic() < end:
+            time.sleep(0.01)
+        self.assertIn("fw-one", job.text)
+        self.assertIn("backup", job.text)
+
+    def test_outside_a_job_the_printer_still_uses_the_real_stdout(self):
+        self.assertIs(progress.output(), __import__("sys").stdout)
 
 
 class TheUpgradeCommandPhases(Home):

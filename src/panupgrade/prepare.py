@@ -134,6 +134,9 @@ def build(source, settings, selection, target=None, rules=None):
                 peer_facts = source.facts(peer)
             except SourceError:
                 peer_facts = None
+            peer_version = (peer_facts.sw_version if peer_facts is not None and peer_facts.sw_version else None) or (refs[peer].sw_version if peer in refs else None)
+            mixed = bool((facts.sw_version or ref.sw_version) and peer_version and (facts.sw_version or ref.sw_version) != peer_version)
+            cfg_off = facts.ha_config_sync is False and not mixed      # members on different PAN-OS versions cannot sync configuration: not a task, not a note
             diffs = content_diffs(facts.content_versions, peer_facts.content_versions) if (
                 peer_facts is not None and facts.content_versions and peer_facts.content_versions) else {}
             content_report.append({"serial": ref.serial, "hostname": ref.hostname, "text": content_state(
@@ -142,16 +145,16 @@ def build(source, settings, selection, target=None, rules=None):
             compat = facts.ha_content_compat or {}
             bad = sorted(k for k in ("app", "threat", "av") if compat.get(k) not in (None, "Match"))
             reason = "installed versions differ" if diffs else ""
-            if facts.ha_config_sync is False and bad and not families and _norm((facts.content_versions or {}).get("app")):
+            if cfg_off and bad and not families and _norm((facts.content_versions or {}).get("app")):
                 families = ["content"]            # same versions, but PAN-OS itself cannot confirm the pair's content is compatible
                 reason = "PAN-OS reports the HA content compatibility as " + ", ".join(f"{k}: {compat[k]}" for k in bad)
             need_content = bool(families) and settings.sync_content == "prepare"
-            need_cfg = facts.ha_config_sync is False and settings.sync_to_peer == "Both"
+            need_cfg = cfg_off and settings.sync_to_peer == "Both"
             if families and not need_content:
                 notes.append({"serial": ref.serial, "hostname": ref.hostname,
                               "why": f"dynamic content is not level between the HA members ({reason}); "
                                      f"sync_content is 'never', so prepare leaves it and will not attempt a config sync"})
-            if facts.ha_config_sync is False and not need_cfg:
+            if cfg_off and not need_cfg:
                 notes.append({"serial": ref.serial, "hostname": ref.hostname,
                               "why": ("config is not synchronized with the passive member; sync_to_peer is "
                                       f"'{settings.sync_to_peer}', so prepare leaves it" +

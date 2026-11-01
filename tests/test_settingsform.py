@@ -158,11 +158,11 @@ class Editing(unittest.TestCase):
         self.assertIn("failover_band", form.check()[1])
 
     def test_ctrl_r_and_delete_put_a_setting_back_to_its_default(self):
-        form = fresh(max_parallel=4)
+        form = fresh(max_parallel=2)
         goto(form, "max_parallel")
         self.assertTrue(form.changed("max_parallel"))
         keys(form, "ctrl-r")
-        self.assertEqual(form.text["max_parallel"], "1")
+        self.assertEqual(form.text["max_parallel"], "5")
         self.assertFalse(form.changed("max_parallel"))
 
     def test_typing_in_a_choice_does_nothing_rather_than_corrupting_it(self):
@@ -186,7 +186,7 @@ class Editing(unittest.TestCase):
         import re
         for width in (70, 100, 160):
             for name in settingsform.shown_names():
-                form = fresh(pending_changes="ignore", allow_downgrade="true", max_parallel=3)
+                form = fresh(pending_changes="ignore", allow_downgrade="true", ha_config_unsynced="caution")
                 goto(form, name)
                 text = " ".join(explanation(form, width, 60).split())
                 description, meanings = settingsform.INFO[name]
@@ -217,7 +217,7 @@ class Editing(unittest.TestCase):
 
     def test_an_explanation_taller_than_the_window_scrolls_with_page_up_and_down(self):
         for width, height in ((150, 18), (100, 26)):                                       # beside the list, and stacked below it
-            form = fresh(pending_changes="ignore", allow_downgrade="true", max_parallel=3)
+            form = fresh(pending_changes="ignore", allow_downgrade="true", ha_config_unsynced="caution")
             goto(form, "sync_to_peer")
             first = explanation(form, width, height)
             self.assertIn("PgUp / PgDn scroll this: lines 1-", first)
@@ -227,14 +227,14 @@ class Editing(unittest.TestCase):
                 form.press("pgdn")
                 seen += " " + " ".join(explanation(form, width, height).split())
             self.assertIn("UpgradeOnly: force the sync only during the upgrade itself", seen, (width, height))
-            self.assertIn("Caution: max_parallel=3", seen, (width, height))
+            self.assertIn("Caution: ha_config_unsynced=caution", seen, (width, height))
             for _ in range(20):
                 form.press("pgup")
             self.assertIn("PgUp / PgDn scroll this: lines 1-", explanation(form, width, height))
             self.assertLessEqual(len(form.render(width, height)), height)
 
     def test_the_scroll_starts_again_at_the_top_for_another_setting_and_the_buttons_stay_visible(self):
-        form = fresh(pending_changes="ignore", allow_downgrade="true", max_parallel=3)
+        form = fresh(pending_changes="ignore", allow_downgrade="true", ha_config_unsynced="caution")
         goto(form, "sync_to_peer")
         keys(form, "pgdn", "pgdn")
         self.assertGreater(form.pane_offset, 0)
@@ -270,7 +270,7 @@ class Editing(unittest.TestCase):
     def test_no_line_of_the_side_by_side_layout_is_wider_than_the_window(self):
         for width in (110, 130, 200):
             self.assertTrue(fresh().side_by_side(width))
-            for line in fresh(pending_changes="ignore", allow_downgrade="true", max_parallel=3).render(width, 40):
+            for line in fresh(pending_changes="ignore", allow_downgrade="true", ha_config_unsynced="caution").render(width, 40):
                 self.assertLess(len("".join(t for _s, t in line)), width)
 
     def test_ha_config_unsynced_reads_as_the_owner_wrote_it_with_its_paragraphs(self):
@@ -411,7 +411,7 @@ class SettingsVerb(unittest.TestCase):
         out = io.StringIO()
         with redirect_stdout(out), mock.patch("sys.stdin.isatty", return_value=False):
             self.assertEqual(cli.main(["settings"]), 0)
-        self.assertIn('"max_parallel": 1', out.getvalue())
+        self.assertIn('"max_parallel": 5', out.getvalue())
 
     def run_form(self, fill, *extra):
         out = io.StringIO()
@@ -429,7 +429,6 @@ class SettingsVerb(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("Settings saved to", text)
         self.assertIn("max_parallel = 3", Path(cli.DEFAULT_SETTINGS).read_text(encoding="utf-8"))
-        self.assertIn("max_parallel=3: several HA pairs", text)
         a = argparse.Namespace(settings=None, set=None, color="never", ascii=True)
         said = io.StringIO()
         with redirect_stdout(said):
@@ -441,7 +440,7 @@ class SettingsVerb(unittest.TestCase):
         a = argparse.Namespace(settings=None, set=None, color="never", ascii=True)
         said = io.StringIO()
         with redirect_stdout(said):
-            self.assertEqual(cli._load_settings(a).max_parallel, 1)
+            self.assertEqual(cli._load_settings(a).max_parallel, 5)
         self.assertIn("built-in default settings", said.getvalue())
 
     def test_the_form_edits_an_existing_file_named_on_the_command_line(self):

@@ -239,7 +239,7 @@ class PrepareTask(unittest.TestCase):
         self.assertEqual(result["failures"], 1)
 
     def test_the_failure_limit_stops_new_tasks(self):
-        s = settings.load(None, ["sync_to_peer=Both", "max_failures=1"])
+        s = settings.load(None, ["sync_to_peer=Both", "max_failures=1", "max_parallel=1"])
         plan = prepare.build(FakeFleet(fleet_data(pair("A1", "A2"))), s, Selection(), TARGET, TEST_RULES)
         sim = SimBackend(fleet_data(pair("A1", "A2")), fail={("A1", "download"): "disk full", ("A2", "download"): "disk full"})
         result = prepare.run(plan, Approval(plan["hash"], plan["serials"]), sim, Journal.create(self.j, plan["hash"]), s)
@@ -494,6 +494,14 @@ class OneApprovalCoversContent(unittest.TestCase):
                              "--set", "content_settle_s=0", "--journal", str(self.dir / "p.jsonl"), "--kit-dir", str(self.dir / "kit"),
                              "--color", "never", *extra])
         return code, out.getvalue(), err.getvalue()
+
+    def test_prepare_does_not_try_to_sync_a_pair_whose_members_run_different_versions(self):
+        d = pair("A1", "A2", ha_config_sync=False)
+        d[1]["sw_version"] = d[1]["facts"]["sw_version"] = "20.2.9"
+        s = settings.load(None, ["sync_to_peer=Both"])
+        plan = prepare.build(FakeFleet(fleet_data(d)), s, Selection(), None, TEST_RULES)
+        self.assertEqual([u for u in plan["units"] if u["sync_config"]], [])
+        self.assertEqual([n for n in plan["notes"] if "not synchronized" in n["why"]], [])
 
     def test_a_stop_asked_for_before_the_tasks_start_means_none_of_them_start(self):
         args = cli.parse_args(["prepare", "--source", f"fake:{self.fleet}", "--serial", "A1", "--serial", "A2", "--set", "sync_to_peer=Both",

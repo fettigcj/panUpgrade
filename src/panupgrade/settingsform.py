@@ -71,8 +71,9 @@ INFO = {
                                    "two behind 12.2. `panupgrade releases` shows that list and `--update` refreshes it.",
                           "major": "compare only the major number: 12 against 10 is two behind."}),
     "max_failures": ("Stop starting new firewalls after this many have failed.", {}),
-    "max_parallel": ("How many HA pairs (or standalone firewalls) are worked on at the same time. A pair's two members always go "
-                     "one after the other.", {}),
+    "max_parallel": ("How many units are worked on at the same time (default 5). Each HA pair is its own job: its two members go one after "
+                     "the other, passive first, and it never waits for another pair, wherever that one is. A standalone firewall is a unit of one. "
+                     "As soon as a unit finishes, the next one starts.", {}),
     "api_rate_per_s": ("A polite ceiling on requests per second to Panorama, shared by every worker.", {}),
     "pending_changes": ("A firewall with uncommitted candidate configuration.",
                         {"block": "do not upgrade it", "warn": "upgrade it, with a warning", "ignore": "upgrade it without comment"}),

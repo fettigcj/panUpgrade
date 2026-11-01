@@ -30,7 +30,7 @@ class Settings:
     panorama_compare: str = "minor"
     # Batch handling
     max_failures: int = 5
-    max_parallel: int = 1               # HA pairs (or standalone firewalls) worked on at the same time; a pair's members stay in series
+    max_parallel: int = 5               # units (an HA pair, or one standalone) worked on at the same time; a unit's members stay in series
     api_rate_per_s: float = 5.0         # polite ceiling on requests per second to Panorama, shared by every worker
     # Active-to-peer config sync ("sync to peer"): Disable (never force it; only report) | Both (the separate `prepare` step does it
     # ahead of the window AND the upgrade run does it again first, for each pair that needs it) | UpgradeOnly (only the upgrade run).
@@ -83,8 +83,6 @@ class Settings:
         if self.allow_cross_feature_downgrade:
             out.append("allow_cross_feature_downgrade=true: firewalls may be installed down across feature releases; "
                        "the newer release's configuration may not load on the older one.")
-        if self.max_parallel > 1:
-            out.append(f"max_parallel={self.max_parallel}: several HA pairs/devices change at once.")
         return out
 
 

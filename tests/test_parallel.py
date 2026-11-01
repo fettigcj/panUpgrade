@@ -70,10 +70,42 @@ class PairsInParallelMembersInSeries(unittest.TestCase):
         self.assertLessEqual(probe.peak, 3)                     # never more than asked for
         self.assertEqual(probe.peak_per_pair, 1)                # passive, then active: never both at once
 
-    def test_the_default_is_one_at_a_time(self):
+    def test_the_default_is_five_pairs_at_a_time_each_pair_in_series(self):
+        self.assertEqual(settings.load().max_parallel, 5)
         probe = Probe(four_pairs())
         run_plan(four_pairs(), probe, self.j)
-        self.assertEqual(probe.peak, 1)
+        self.assertGreater(probe.peak, 1)                      # no option was given: pairs overlap anyway
+        self.assertEqual(probe.peak_per_pair, 1)               # but one pair's two members never do
+
+    def test_no_more_than_the_limit_run_at_once_however_many_pairs_there_are(self):
+        data = fleet_data(*[pair(f"P{i}1", f"P{i}2") for i in range(8)])
+        probe = Probe(data)
+        run_plan(data, probe, self.j)
+        self.assertLessEqual(probe.peak, 5)
+        self.assertGreater(probe.peak, 1)
+
+    def test_a_pair_never_waits_for_another_pair_to_finish(self):
+        """The first pair is held up on purpose; the others still complete: no pair is a barrier for another."""
+        data = fleet_data(*[pair(f"P{i}1", f"P{i}2") for i in range(3)])
+        held, released = threading.Event(), threading.Event()
+
+        class Slow(SimBackend):
+            def reboot_and_wait(self, serial, timeout_s):
+                if serial == "P02":
+                    held.set()
+                    released.wait(5)
+                return super().reboot_and_wait(serial, timeout_s)
+        sim = Slow(data)
+        runner = threading.Thread(target=lambda: run_plan(data, sim, self.j))
+        runner.start()
+        held.wait(5)
+        end = time.monotonic() + 5
+        while time.monotonic() < end and not all(sim.nodes[s].version == TARGET for s in ("P12", "P11", "P22", "P21")):
+            time.sleep(0.01)
+        done = all(sim.nodes[s].version == TARGET for s in ("P12", "P11", "P22", "P21"))
+        released.set()
+        runner.join(5)
+        self.assertTrue(done, "the other pairs should finish while the first pair is still waiting")
 
     def test_a_parallel_run_ends_where_a_sequential_one_does(self):
         seq = SimBackend(four_pairs())

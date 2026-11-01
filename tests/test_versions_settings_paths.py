@@ -58,7 +58,7 @@ class SettingsTests(unittest.TestCase):
         s = settings.load()
         self.assertEqual((s.max_failures, s.pending_changes, s.spread_limit), (5, "block", 2))
         self.assertEqual((s.failover_band, s.post_upgrade_band), (0.30, 0.50))
-        self.assertEqual((s.restore_roles, s.image_source, s.max_parallel), ("leave", "firewall", 1))
+        self.assertEqual((s.restore_roles, s.image_source, s.max_parallel), ("leave", "firewall", 5))
 
     def test_string_numbers_are_rejected_not_compared_later(self):
         # the old script's --maxUpgrades had no type and crashed later on a string
@@ -84,8 +84,9 @@ class SettingsTests(unittest.TestCase):
                 settings.from_dict(bad)
 
     def test_loosening_is_warned_not_forbidden(self):
-        s = settings.from_dict({"pending_changes": "ignore", "max_parallel": 3})
+        s = settings.from_dict({"pending_changes": "ignore", "allow_downgrade": True})
         self.assertEqual(len(s.loosening_warnings()), 2)
+        self.assertEqual(settings.from_dict({"max_parallel": 9}).loosening_warnings(), [])          # running pairs side by side is the design, not a loosening
         self.assertEqual(settings.load().loosening_warnings(), [])
 
     def test_toml_file(self):

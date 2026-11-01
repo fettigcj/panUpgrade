@@ -15,7 +15,7 @@ from datetime import date, datetime, timezone
 from dataclasses import asdict
 from pathlib import Path
 
-from . import (approval as approval_mod, fleetreport, console, executor, paths, prepare as prepare_mod, releases as releases_mod, report,
+from . import (approval as approval_mod, fleetreport, console, executor, paths, prepare as prepare_mod, progress, releases as releases_mod, report,
                settings as settings_mod, xlsxout)
 from . import credstore, profiles, site, trust
 from .credstore import NeedsSignIn
@@ -636,7 +636,7 @@ def _listener(style, names, serials, settings):
     if settings.max_parallel > 1 and style.color and sys.stdout.isatty():
         board = console.StatusBoard(style, names, serials)
         return board, board.close
-    return console.EventPrinter(style, names), (lambda: None)
+    return console.EventPrinter(style, names, out=progress.output()), (lambda: None)       # (the stream is looked up here: the run's worker threads print through it)
 
 
 def _interactive_approval(style, plan_hash, serials, acks, lines, journal_path, ack_lines=None, input_fn=None, tty=None,
@@ -788,7 +788,7 @@ def _upgrade_execute(args, style, bundle, approve=None):
     journal = (Journal.resume if resuming else Journal.create)(journal_path, plan["hash"])
     print(style.line("info", f"journal: {journal_path}" + (" (continuing)" if resuming else "")))
     names = {d["serial"]: d["hostname"] for d in plan["devices"]}
-    journal.listener, close_view = _listener(style, names, [s for batch in plan["order"] for unit in batch for s in unit], settings)
+    journal.listener, close_view = _listener(style, names, [s for unit in plan["order"] for s in unit], settings)
     printer = journal.listener
 
     def listener(record):                       # the screen keeps every event too, so it can show them firewall by firewall
@@ -796,7 +796,7 @@ def _upgrade_execute(args, style, bundle, approve=None):
         printer(record)
     journal.listener = listener
     if label == "LIVE":
-        print(style.line("stop", f"LIVE RUN - this will change real firewalls: {len(plan['order'])} batch(es), journal {journal_path}"))
+        print(style.line("stop", f"LIVE RUN - this will change real firewalls: {len(plan['order'])} unit(s), up to {settings.max_parallel} at a time, journal {journal_path}"))
     else:
         print(style.line("info", f"{label} - no write command is sent to any real device; the run is rehearsed against a model"
                          + (" seeded from live state" if label == "DRY RUN" else "")))

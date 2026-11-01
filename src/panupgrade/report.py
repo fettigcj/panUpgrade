@@ -131,10 +131,10 @@ def to_text(plan, verbose=False):
             if note:
                 lines.append(f"      ({note})")
     if plan["order"]:
-        lines += ["", "Order (batches of at most max_parallel units; an HA pair is one unit, passive first)"]
+        lines += ["", f"Order (each unit is worked in series, an HA pair passive first; up to {plan['settings']['max_parallel']} units run at the same time)"]
         names = {d["serial"]: d["hostname"] for d in plan["devices"]}
-        for i, batch in enumerate(plan["order"], 1):
-            lines.append(f"  batch {i}: " + " | ".join(" > ".join(names[m] for m in unit) for unit in batch))
+        for i, unit in enumerate(plan["order"], 1):
+            lines.append(f"  {i}. " + " > ".join(names[m] for m in unit))
         lines += ["", "Steps"]
         for names_, steps, _ in step_groups(plan):
             lines.append(_wrap(", ".join(names_) + ":", 2))
@@ -198,17 +198,16 @@ def to_html(plan):
     if plan["order"]:
         names = {d["serial"]: d["hostname"] for d in plan["devices"]}
         out.append("<h2>Order and steps</h2>")
-        for i, batch in enumerate(plan["order"], 1):
-            out.append(f'<div class="card"><b>Batch {i}</b> <span class="mute">(an HA pair is one unit, passive first)</span>')
-            for unit in batch:
-                for member in unit:
-                    dev = next(d for d in plan["devices"] if d["serial"] == member)
-                    out.append(f'<h2>{escape(names[member])} <span class="mono">{escape(member)}</span></h2><table>')
-                    for st in dev["steps"]:
-                        flag = _chip("fail", st["traffic"]) if st["traffic"] in ("outage",) else (
-                            _chip("warn", st["traffic"]) if st["traffic"] != "none" else "")
-                        out.append(f'<tr><td>{escape(st["action"])} {flag}</td><td class="mute">{escape(st["note"])}</td></tr>')
-                    out.append(f'</table><div class="mute">Rollback: {escape(dev["rollback"])}</div>')
+        for i, unit in enumerate(plan["order"], 1):
+            out.append(f'<div class="card"><b>Unit {i}</b> <span class="mute">(worked in series, an HA pair passive first; up to {plan["settings"]["max_parallel"]} units run at the same time)</span>')
+            for member in unit:
+                dev = next(d for d in plan["devices"] if d["serial"] == member)
+                out.append(f'<h2>{escape(names[member])} <span class="mono">{escape(member)}</span></h2><table>')
+                for st in dev["steps"]:
+                    flag = _chip("fail", st["traffic"]) if st["traffic"] in ("outage",) else (
+                        _chip("warn", st["traffic"]) if st["traffic"] != "none" else "")
+                    out.append(f'<tr><td>{escape(st["action"])} {flag}</td><td class="mute">{escape(st["note"])}</td></tr>')
+                out.append(f'</table><div class="mute">Rollback: {escape(dev["rollback"])}</div>')
             out.append("</div>")
     out.append("</main></body></html>")
     return "".join(out)

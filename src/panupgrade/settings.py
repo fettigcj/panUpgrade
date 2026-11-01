@@ -63,7 +63,7 @@ class Settings:
     min_free_disk_mb: int = 4096
     download_timeout_s: int = 3600
     install_timeout_s: int = 3600
-    reboot_timeout_s: int = 1800
+    reboot_timeout_s: int = 1920
     poll_interval_s: int = 15          # how often a long job or a rebooting firewall is checked
     backup_dir: str = "backups"        # where verified config backups are written
     approval_max_age_hours: int = 168  # an approval older than this (a week) is refused (0 = never expires)

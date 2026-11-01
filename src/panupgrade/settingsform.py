@@ -87,7 +87,8 @@ INFO = {
     "min_free_disk_mb": ("Free disk space a firewall needs before an image is downloaded, in MB.", {}),
     "download_timeout_s": ("How long to wait for an image download, in seconds.", {}),
     "install_timeout_s": ("How long to wait for an install, in seconds.", {}),
-    "reboot_timeout_s": ("How long to wait for a firewall to come back after a reboot, in seconds.", {}),
+    "reboot_timeout_s": ("How long to wait for a firewall to come back after a reboot, in seconds (default 1920, 32 minutes). A reboot usually takes about 11 minutes; "
+                         "the slowest seen, on an under-powered lab machine, took just over 30.", {}),
     "poll_interval_s": ("How often a running job or a rebooting firewall is checked, in seconds.", {}),
     "backup_dir": ("Folder where verified configuration backups are written before anything changes.", {}),
     "approval_max_age_hours": ("An approval older than this is refused. 168 is a week; 0 means it never expires.", {}),

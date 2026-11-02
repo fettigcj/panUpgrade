@@ -1652,12 +1652,50 @@ class ThePrepareRunFirewallByFirewall(ShellCase):
         self.assertIn("FAILED: no space", text)
         gate.set(); wait(ui)
 
+    def test_a_problem_that_belongs_to_no_one_firewall_is_not_hidden_behind_all_steps_done(self):
+        """Every firewall's own steps went well, yet the checks after them found the fleet blocked: the list must say so."""
+        def script(bundle):
+            bundle.step("S3", "download 10.2.3", "started"); bundle.step("S3", "download 10.2.3", "ok")
+            bundle.step("S1", "sync to peer", "started"); bundle.step("S1", "sync to peer", "ok")
+            bundle.step("S1", "download 10.2.3", "started"); bundle.step("S1", "download 10.2.3", "ok")
+            print("[FAIL] fw-three: BLOCKED - 3584 MB free, setting min_free_disk_mb is 4096")
+            print("[WARN] The upgrade batch may not include firewalls that failed to prepare")
+        ui, bundle, gate = self.run_with(script)
+        gate.set(); wait(ui)
+        text = self.text(ui, 130, 30)
+        self.assertIn("!! Whole fleet", text)
+        self.assertIn("1 problem reported, 1 warning(s)", text)
+        self.assertIn("ok fw-two + fw-one", text)                                  # the firewalls' own steps did succeed
+        self.assertIn("[FAIL] fw-three: BLOCKED - 3584 MB free", text)             # and the fleet's log (shown first) says what is wrong
+        self.assertIn("Everything it printed, in order:", text)
+
+    def test_the_stage_the_run_is_in_shows_beside_the_whole_fleet_while_the_firewalls_are_done(self):
+        gate, begun = threading.Event(), threading.Event()
+
+        def execute(args, bundle, approve):
+            bundle.step("S1", "sync to peer", "started"); bundle.step("S1", "sync to peer", "ok")
+            bundle.step("S1", "download 10.2.3", "started"); bundle.step("S1", "download 10.2.3", "ok")
+            progress.phase("Post-preparation verifications: reading the fleet again")
+            begun.set(); gate.wait(3)
+            return 0
+        ui = self.make(execute=execute)
+        go(ui, "alt-5"); wait(ui)
+        ui.press("enter")
+        for ch in "APPROVE":
+            ui.press(ch)
+        ui.press("enter")
+        begun.wait(3)
+        text = self.text(ui, 130, 30)
+        self.assertIn(">> Whole fleet", text)
+        self.assertIn("Post-preparation verifications: reading the fleet again", text)
+        gate.set(); wait(ui)
+
     def test_the_logs_can_still_be_read_after_the_run(self):
         def script(bundle):
             bundle.step("S3", "download 10.2.3", "started"); bundle.step("S3", "download 10.2.3", "ok")
         ui, bundle, gate = self.run_with(script)
         gate.set(); wait(ui)
-        ui.press("down")                                               # nothing is running now: choose the unit to read
+        ui.press("down"); ui.press("down")                             # nothing is running now: past the whole fleet, to the unit to read
         text = self.text(ui, 130, 30)
         self.assertIn("finished at", text)
         self.assertIn("fw-three       download 10.2.3  ok", text)
@@ -1793,7 +1831,7 @@ class TheRunFirewallByFirewall(ShellCase):
         bundle.step("A2", "1:install 10.2.3", "started")                # the running unit changes under the chosen one
         right = "\n".join(line.split("| ", 1)[1] for line in self.text(ui, 130, 30).splitlines() if "| " in line)
         self.assertIn("fw-three", right)                                # the chosen unit stays chosen
-        self.assertEqual(ui.screen.unit_at, 1)
+        self.assertEqual(ui.screen.unit_at, 2)                           # the whole-fleet entry is the first of the list
         ui.press("v")
         text = self.text(ui, 130, 30)
         self.assertIn("combined text line", text)

@@ -193,11 +193,29 @@ def preemption(ctx):
     return CheckResult("preemption", PASS, "preemption is off")
 
 
+def _images_already_here(ctx):
+    """True when the upgrade path needs at least one download and every image it needs is already on the firewall."""
+    raw = ctx.facts.sw_version if ctx.facts and ctx.facts.sw_version else ctx.ref.sw_version
+    try:
+        result = paths.compute(raw, str(ctx.target), ctx.path_rules, ctx.settings.allow_downgrade, ctx.settings.allow_cross_feature_downgrade)
+    except VersionError:
+        return False
+    if not result.ok:
+        return False
+    needed = [step["version"] for step in result.steps if step["download"]]
+    have = set(ctx.facts.images_downloaded or [])
+    return bool(needed) and all(version in have for version in needed)
+
+
 def disk_space(ctx):
     free = ctx.facts.disk_free_mb
     if free is None:
         return _no_data("disk_space", "free disk space")
     need = ctx.settings.min_free_disk_mb
+    if free < need and _images_already_here(ctx):
+        # the space is for fetching the image; once it is on the firewall, what it used is not a reason to hold the upgrade
+        return CheckResult("disk_space", PASS, f"{free} MB free; below min_free_disk_mb ({need}), but every image this upgrade needs "
+                                               f"is already on the firewall, so nothing more has to be downloaded")
     if free < need:
         return CheckResult("disk_space", FAIL, f"{free} MB free, setting min_free_disk_mb is {need}")
     return CheckResult("disk_space", PASS, f"{free} MB free (needs {need})")

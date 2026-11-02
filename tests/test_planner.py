@@ -165,6 +165,19 @@ class ReachabilityAndData(unittest.TestCase):
         d[1]["facts"]["disk_free_mb"] = None
         self.assertEqual(dev(plan(fleet(d)), "A2")["verdict"], "blocked")
 
+    def test_low_disk_space_blocks_unless_every_needed_image_is_already_on_the_firewall(self):
+        """Preparing downloads the image, which uses the very space the check wants free: that must not block the upgrade it prepared for."""
+        d = pair("A1", "A2")
+        d[0]["facts"]["disk_free_mb"] = d[1]["facts"]["disk_free_mb"] = 3584
+        blocked = plan(fleet(d), min_free_disk_mb=4096)
+        self.assertEqual(dev(blocked, "A1")["verdict"], "blocked")
+        d[0]["facts"]["images_downloaded"] = [TARGET]
+        d[1]["facts"]["images_downloaded"] = [TARGET]
+        ready = plan(fleet(d), min_free_disk_mb=4096)
+        self.assertEqual(dev(ready, "A1")["verdict"], "ready")
+        check = next(r for r in dev(ready, "A1")["results"] if r["check"] == "disk_space")
+        self.assertIn("already on the firewall", check["reason"])
+
     def test_optional_check_without_data_does_not_block(self):
         d = pair("A1", "A2")
         d[1]["facts"]["ntp_synced"] = None

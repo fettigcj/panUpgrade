@@ -1017,6 +1017,10 @@ class ChangeScreen(Screen):
         return None
 
 
+FLEET = [{"serial": "", "hostname": "Whole fleet", "fleet": True}]       # the list's first entry: everything that is not one firewall's own steps
+PROBLEM_LINE = re.compile(r"^\s*\[(FAIL|WARN|STOP)\]")
+
+
 class UnitView:
     """The run, firewall by firewall, for a screen that changes firewalls: a list of units (an HA pair is one unit) with each one's own
     log beside it, or the combined output (V). The screen supplies ``units()`` (lists of dicts with a serial and a hostname) and
@@ -1045,12 +1049,54 @@ class UnitView:
     def step_name(record):
         return re.sub(r"^\d+:", "", record.get("step", ""))
 
+    # -- the whole fleet: the stages around the firewalls' own steps, and every problem the run reported that belongs to no one firewall
+    def all_units(self):
+        units = self.units()
+        return [FLEET] + units if units else []
+
+    def fleet_output(self):
+        job = self.job
+        return [] if job is None else job.log()
+
+    def fleet_problems(self):
+        """(failures, warnings): the lines of the combined output that report one, so a blocked plan or a failed verification is never only in the text."""
+        if self.job is None:
+            return [], []
+        lines = [line.strip() for line in self.job.live().splitlines() if PROBLEM_LINE.match(line) and "LIVE RUN" not in line]
+        if self.job.failed:
+            lines.append(f"[FAIL] the run ended with code {self.job.code}")
+        return [l for l in lines if not l.startswith("[WARN]") and not l.startswith("[STOP]")], [l for l in lines if l.startswith("[WARN]") or l.startswith("[STOP]")]
+
+    def fleet_state(self):
+        failures, warnings = self.fleet_problems()
+        if self.stage == "running":
+            return "running", (self.job.words() if self.job is not None else "") or "working"
+        if failures or any(self.unit_state(unit)[0] == "failed" for unit in self.units()):
+            return "failed", f"{len(failures)} problem{'s' if len(failures) != 1 else ''} reported" + (f", {len(warnings)} warning(s)" if warnings else "") + ": read the log"
+        if warnings:
+            return "warn", f"{len(warnings)} warning{'s' if len(warnings) != 1 else ''}: read the log"
+        return "done", "nothing else to report"
+
+    def unit_log(self, unit):
+        """The styled lines shown for one entry of the list."""
+        if unit is FLEET:
+            failures, warnings = self.fleet_problems()
+            lines = [("error", line) for line in failures] + [("warn", line) for line in warnings]
+            if lines:
+                lines += [("", ""), ("dim", "Everything it printed, in order:")]
+            return lines + [("", line) for line in self.fleet_output()] or [("dim", "(nothing has happened here yet)")]
+        return [self.event_line(unit, when, rec) for when, rec in self.unit_events(unit)] or [("dim", "(nothing has happened here yet)")]
+
     def unit_events(self, unit):
+        if unit is FLEET:
+            return []
         serials = {d["serial"] for d in unit}
         return [(when, rec) for when, rec in self.source().events_snapshot() if rec.get("serial") in serials and rec.get("type") == "step"]
 
     def unit_state(self, unit):
         """(state, words): waiting, running, done or failed, and what it is on or where it went wrong."""
+        if unit is FLEET:
+            return self.fleet_state()
         events = self.unit_events(unit)
         final = self.stage == "done"
         if not events:
@@ -1085,7 +1131,9 @@ class UnitView:
         if self.unit_pinned and self.unit_at < len(units):
             return self.unit_at
         states = [self.unit_state(unit)[0] for unit in units]
-        for wanted in ("running", "failed"):
+        if "running" in states[1:]:
+            return states.index("running", 1)                 # follow the firewall that is being worked on
+        for wanted in ("failed", "running", "warn"):          # a failure is what to look at; then the stage the whole run is in
             if wanted in states:
                 return states.index(wanted)
         return len(units) - 1 if states and all(state == "done" for state in states) else 0
@@ -1103,7 +1151,7 @@ class UnitView:
         return FORM_PANE_FROM if self.showing_units() else PANE_FROM            # this view has its own list of units and wants the room
 
     def custom_body(self, width, room):
-        units = self.units() if self.showing_units() else []
+        units = self.all_units() if self.showing_units() else []
         if not units:
             return None
         at = self.shown_unit(units)
@@ -1111,14 +1159,13 @@ class UnitView:
         for n, unit in enumerate(units):
             state, words = self.unit_state(unit)
             mark = {"waiting": ("dim", ".. "), "idle": ("dim", ".. "), "running": ("warn", ">> "), "done": ("ok", "ok "), "failed": ("error", "!! "),
-                    "stopped": ("error", "-- ")}[state]
+                    "stopped": ("error", "-- "), "warn": ("warn", "?? ")}[state]
             label = " + ".join(d["hostname"] for d in unit)
             listing += [[("focus" if n == at else "bold", f" {'>' if n == at else ' '}"), mark, ("bold", label)],
                         [("", "     "), (mark[0] if state != "waiting" else "dim", words)]]
         unit = units[at]
         state, words = self.unit_state(unit)
-        log = [(style, text) for style, text in (self.event_line(unit, when, rec) for when, rec in self.unit_events(unit))]
-        log = log or [("dim", "(nothing has happened here yet)")]
+        log = self.unit_log(unit)
         left = 40
         space = max(room - 3, 2)
         end = max(len(log) - space, 0)
@@ -1152,7 +1199,7 @@ class UnitView:
                 self.toggle_view()
                 return None
             if self.showing_units():
-                units = self.units()
+                units = self.all_units()
                 at = self.shown_unit(units) if units else 0
                 if key in ("up", "down") and units:
                     self.unit_at, self.unit_pinned, self.log_offset = max(0, min(at + (1 if key == "down" else -1), len(units) - 1)), True, None
@@ -1165,7 +1212,7 @@ class UnitView:
     visible = 12
 
     def _scroll_log(self, key, unit):
-        total = len(self.unit_events(unit)) if unit else 0
+        total = len(self.unit_log(unit)) if unit else 0
         end = max(total - self.visible, 0)
         at = end if self.log_offset is None else min(self.log_offset, end)
         at = max(0, {"pgup": at - self.visible, "pgdn": at + self.visible, "home": 0, "end": end}[key])

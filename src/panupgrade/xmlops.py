@@ -140,6 +140,35 @@ def parse_images_downloaded(op):
     return sorted(_text(e, "version") for e in node.iter("entry") if _text(e, "downloaded") == "yes" and _text(e, "version"))
 
 
+def sort_newest_first(rows):
+    """Version rows (dicts with a "version"), newest first; a version this tool cannot read sorts last, in the order given."""
+    from .versions import Version, VersionError
+
+    def key(row):
+        try:
+            return (1, Version.parse(row["version"]))
+        except (VersionError, TypeError):
+            return (0, None)
+    readable = sorted((r for r in rows if key(r)[0]), key=lambda r: key(r)[1], reverse=True)
+    return readable + [r for r in rows if not key(r)[0]]
+
+
+def parse_software_versions(op, refresh=True):
+    """Every PAN-OS version the firewall lists, newest first: [{version, downloaded, current, latest, released}].
+
+    With ``refresh`` the firewall is first asked to check the update server (read-only); if it cannot, the list it already has is used."""
+    if refresh:
+        try:
+            op("request system software check")
+        except Exception:                      # offline from the update server: what it already knows is still worth showing
+            pass
+    node = _result(op("request system software info"), "request system software info")
+    rows = [{"version": _text(e, "version"), "downloaded": _text(e, "downloaded") == "yes", "current": _text(e, "current") == "yes",
+             "latest": _text(e, "latest") == "yes", "released": _text(e, "released-on") or ""}
+            for e in node.iter("entry") if _text(e, "version")]
+    return sort_newest_first(rows)
+
+
 _UNITS = {"T": 1024 * 1024, "G": 1024, "M": 1, "K": 1 / 1024}
 
 
@@ -242,6 +271,14 @@ class OpSource(Source):
 
     def list_devices(self):
         return list(self._refs)
+
+    def available_versions(self, serial):
+        if not any(r.serial == serial for r in self._refs):
+            raise SourceError(f"{serial} is not in the fleet")
+        try:
+            return parse_software_versions(self._op_for(serial))
+        except (XmlOpError, ET.ParseError) as exc:
+            raise SourceError(f"the firewall's software list could not be read: {exc}") from None
 
     def facts(self, serial):
         ref = next((r for r in self._refs if r.serial == serial), None)

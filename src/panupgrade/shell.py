@@ -589,6 +589,131 @@ class SelectScreen(Screen):
         return None
 
 
+class TargetScreen(Screen):
+    """Choose the target from what a firewall itself lists as available: pick a firewall of the fleet, then one of its versions. The home
+    screen's text field still takes any version typed by hand; this is for when the exact spelling (hotfix suffixes, dots, dashes) matters."""
+    name, title = "targets", "choose the target from a firewall's list"
+
+    def __init__(self, shell):
+        super().__init__(shell)
+        self.reset()
+
+    def reset(self):
+        self.job, self.args, self.refs, self.chosen, self.versions, self.at, self.note = None, None, None, None, None, 0, ""
+
+    def enter(self):
+        if self.pending:
+            self.route_pending()
+            return
+        self.at, self.note = 0, ""
+        self.chosen, self.versions = None, None
+        session = self.shell.session
+        if self.refs is not None or (self.job is not None and self.job.running):
+            return
+        if not session.address.strip():
+            self.note = "Choose or make a Panorama profile, or type its address, on the home screen first (Alt-H)."
+            return
+        self.args = args = session.args_for("select")
+        where = session.profile.name if session.profile else session.address.strip()
+        self.job = self.shell.start_job(f"Firewall list ({where})", lambda: self.shell.read_devices(args), lambda job: self._fleet_read(job, args))
+
+    def _fleet_read(self, job, args):
+        if self.job is not job:
+            return
+        self.job = None
+        if self.settle_problem(args):
+            return
+        if job.code or not isinstance(job.value, list):
+            self.note = (job.text or "could not read the firewall list").strip()
+            return
+        self.refs = sorted((r for r in job.value if r.connected), key=lambda r: r.hostname.lower())
+        if not self.refs:
+            self.note = "No firewall is connected to Panorama, so there is none to ask."
+
+    def _ask(self, ref):
+        self.chosen, self.versions, self.at, self.note = ref, None, 0, ""
+        args = self.shell.session.args_for("select")
+        self.job = self.shell.start_job(f"Versions offered by {ref.hostname}", lambda: self.shell.read_versions(args, ref.serial),
+                                        lambda job: self._versions_read(job, args))
+
+    def _versions_read(self, job, args):
+        if self.job is not job:
+            return
+        self.job = None
+        if self.settle_problem(args):
+            return
+        if job.code or not isinstance(job.value, list):
+            self.note = (job.text or "could not read the firewall's software list").strip()
+            self.chosen = None
+        elif not job.value:
+            self.note = f"{self.chosen.hostname} lists no versions. Pick another firewall, or type the version on the home screen."
+            self.chosen = None
+        else:
+            self.versions = job.value
+
+    def items(self):
+        return self.versions if self.versions is not None else (self.refs or [])
+
+    def render(self, width, height):
+        lines = [[("bold", " panupgrade - choose the target from a firewall's list")], []]
+        busy = self.job is not None and self.job.running
+        if busy:
+            lines.append([("warn", f" {SPIN[int(time.monotonic() * 4) % 4]} {self.job.elapsed()}s {self.job.title}: {self.job.words()}")])
+        if self.note:
+            lines += wrapped("error", self.note, width)
+        if self.versions is None and self.refs is None:
+            if not busy:
+                lines += wrapped("dim", "Enter tries again; Esc goes home.", width)
+            return [cut(line, width - 1) for line in lines[:height]]
+        if self.versions is None:
+            lines += wrapped("dim", "Pick a firewall; it will be asked which PAN-OS versions it offers. Up / Down choose, Enter asks, Esc goes home.", width)
+        else:
+            lines += wrapped("dim", f"Versions {self.chosen.hostname} ({self.chosen.sw_version or 'version unknown'}) lists, newest first. Enter makes one the target; "
+                                    f"Esc goes back to the firewalls.", width)
+        lines.append([])
+        room = max(height - len(lines) - 1, 3)
+        items = self.items()
+        top = max(0, min(self.at - room // 2, len(items) - room))
+        for n in range(top, min(top + room, len(items))):
+            on = n == self.at
+            item = items[n]
+            if self.versions is None:
+                text = f"{item.hostname.ljust(24)} {item.serial.ljust(16)} {item.sw_version or '?'}" + (f"  {item.ha_state}" if item.ha_state else "")
+            else:
+                tags = [t for t, flag in (("current", item["current"]), ("downloaded", item["downloaded"]), ("latest", item["latest"])) if flag]
+                text = f"{item['version'].ljust(16)} {', '.join(tags).ljust(26)} {item['released']}"
+            lines.append([("focus" if on else "", f" {'>' if on else ' '} {text}")])
+        if len(items) > room:
+            lines.append([("dim", f" {self.at + 1} of {len(items)}  (PgUp / PgDn scroll)")])
+        return [cut(line, width - 1) for line in lines[:height]]
+
+    def press(self, key):
+        items = self.items()
+        if key == "esc":
+            if self.versions is not None and not (self.job is not None and self.job.running):
+                self.versions, self.chosen, self.at = None, None, 0
+                return None
+            return "home"
+        if self.job is not None and self.job.running:
+            return None
+        if self.refs is None and self.versions is None:
+            if key == "enter":
+                self.enter()
+            return None
+        if key in ("up", "down", "pgup", "pgdn", "home", "end") and items:
+            step = {"up": -1, "down": 1, "pgup": -10, "pgdn": 10}.get(key)
+            self.at = 0 if key == "home" else len(items) - 1 if key == "end" else max(0, min(self.at + step, len(items) - 1))
+        elif key == "enter" and items:
+            if self.versions is None:
+                self._ask(items[self.at])
+            else:
+                chosen = items[self.at]["version"]
+                self.shell.session.target = chosen
+                self.shell.message = f"Target set to {chosen}, as {self.chosen.hostname} lists it."
+                return "home"
+        return None
+
+
 class ChangeScreen(Screen):
     """A step that changes firewalls, in the same three steps the command takes: read the plan (changes nothing), approve it by typing
     APPROVE, then run it. Leaving the screen does not stop a run; the Jobs screen shows it and quitting asks first.
@@ -1337,7 +1462,7 @@ class JobsScreen(Screen):
 class HomeScreen(Screen):
     name, title = "home", "upgrade Palo Alto firewalls through Panorama, safely"
     TEXT = {1: "address", 2: "target"}                                   # the rows of the top block that are typed into
-    TOP = 3                                                              # profile, address, target
+    TOP = 4                                                              # profile, address, target, the list a firewall offers
 
     def __init__(self, shell):
         super().__init__(shell)
@@ -1370,6 +1495,9 @@ class HomeScreen(Screen):
                 setattr(session, attr, "")
             elif len(key) == 1 and key.isprintable():
                 setattr(session, attr, text + key)
+        elif self.at == 3:
+            if key in ("enter", " "):
+                return ("goto", "targets")                               # pick the target from what a firewall lists
         elif key == "enter" or key == " ":
             step = self.at - self.TOP
             return "quit" if step == len(STEP_ORDER) else ("goto", STEP_ORDER[step])
@@ -1394,6 +1522,8 @@ class HomeScreen(Screen):
         on = self.at == 2
         lines.append([("focus" if on else "bold", f" {'>' if on else ' '} Target PAN-OS      "), ("focus" if on else "", f"[{session.target}{'_' if on else ''}]".ljust(28)),
                       ("dim", "  needed to plan, prepare and upgrade")])
+        on = self.at == 3
+        lines.append([("focus" if on else "bold", f" {'>' if on else ' '} Or choose it from the versions a firewall lists"), ("dim", "  Enter")])
         lines += [[], [("bold", " Steps in order"), ("dim", "   (Enter opens one; the Alt keys below jump from anywhere)")]]
         for n, name in enumerate(STEP_ORDER):
             here = self.at == self.TOP + n
@@ -1413,10 +1543,11 @@ class Shell:
               "prepare": "Prepare", "upgrade": "Upgrade", "settings": "Settings", "releases": "PAN-OS releases", "jobs": "Jobs"}
 
     def __init__(self, session, run_command=None, read_devices=None, prepare_review=None, prepare_execute=None,
-                 upgrade_review=None, upgrade_execute=None):
+                 upgrade_review=None, upgrade_execute=None, read_versions=None):
         self.session = session
         self.run_command = run_command or self._run_command
         self.read_devices = read_devices or self._read_devices
+        self.read_versions = read_versions or self._read_versions
         self.prepare_review = prepare_review or self._prepare_review
         self.prepare_execute = prepare_execute or self._prepare_execute
         self.upgrade_review = upgrade_review or self._upgrade_review
@@ -1433,6 +1564,7 @@ class Shell:
                               intro="What would an upgrade do to each firewall, and why? Read-only: nothing is changed."),
             "prepare": PrepareScreen(self),
             "upgrade": UpgradeScreen(self),
+            "targets": TargetScreen(self),
             "settings": FormScreen(self, "settings", "settings", self._settings_form),
             "releases": JobScreen(self, "releases", "PAN-OS releases", "releases", needs_address=False, auto=True,
                                   intro="The list of PAN-OS releases used to count minor versions."),
@@ -1722,3 +1854,7 @@ class Shell:
     @staticmethod
     def _read_devices(args):
         return cli._source(args).list_devices()
+
+    @staticmethod
+    def _read_versions(args, serial):
+        return cli._source(args).available_versions(serial)

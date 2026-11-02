@@ -122,7 +122,7 @@ class ShellCase(Home):
         self.commands, self.reads, self.reviews, self.executed = [], [], [], []
         self.up_reviews, self.up_executed = [], []
 
-    def make(self, address="192.0.2.1", target="12.1.10", run=None, read=None, review=None, execute=None, up_review=None, up_execute=None):
+    def make(self, address="192.0.2.1", target="12.1.10", run=None, read=None, review=None, execute=None, up_review=None, up_execute=None, read_versions=None):
         def run_command(args):
             self.commands.append((args.command, getattr(args, "target", None)))
             return run(args) if run else (print(f"output of {args.command}") or 0)
@@ -148,7 +148,7 @@ class ShellCase(Home):
             return up_execute(args, bundle, approve) if up_execute else (print("UPGRADE RAN") or 0)
         session = shell.Session(cli.parse_args(["shell"]), address, target, self.lab)
         ui = shell.Shell(session, run_command=run_command, read_devices=read_devices, prepare_review=prepare_review, prepare_execute=prepare_execute,
-                         upgrade_review=upgrade_review, upgrade_execute=upgrade_execute)
+                         upgrade_review=upgrade_review, upgrade_execute=upgrade_execute, read_versions=read_versions)
         self.addCleanup(self.settle, ui)
         return ui
 
@@ -188,7 +188,7 @@ class Home_(ShellCase):
 
     def test_enter_opens_a_step_and_escape_or_q_leaves(self):
         ui = self.make()
-        for _ in range(5):                                    # profile, address, target, then step 1 (sign in), 2 (firewalls) and 3: the fleet report
+        for _ in range(6):                                    # profile, address, target, the picker, then step 1 (sign in), 2 (firewalls) and 3: the fleet report
             ui.press("down")
         ui.press("enter")
         self.assertEqual(ui.screen.name, "report")
@@ -1483,6 +1483,106 @@ class TheUpgradeScreen(ShellCase):
             lines = ui.render(80, height)
             self.assertEqual(len(lines), height)
             self.assertIn("Approve and run", tui.plain(lines))
+
+
+class ChoosingTheTargetFromAFirewall(ShellCase):
+    """The home screen's text field takes any version typed; the picker lists what a firewall itself offers."""
+
+    OFFERED = [{"version": "10.2.4-h2", "downloaded": True, "current": False, "latest": True, "released": "2026/09/01"},
+               {"version": "10.2.3", "downloaded": False, "current": True, "latest": False, "released": "2026/07/01"}]
+
+    def make_picker(self, versions=None, error=None):
+        asked = []
+
+        def read_versions(args, serial):
+            asked.append(serial)
+            if error:
+                raise SourceError(error)
+            return self.OFFERED if versions is None else versions
+        ui = self.make(read_versions=read_versions)
+        ui.press("down"); ui.press("down"); ui.press("down")          # the row under the target field
+        ui.press("enter"); wait(ui)
+        return ui, asked
+
+    def test_the_home_screen_offers_it_under_the_target_field_and_typing_still_works(self):
+        ui = self.make()
+        self.assertIn("Or choose it from the versions a firewall lists", self.text(ui))
+        ui.press("down"); ui.press("down")
+        for ch in "9.9.9":
+            ui.press(ch)
+        self.assertEqual(ui.session.target, "12.1.10" + "9.9.9")
+
+    def test_pick_a_firewall_then_one_of_its_versions_and_the_target_becomes_exactly_that_text(self):
+        ui, asked = self.make_picker()
+        self.assertEqual(ui.screen.name, "targets")
+        text = self.text(ui)
+        for ref in REFS:
+            if ref.connected:
+                self.assertIn(ref.hostname, text)
+        ui.press("enter"); wait(ui)
+        self.assertEqual(len(asked), 1)
+        text = self.text(ui)
+        self.assertIn("10.2.4-h2", text)
+        self.assertIn("downloaded, latest", text)
+        self.assertIn("current", text)
+        ui.press("enter")
+        self.assertEqual(ui.session.target, "10.2.4-h2")
+        self.assertEqual(ui.screen.name, "home")
+        self.assertIn("Target set to 10.2.4-h2", self.text(ui))
+
+    def test_escape_goes_back_a_step_and_then_home_without_changing_the_target(self):
+        ui, asked = self.make_picker()
+        ui.press("enter"); wait(ui)
+        ui.press("esc")
+        self.assertEqual(ui.screen.name, "targets")
+        self.assertIn(REFS[0].hostname, self.text(ui))
+        ui.press("esc")
+        self.assertEqual(ui.screen.name, "home")
+        self.assertEqual(ui.session.target, "12.1.10")
+
+    def test_a_firewall_that_cannot_say_leaves_a_reason_and_the_list_of_firewalls(self):
+        ui, asked = self.make_picker(error="no route to the update server")
+        ui.press("enter"); wait(ui)
+        text = self.text(ui)
+        self.assertIn("no route to the update server", text)
+        self.assertIn(REFS[0].hostname, text)
+
+    def test_a_firewall_that_lists_nothing_says_so(self):
+        ui, asked = self.make_picker(versions=[])
+        ui.press("enter"); wait(ui)
+        self.assertIn("lists no versions", self.text(ui))
+
+
+class TheSoftwareListAFirewallOffers(unittest.TestCase):
+    def test_the_list_is_read_newest_first_with_what_the_firewall_says_about_each(self):
+        from panupgrade import xmlops
+        asked = []
+        xml = ("<response status=\"success\"><result><sw-updates><versions>"
+               "<entry><version>10.2.3</version><downloaded>yes</downloaded><current>yes</current><latest>no</latest><released-on>2026/07/01</released-on></entry>"
+               "<entry><version>10.2.10</version><downloaded>no</downloaded><current>no</current><latest>yes</latest></entry>"
+               "<entry><version>10.2.4-h2</version><downloaded>no</downloaded><current>no</current><latest>no</latest></entry>"
+               "</versions></sw-updates></result></response>")
+
+        def op(command):
+            asked.append(command)
+            import xml.etree.ElementTree as ET
+            return ET.fromstring(xml)
+        rows = xmlops.parse_software_versions(op)
+        self.assertEqual([r["version"] for r in rows], ["10.2.10", "10.2.4-h2", "10.2.3"])
+        self.assertEqual(asked[0], "request system software check")        # it asks the update server first
+        self.assertTrue(rows[2]["downloaded"] and rows[2]["current"] and rows[0]["latest"])
+        self.assertEqual(rows[2]["released"], "2026/07/01")
+
+    def test_a_firewall_that_cannot_reach_the_update_server_still_gives_the_list_it_has(self):
+        from panupgrade import xmlops
+        import xml.etree.ElementTree as ET
+
+        def op(command):
+            if "check" in command:
+                raise xmlops.XmlOpError("no route")
+            return ET.fromstring("<response status=\"success\"><result><sw-updates><versions><entry><version>10.2.3</version></entry>"
+                                 "</versions></sw-updates></result></response>")
+        self.assertEqual([r["version"] for r in xmlops.parse_software_versions(op)], ["10.2.3"])
 
 
 class ThePrepareRunFirewallByFirewall(ShellCase):

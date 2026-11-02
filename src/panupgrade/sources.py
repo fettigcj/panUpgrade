@@ -32,6 +32,10 @@ class Source:
         """Panorama's own clock as an ISO UTC time, or None; the yardstick for each firewall's clock."""
         return None
 
+    def available_versions(self, serial):
+        """The PAN-OS versions this firewall lists as available, newest first: [{version, downloaded, current, latest, released}]."""
+        raise SourceError("this source cannot list the versions a firewall offers")
+
 
 class FakeFleet(Source):
     kind = "fake"
@@ -75,6 +79,16 @@ class FakeFleet(Source):
                 peer_serial=e.get("peer_serial", ""),
             ))
         return refs
+
+    def available_versions(self, serial):
+        entry = self._devices.get(serial)
+        if entry is None:
+            raise SourceError(f"{serial} is not in the fleet")
+        listed = entry.get("software_versions")
+        if listed is None:
+            raise SourceError("the fleet file lists no software versions for this firewall")
+        return [{"version": v, "downloaded": False, "current": v == entry.get("sw_version"), "latest": False, "released": ""} if isinstance(v, str) else v
+                for v in listed]
 
     def facts(self, serial):
         entry = self._devices.get(serial)

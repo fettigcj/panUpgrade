@@ -98,12 +98,19 @@ class HappyPaths(unittest.TestCase):
         from panupgrade import console, report
         p = plan(fleet(pair("A1", "A2")))
         names = [n for group in report.step_groups(p) for n in group[0]]
-        self.assertIn("a1 (currently active)", names)
+        self.assertIn("a1 (currently active, after a2)", names)
         self.assertIn("a2 (currently passive)", names)
         text = report.to_text(p)
-        self.assertIn("a1 (currently active):", text)
+        self.assertIn("a1 (currently active, after a2):", text)
         self.assertIn("wait for the passive firewall's upgrade to finish", text)
         self.assertIn("a2 (currently passive)", console.render_plan(p, console.Style()))
+
+    def test_actives_of_different_pairs_share_one_listing(self):
+        from panupgrade import report
+        p = plan(fleet(pair("A1", "A2"), pair("B1", "B2")))
+        groups = report.step_groups(p)
+        self.assertEqual(len(groups), 2)                                  # all passives, all actives
+        self.assertIn(["a1 (currently active, after a2)", "b1 (currently active, after b2)"], [sorted(g[0]) for g in groups])
 
     def test_preemption_holds_member_until_go_live(self):
         p = plan(fleet(pair("A1", "A2", preemption=True)))

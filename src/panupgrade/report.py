@@ -30,6 +30,11 @@ VERDICT_GROUPS = (("blocked", "Blocked: will not be upgraded until fixed"),
                   ("skipped", "Not planned"))
 
 
+WAIT_STEP = "wait for the passive firewall's upgrade to finish"
+WAIT_NOTE = ("this member does not start until its passive member (named beside it above) has finished its own upgrade and checks; "
+             "its version is confirmed before this member hands over")
+
+
 def grouped_devices(plan):
     """Devices under the verdict heading they belong to, worst first, so the reader meets problems before the routine."""
     return [(heading, [d for d in plan["devices"] if d["verdict"] == verdict]) for verdict, heading in VERDICT_GROUPS
@@ -79,12 +84,18 @@ def gaps_line(plan):
 def step_groups(plan):
     """[(firewall names with their HA role, steps, is a downgrade)]: firewalls with identical steps share one listing instead of repeating it."""
     groups = {}
+    hostnames = {d["serial"]: d["hostname"] for d in plan["devices"]}
     for dev in plan["devices"]:
         if dev["steps"]:
             downgrade = any(r.get("ack") == "downgrade" for r in dev["results"])
-            key = json.dumps([[(st["action"], st["traffic"], st["note"]) for st in dev["steps"]], downgrade])
+            # the wait step names this member's passive peer; that is the one thing that differs between otherwise identical actives,
+            # so it is said beside the firewall's name and the step is worded the same for all of them
+            steps = [dict(st, note=WAIT_NOTE) if st["action"] == WAIT_STEP else st for st in dev["steps"]]
+            key = json.dumps([[(st["action"], st["traffic"], st["note"]) for st in steps], downgrade])
             role = "standalone" if dev.get("ha_mode") == "none" else f"currently {dev.get('ha_state') or 'unknown'}"
-            groups.setdefault(key, ([], dev["steps"], downgrade))[0].append(f"{dev['hostname']} ({role})")
+            if any(st["action"] == WAIT_STEP for st in steps) and dev.get("peer_serial") in hostnames:
+                role += f", after {hostnames[dev['peer_serial']]}"
+            groups.setdefault(key, ([], steps, downgrade))[0].append(f"{dev['hostname']} ({role})")
     return list(groups.values())
 
 

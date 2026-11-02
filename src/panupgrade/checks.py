@@ -258,7 +258,7 @@ def certificate_advisory(ctx):
         return CheckResult("certificate_advisory", WARN,
                            f"the target {ctx.target} is itself a build listed as affected by: {'; '.join(verdict['target_affected'])}. "
                            f"Upgrading to it would not cure the expired certificates; choose a build that contains the fix "
-                           f"(advisory tables are unverified, see cert_advisories.json).",
+                           f"(the advisory tables are unverified; they are the file panupgrade/data/cert_advisories.json in the installed package).",
                            ack="target_cert_advisory", evidence={"target_affected": verdict["target_affected"]})
     problems = []
     for adv, state in verdict["now"]:

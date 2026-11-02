@@ -12,6 +12,8 @@ import json
 import textwrap
 from html import escape
 
+from .model import SAID_ONCE
+
 BANNER = "REPORT ONLY - nothing has been changed on any device"
 
 _CHIP = {"ready": "pass", "caution": "warn", "blocked": "fail", "skipped": "skip",
@@ -44,7 +46,8 @@ def findings(dev, verbose=False):
     results = [r for r in dev["results"] if r["status"] != "pass"]
     if verbose:
         return results, ""
-    results = [r for r in results if not (r["check"] == "panorama_range" and r["status"] == "warn")]   # said once, for all of them, in the advice
+    results = [r for r in results if not (r["check"] == "panorama_range" and r["status"] == "warn")        # said once, for all of them, in the advice
+               and r.get("ack") not in SAID_ONCE]                                                         # likewise, in the cautions
     verdict = dev["verdict"]
     if verdict == "skipped":
         reason = next((r for r in results if r["status"] == "skip" and r.get("kind") == dev["skip_kind"]), None)
@@ -111,7 +114,12 @@ def to_text(plan, verbose=False):
             lines.append(_wrap(f"FLEET {r['status'].upper()}: {r['reason']}", 0))
     if plan["cautions"]:
         lines += ["", "Cautions that need acknowledgement before an apply:"]
-        lines += [_wrap(f"- [{c['code']}] {c['scope']}: {c['text']}", 2) for c in plan["cautions"]]
+        for c in plan["cautions"]:
+            if c.get("devices"):
+                lines += [_wrap(f"- [{c['code']}] {c['title']} ({len(c['devices'])})", 2), _wrap(c["text"], 4)]
+                lines += device_rows(c["devices"], "      ")
+            else:
+                lines.append(_wrap(f"- [{c['code']}] {c['scope']}: {c['text']}", 2))
     if plan.get("advice"):
         lines += ["", "Advice (never blocks an upgrade, nothing to acknowledge):"]
         for c in plan["advice"]:

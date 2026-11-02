@@ -13,6 +13,10 @@ from dataclasses import dataclass, field, fields
 PASS, WARN, FAIL, SKIP, INFO, ERROR = "pass", "warn", "fail", "skip", "info", "error"
 NOT_APPLICABLE, NO_DATA, EXCLUDED = "not_applicable", "no_data", "excluded"
 
+# Cautions that follow from the chosen target, so every firewall gets the same words: the plan says them once for the fleet,
+# naming the firewalls, and approving them is one acknowledgement ("fleet:<code>").
+SAID_ONCE = {"target_cert_advisory": "Target is a build affected by a certificate-expiry advisory"}
+
 
 @dataclass
 class CheckResult:
@@ -20,7 +24,7 @@ class CheckResult:
     status: str
     reason: str
     kind: str = ""          # skip kind, when status == skip
-    ack: str = ""           # caution code the user must acknowledge to proceed
+    ack: str = ""           # caution code the user must acknowledge to proceed (see SAID_ONCE for the ones said once for the fleet)
     evidence: dict = field(default_factory=dict)
 
     def to_dict(self):

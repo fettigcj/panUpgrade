@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from . import __version__, checks, paths, progress
-from .model import (ERROR, EXCLUDED, FAIL, INFO, NO_DATA, NOT_APPLICABLE, SKIP, WARN, CheckResult)
+from .model import (ERROR, EXCLUDED, FAIL, INFO, NO_DATA, NOT_APPLICABLE, SAID_ONCE, SKIP, WARN, CheckResult)
 from .sources import SourceError
 from .versions import Version, VersionError
 
@@ -339,11 +339,17 @@ def _cautions(devices, fleet):
     for r in fleet:
         if r.ack:
             out.append({"scope": "fleet", "code": r.ack, "text": r.reason})
+    once = {}
     for serial, dev in devices.items():
         if dev["verdict"] in ("ready", "caution"):
             for r in dev["results"]:
-                if r.get("ack"):
+                if r.get("ack") in SAID_ONCE:
+                    once.setdefault(r["ack"], {"text": r["reason"], "devices": []})["devices"].append(
+                        {"serial": serial, "hostname": dev["hostname"], "version": dev["current_version"]})
+                elif r.get("ack"):
                     out.append({"scope": serial, "code": r["ack"], "text": r["reason"]})
+    out += [{"scope": "fleet", "code": code, "title": SAID_ONCE[code], "devices": found["devices"], "text": found["text"]}
+            for code, found in once.items()]
     return out
 
 

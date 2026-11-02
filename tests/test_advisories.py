@@ -72,6 +72,18 @@ class InThePlan(unittest.TestCase):
         self.assertEqual(cert(plan("10.2.1", "9167-10330", "10.2.2-h4"))["ack"], "target_cert_advisory")
         self.assertEqual(cert(plan("10.2.1", "9167-10330", "10.2.8")).get("ack", ""), "")
 
+    def test_the_target_advisory_is_said_once_for_the_fleet_naming_every_firewall(self):
+        from panupgrade import report
+        facts_ = dict(sw_version="10.2.1", content_versions={"app": "9167-10330", "threat": "9167-10330", "av": "0", "wildfire": "0"})
+        p = build_plan(FakeFleet(fleet_data(device("FW1", version="10.2.1", facts=facts(**facts_)), device("FW2", version="10.2.1", facts=facts(**facts_)))),
+                       "10.2.2", settings.load(), Selection(accept_standalone_outage=True), {"verified": True, "direct_from": {}, "stepping_install": {}})
+        said = [c for c in p["cautions"] if c["code"] == "target_cert_advisory"]
+        self.assertEqual(len(said), 1)
+        self.assertEqual(said[0]["scope"], "fleet")
+        self.assertEqual(sorted(d["serial"] for d in said[0]["devices"]), ["FW1", "FW2"])
+        text = report.to_text(p)
+        self.assertEqual(text.count("is itself a build listed as affected"), 1)
+
     def test_a_fixed_build_passes_and_synthetic_future_versions_are_never_flagged(self):
         self.assertEqual(cert(plan("10.2.11", "8770-8365", "10.2.12"))["status"], "pass")
         self.assertEqual(cert(plan("20.2.3", "0", "20.2.9"))["status"], "pass")

@@ -22,19 +22,6 @@ class FeatureKeyTests(unittest.TestCase):
         self.assertEqual(Version.parse("11.1.13-h3").base, Version(11, 1, 0))
 
 
-class MinSourceTests(unittest.TestCase):
-    RULES = {"verified": True, "direct_from": {"21.0": ["20.2"]}, "min_source": {"21.0": {"20.2": "20.2.7"}}}
-
-    def test_a_too_old_source_first_moves_up_inside_its_own_release(self):
-        r = paths.compute("20.2.3", "21.0.2", self.RULES)
-        self.assertEqual([(s["version"], s["install"]) for s in r.steps],
-                         [("20.2.7", True), ("21.0.0", False), ("21.0.2", True)])
-
-    def test_a_new_enough_source_needs_no_extra_step(self):
-        r = paths.compute("20.2.8", "21.0.2", self.RULES)
-        self.assertEqual([s["version"] for s in r.steps], ["21.0.0", "21.0.2"])
-
-
 class VersionTests(unittest.TestCase):
     def test_parse_and_order(self):
         self.assertEqual(Version.parse("20.2.9-h1"), Version(20, 2, 9, 1))
@@ -98,38 +85,78 @@ class SettingsTests(unittest.TestCase):
 
 
 class PathTests(unittest.TestCase):
+    SHIPPED = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls.SHIPPED = paths.load_rules()
+
+    def steps(self, result):
+        return [(s["version"], s["install"]) for s in result.steps]
+
     def test_same_feature_needs_no_rules(self):
         r = paths.compute("20.2.3", "20.2.9", {})
         self.assertTrue(r.ok)
         self.assertEqual([s["version"] for s in r.steps], ["20.2.9"])
 
-    def test_shipped_rules_do_not_guess_across_features(self):
-        r = paths.compute("20.1.4", "20.2.9", paths.load_rules())
+    def test_the_shipped_rules_carry_the_documented_skip_rule(self):
+        self.assertTrue(self.SHIPPED["verified"])
+        self.assertEqual(self.SHIPPED["skip"], {"from": "10.1", "max_skipped": 3})
+
+    def test_a_skip_downloads_the_base_of_every_release_it_skips_and_of_the_target_but_installs_only_the_target(self):
+        r = paths.compute("10.2.4", "11.2.1", self.SHIPPED)
+        self.assertEqual(self.steps(r), [("11.0.0", False), ("11.1.0", False), ("11.2.0", False), ("11.2.1", True)])
+        self.assertTrue(r.verified)
+
+    def test_the_catch_up_run_from_10_2_to_12_1_downloads_every_base_in_between(self):
+        offered = {"10.2": "10.2.0", "11.0": "11.0.1", "11.1": "11.1.0", "11.2": "11.2.0", "12.1": "12.1.0"}      # 11.0.0 was recalled
+        r = paths.compute("10.2.10", "12.1.10-h2", self.SHIPPED, bases=offered)
+        self.assertEqual(self.steps(r), [("11.0.1", False), ("11.1.0", False), ("11.2.0", False), ("12.1.0", False), ("12.1.10-h2", True)])
+
+    def test_the_base_is_the_lowest_non_hotfix_version_the_firewall_lists(self):
+        listed = ["11.0.0-h1", "11.0.1", "11.0.2", "10.2.0", "10.2.0-h2", "10.2.4", "weird"]
+        self.assertEqual(paths.lowest_base_images(listed), {"11.0": "11.0.1", "10.2": "10.2.0"})
+
+    def test_a_release_the_firewall_does_not_list_is_a_refusal_not_a_guess(self):
+        r = paths.compute("10.2.4", "11.2.1", self.SHIPPED, bases={"10.2": "10.2.0", "11.0": "11.0.0", "11.2": "11.2.0"})
+        self.assertFalse(r.ok)
+        self.assertIn("does not list any 11.1 release", r.reason)
+
+    def test_a_jump_of_more_than_three_releases_stops_at_a_waypoint_it_installs(self):
+        rules = {**self.SHIPPED, "legacy": {"preferred": {"11.2": "11.2.4"}, "minimum_build": {}}}
+        r = paths.compute("10.1.5", "12.2.1", rules)
+        self.assertEqual(self.steps(r), [("10.2.0", False), ("11.0.0", False), ("11.1.0", False), ("11.2.0", False), ("11.2.4", True),
+                                         ("12.1.0", False), ("12.2.0", False), ("12.2.1", True)])
+        r = paths.compute("10.1.5", "12.2.1", self.SHIPPED)
+        self.assertFalse(r.ok)
+        self.assertIn("not guessing", r.reason)
+
+    def test_below_10_1_every_feature_release_is_stepped_through_and_then_it_skips(self):
+        rules = {**self.SHIPPED, "legacy": {"preferred": {"9.1": "9.1.19", "10.0": "10.0.12", "10.1": "10.1.14"}, "minimum_build": {}}}
+        r = paths.compute("9.1.8", "11.1.2", rules)
+        self.assertEqual(self.steps(r), [("9.1.19", True), ("10.0.0", False), ("10.0.12", True), ("10.1.0", False), ("10.1.14", True),
+                                         ("10.2.0", False), ("11.0.0", False), ("11.1.0", False), ("11.1.2", True)])
+
+    def test_legacy_without_a_pinned_maintenance_release_is_refused(self):
+        r = paths.compute("9.1.8", "10.1.14", self.SHIPPED)
         self.assertFalse(r.ok)
         self.assertEqual(r.kind, "no_data")
 
-    def test_cross_feature_with_rules_downloads_base_then_target(self):
-        r = paths.compute("20.1.4", "20.2.9", support.TEST_RULES)
-        self.assertEqual([(s["version"], s["install"]) for s in r.steps], [("20.2.0", False), ("20.2.9", True)])
-
-    def test_multi_hop_installs_stepping_stone(self):
-        r = paths.compute("20.1.4", "21.1.0", support.TEST_RULES)
-        self.assertEqual([(s["version"], s["install"]) for s in r.steps], [("20.2.0", True), ("21.1.0", True)])
-        r = paths.compute("20.1.4", "21.1.0", {**support.TEST_RULES, "stepping_install": {"20.2": "20.2.4"}})
-        self.assertEqual(r.steps[0]["version"], "20.2.4")
+    def test_a_downgrade_needs_the_flag_and_then_follows_the_skip_rule_unverified(self):
+        self.assertEqual(paths.compute("11.1.2", "10.1.4", self.SHIPPED).kind, "not_applicable")
+        r = paths.compute("11.1.2", "10.1.4", self.SHIPPED, allow_downgrade=True)
+        self.assertEqual(self.steps(r), [("10.2.0", False), ("11.0.0", False), ("10.1.0", False), ("10.1.4", True)])
+        self.assertFalse(r.verified)
+        far = paths.compute("11.1.2", "9.1.5", self.SHIPPED, allow_downgrade=True)
+        self.assertFalse(far.ok)
 
     def test_not_newer_is_not_applicable(self):
         self.assertEqual(paths.compute("20.2.9", "20.2.9", {}).kind, "not_applicable")
         self.assertEqual(paths.compute("21.0.0", "20.2.9", {}).kind, "not_applicable")
 
     def test_unverified_flag_is_carried(self):
-        rules = {**support.TEST_RULES, "verified": False}
-        self.assertFalse(paths.compute("20.1.4", "20.2.9", rules).verified)
-
-    def test_shipped_rules_are_marked_unverified_and_empty(self):
-        rules = paths.load_rules()
-        self.assertFalse(rules["verified"])
-        self.assertEqual(rules["direct_from"], {})
+        rules = {**self.SHIPPED, "verified": False}
+        self.assertFalse(paths.compute("10.2.4", "11.2.1", rules).verified)
 
 
 if __name__ == "__main__":

@@ -22,8 +22,7 @@ pending_changes    = "block"   # uncommitted candidate config on a firewall: blo
 
 # ---- Downgrades ----------------------------------------------------------------------------------------------
 delete_unneeded_images         = false   # prepare deletes PAN-OS images this upgrade does not need (keeps running, base images, path, target)
-allow_downgrade                = false   # install a release older than the one running (same feature release)
-allow_cross_feature_downgrade  = false   # also across feature releases (11.0 -> 10.2). Needs allow_downgrade. Last resort.
+allow_downgrade                = false   # install a release older than the one running (across feature releases too, by the skip rule)
 
 # ---- Images, disk, time --------------------------------------------------------------------------------------
 image_source       = "firewall"  # who downloads the image: firewall (from the vendor) | panorama

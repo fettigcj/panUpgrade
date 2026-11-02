@@ -48,11 +48,9 @@ class Settings:
     # approved preparation; the approval prompt lists it and says it is outside the customer's own content schedule).
     content_settle_s: int = 90      # after "check now" on both members, how long to wait for PAN-OS's own HA verdict to turn to Match before installing
     sync_content: str = "prepare"
-    # Installing an older release than the one running. Same feature release only; each one needs an acknowledgement.
+    # Installing an older release than the one running. Each one needs an acknowledgement; going down across a feature release
+    # also says that the newer release's configuration may not load on the older one.
     allow_downgrade: bool = False
-    # Going down across a feature release (11.0 -> 10.2). Needs allow_downgrade too. A last-resort override: the newer
-    # release's configuration may not load on the older one, so a saved config of the older release is the way back.
-    allow_cross_feature_downgrade: bool = False
     # What to do about a pending (uncommitted) candidate config: block | warn | ignore
     pending_changes: str = "block"
     # HA roles after both members are upgraded: leave | restore
@@ -82,13 +80,11 @@ class Settings:
             out.append("ha_config_unsynced=caution: a pair whose passive config is not synchronized is planned anyway; when the active member "
                        "suspends, the passive takes over running its own, different configuration.")
         if self.allow_downgrade:
-            out.append("allow_downgrade=true: firewalls running a newer release than the target are installed down to it.")
+            out.append("allow_downgrade=true: firewalls running a newer release than the target are installed down to it (across feature "
+                       "releases too; the newer release's configuration may not load on the older one).")
         if self.delete_unneeded_images:
             out.append("delete_unneeded_images=true: `prepare` deletes the PAN-OS images on a firewall that this upgrade does not need "
                        "(it keeps the running image, the base images and the target).")
-        if self.allow_cross_feature_downgrade:
-            out.append("allow_cross_feature_downgrade=true: firewalls may be installed down across feature releases; "
-                       "the newer release's configuration may not load on the older one.")
         return out
 
 
@@ -140,8 +136,6 @@ def from_dict(data):
         if value.lower() not in by_lower:
             raise SettingsError(f"{name} must be one of {', '.join(choices)}")
         setattr(settings, name, by_lower[value.lower()])               # 'both' and 'Both' are the same choice
-    if settings.allow_cross_feature_downgrade and not settings.allow_downgrade:
-        raise SettingsError("allow_cross_feature_downgrade only means something together with allow_downgrade = true")
     if settings.api_rate_per_s <= 0:
         raise SettingsError("api_rate_per_s must be above 0")
     for name in ("failover_band", "post_upgrade_band"):

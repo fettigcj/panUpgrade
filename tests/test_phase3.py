@@ -134,22 +134,19 @@ class Downgrades(unittest.TestCase):
         self.assertEqual(dev(p, "SAME")["verdict"], "skipped")        # already the target
         self.assertEqual(dev(p, "OLD")["verdict"], "ready")           # upgrades still upgrade
 
-    def test_cross_feature_downgrade_is_refused_unless_its_own_override_is_set(self):
+    def test_one_flag_allows_a_downgrade_across_feature_releases_too_with_a_loud_acknowledgement(self):
         p, _ = plan_for(self.mixed(), target="20.2.3", sel=Selection(accept_standalone_outage=True), allow_downgrade="true")
-        far = dev(p, "FAR")
-        self.assertEqual(far["verdict"], "skipped")
-        self.assertIn("allow_cross_feature_downgrade", " ".join(r["reason"] for r in far["results"]))
-
-    def test_cross_feature_override_plans_it_with_a_loud_acknowledgement(self):
-        p, _ = plan_for(self.mixed(), target="20.2.3", sel=Selection(accept_standalone_outage=True), allow_downgrade="true",
-                        allow_cross_feature_downgrade="true")
         far = dev(p, "FAR")
         self.assertEqual(far["verdict"], "caution")
         self.assertIn(("FAR", "downgrade_cross_feature"), [(c["scope"], c["code"]) for c in p["cautions"]])
         self.assertEqual([s["action"] for s in far["steps"] if s["action"].startswith(("download", "install"))],
                          ["download 20.2.0", "download 20.2.3", "install 20.2.3"])
 
-    def test_the_override_alone_is_a_configuration_error(self):
+    def test_without_the_flag_a_firewall_on_a_newer_feature_release_is_left_alone(self):
+        p, _ = plan_for(self.mixed(), target="20.2.3", sel=Selection(accept_standalone_outage=True))
+        self.assertEqual(dev(p, "FAR")["verdict"], "skipped")
+
+    def test_the_old_second_downgrade_setting_no_longer_exists(self):
         with self.assertRaises(settings.SettingsError):
             settings.load(None, ["allow_cross_feature_downgrade=true"])
 
@@ -252,14 +249,16 @@ class DeletingUnneededImages(unittest.TestCase):
         self.assertIn("delete image 19.1.0", expected)
         self.assertIn(f"download {TARGET}", expected)
 
-    def test_what_to_keep_covers_a_skip_level_path_and_a_withdrawn_base(self):
+    def test_what_to_keep_covers_a_skip_path_with_the_bases_in_between_and_a_recalled_base(self):
         from panupgrade import paths
-        steps = paths.compute("20.2.3", "21.1.2", TEST_RULES).steps
+        from tests.support import TEST_RELEASES
+        steps = paths.compute("20.2.3", "21.1.2", TEST_RULES, releases=TEST_RELEASES).steps
         keep = paths.keep_images(TEST_RULES, "20.2.3", steps, "21.1.2")
-        self.assertTrue({"20.2.3", "20.2.0", "21.1.2", "21.1.0"} <= keep, keep)
-        revoked = dict(TEST_RULES, stepping_install={"20.2": "20.2.1"})
-        self.assertIn("20.2.1", paths.keep_images(revoked, "20.2.3", [], "20.2.9"))
-        self.assertNotIn("20.2.0", paths.keep_images(revoked, "20.2.3", [], "20.2.9"))
+        self.assertTrue({"20.2.3", "20.2.0", "21.0.0", "21.1.2", "21.1.0"} <= keep, keep)
+        recalled = {"20.2": "20.2.1"}
+        keep = paths.keep_images(TEST_RULES, "20.2.3", [], "20.2.9", recalled)
+        self.assertIn("20.2.1", keep)
+        self.assertNotIn("20.2.0", keep)
 
     def test_only_that_one_delete_command_is_on_the_write_allow_list(self):
         from panupgrade_live.panorama import WRITE_ALLOWED

@@ -101,7 +101,7 @@ def build(source, settings, selection, target=None, rules=None):
         steps = []
         if want is not None:
             try:
-                result = paths.compute(version, str(want), rules, settings.allow_downgrade, settings.allow_cross_feature_downgrade)
+                result = paths.compute(version, str(want), rules, settings.allow_downgrade, facts.base_images)
             except VersionError as exc:
                 skipped.append({"serial": ref.serial, "hostname": ref.hostname, "why": f"version unreadable: {exc}"})
                 continue
@@ -123,7 +123,7 @@ def build(source, settings, selection, target=None, rules=None):
                     downloads.append({"serial": ref.serial, "hostname": ref.hostname, "version": step["version"]})
             if settings.delete_unneeded_images and have:
                 try:
-                    keep = paths.keep_images(rules, version, steps, want)
+                    keep = paths.keep_images(rules, version, steps, want, facts.base_images)
                 except VersionError:
                     keep = None                                 # cannot say what is needed, so nothing is deleted
                 for image in sorted(have):

@@ -11,10 +11,19 @@ from panupgrade.sources import FakeFleet  # noqa: E402
 
 TARGET = "20.2.9"
 
+
+def test_releases(*features):
+    """A table of feature releases for tests that cross them (the shipped table knows only the real ones)."""
+    from panupgrade.releases import Releases
+    return Releases([{"release": f} for f in features])
+
+
+TEST_RELEASES = test_releases("19.1", "20.0", "20.1", "20.2", "21.0", "21.1")
+
 TEST_RULES = {  # TEST DATA ONLY, not vendor rules
     "verified": True,
-    "direct_from": {"20.2": ["20.1"], "21.0": ["20.2"], "21.1": ["21.0", "20.2"]},
-    "stepping_install": {},
+    "skip": {"from": "20.1", "max_skipped": 3},
+    "legacy": {"preferred": {"19.1": "19.1.5"}, "minimum_build": {}},
 }
 
 

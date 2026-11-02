@@ -27,7 +27,7 @@ SECTIONS = [
                       "sync_content", "content_settle_s"]),
     ("Panorama range", ["spread_limit", "panorama_compare"]),
     ("Failure handling", ["max_failures", "max_parallel", "api_rate_per_s", "pending_changes"]),
-    ("Downgrades", ["allow_downgrade", "allow_cross_feature_downgrade"]),
+    ("Downgrades", ["allow_downgrade"]),
     ("Images, disk and time", ["image_source", "delete_unneeded_images", "min_free_disk_mb", "download_timeout_s", "install_timeout_s", "reboot_timeout_s",
                                "poll_interval_s", "backup_dir", "approval_max_age_hours"]),
 ]
@@ -77,11 +77,11 @@ INFO = {
     "api_rate_per_s": ("A polite ceiling on requests per second to Panorama, shared by every worker.", {}),
     "pending_changes": ("A firewall with uncommitted candidate configuration.",
                         {"block": "do not upgrade it", "warn": "upgrade it, with a warning", "ignore": "upgrade it without comment"}),
-    "allow_downgrade": ("Install a release older than the one running. Same feature release only, and each one needs an "
-                        "acknowledgement.", {"true": "downgrades are allowed", "false": "a release older than the running one is refused"}),
-    "allow_cross_feature_downgrade": ("Also downgrade across a feature release (11.0 to 10.2). Needs allow_downgrade. A last resort: "
-                                      "the newer release's configuration may not load on the older one.",
-                                      {"true": "allowed", "false": "refused"}),
+    "allow_downgrade": ("Install a release older than the one running, to reach the target. Each firewall needs an acknowledgement. "
+                        "Going down across a feature release follows the same skip rule as going up (10.1 or later, at most three "
+                        "releases skipped), and the newer release's configuration may not load on the older one, so have a saved "
+                        "configuration of the older release ready.",
+                        {"true": "downgrades are allowed", "false": "the default. A release older than the running one is refused"}),
     "image_source": ("Who downloads the software image.",
                      {"firewall": "each firewall downloads it from the vendor", "panorama": "Panorama downloads it and pushes it"}),
     "delete_unneeded_images": ("During `prepare`, delete the PAN-OS images a firewall holds that this upgrade does not need, to make room. "

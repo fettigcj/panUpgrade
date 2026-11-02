@@ -51,6 +51,7 @@ class Facts:
     ha_links_ok: bool = None
     disk_free_mb: int = None
     images_downloaded: list = None   # versions already on the device
+    base_images: dict = None         # {feature release: the lowest version without a hotfix the firewall offers}: the base image to download
     pending_changes: bool = None
     running_jobs: int = None
     session_count: int = None

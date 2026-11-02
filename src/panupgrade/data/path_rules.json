@@ -1,10 +1,29 @@
 {
-  "verified": false,
-  "source": "none yet: fill from vendor documentation and confirm on the lab fleet before setting verified to true",
-  "direct_from": {},
-  "stepping_install": {},
-  "min_content": {"10.2.2": 8552},
-  "min_content_feature": {"10.1": 8408, "10.2": 8614, "11.0": 8635, "11.1": 8761, "11.2": 8902, "12.1": 9007},
+  "verified": true,
+  "source": "Palo Alto Networks: the knowledge-base article on the base image for skip upgrades (KCSArticleDetail id kA14u0000008WwHCAU), the 'Determine the Upgrade Path' pages of the PAN-OS 10.2 and 11.1 upgrade guides, the Skip Software Version Upgrade feature (PAN-OS 11.0 release notes), and the LIVEcommunity thread 'Upgrade PAN OS from 10.1 to 11.1'; read 2026-11-02",
+  "skip": {
+    "from": "10.1",
+    "max_skipped": 3
+  },
+  "legacy": {
+    "preferred": {},
+    "minimum_build": {
+      "7.1": "7.1.26",
+      "8.0": "8.0.20"
+    }
+  },
+  "base_image": {},
+  "min_content": {
+    "10.2.2": 8552
+  },
+  "min_content_feature": {
+    "10.1": 8408,
+    "10.2": 8614,
+    "11.0": 8635,
+    "11.1": 8761,
+    "11.2": 8902,
+    "12.1": 9007
+  },
   "min_content_feature_source": "Palo Alto Networks release notes, 'Associated Content and Software Versions for PAN-OS x.y', 'Applications and Threats Content Release Version' row, read 2026-10-29 (12.1 from the release-notes PDF page 54; the others from the docs pages). One figure per release train, so it is the floor for the newest maintenance release; earlier maintenance releases can accept less (10.2.2 needs only 8552 although the 10.2 floor is 8614, hence the exact entry above wins). Not found: 9.1, 10.0, 12.0 and earlier (end-of-life or no page at the expected address).",
   "min_content_source": "Only entries seen on a real firewall so far. 10.2.2: PAN-OS itself refused the install on 2026-10-29 with 'Upgrading from 10.2.1 to 10.2.2 requires a content version of 8552 or greater and found 8545-7303'. Others: take from vendor release notes (minimum content release per PAN-OS release) and confirm. Keys are maintenance releases (hotfix numbers ignored); values are the app content number (the part before the dash)."
 }

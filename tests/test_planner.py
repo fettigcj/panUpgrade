@@ -195,8 +195,9 @@ class ReachabilityAndData(unittest.TestCase):
         self.assertEqual((dev(p, "S1")["verdict"], dev(p, "S1")["skip_kind"]), ("skipped", "not_applicable"))
 
     def test_no_path_rule_blocks_with_a_reason_not_a_guess(self):
-        p = plan(fleet(pair("A1", "A2", version="20.1.4")), rules={"verified": False, "direct_from": {}})
-        self.assertEqual(dev(p, "A1")["verdict"], "blocked")
+        p = plan(fleet(pair("A1", "A2", version="20.1.4")), rules={"verified": True, "skip": {"from": "20.2"}, "legacy": {"preferred": {}}})
+        self.assertEqual(dev(p, "A1")["verdict"], "blocked")           # stepping through 20.1 needs a pinned maintenance release, and there is none
+        self.assertIn("not guessing", " ".join(r["reason"] for r in dev(p, "A1")["results"]))
 
 
 class PendingChanges(unittest.TestCase):

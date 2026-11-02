@@ -139,17 +139,6 @@ class Editing(unittest.TestCase):
         self.assertIsNone(form.press("enter"))
         self.assertEqual((form.zone, form.focus), ("rows", form.names.index("max_failures")))     # takes you to the problem
 
-    def test_a_rule_between_two_settings_is_blamed_on_the_one_you_can_fix(self):
-        form = fresh()
-        goto(form, "allow_cross_feature_downgrade")
-        keys(form, "right")
-        self.assertIsNone(form.settings())
-        self.assertIn("allow_cross_feature_downgrade", form.check()[1])
-        keys(form, "tab", "up")                                  # (anything) then back; the error stays until the pair is consistent
-        goto(form, "allow_downgrade")
-        keys(form, "right")
-        self.assertIsNotNone(form.settings())
-
     def test_out_of_range_values_are_caught_by_the_same_rules_the_command_line_uses(self):
         form = fresh()
         goto(form, "failover_band")
@@ -212,7 +201,7 @@ class Editing(unittest.TestCase):
         form = fresh()
         goto(form, "allow_downgrade")
         flat = " ".join(explanation(form, 150, 40).split())
-        self.assertIn("false: a release older than the running one is refused", flat)
+        self.assertIn("false: the default. A release older than the running one is refused", flat)
         self.assertIn("true: downgrades are allowed", flat)
 
     def test_an_explanation_taller_than_the_window_scrolls_with_page_up_and_down(self):

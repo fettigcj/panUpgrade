@@ -113,6 +113,27 @@ class OpSourceFeedsThePlanner(unittest.TestCase):
             src.facts("NOPE")
 
 
+class SoftwareList(unittest.TestCase):
+    def test_the_list_gives_the_downloaded_images_and_the_base_of_each_release_in_one_call(self):
+        import xml.etree.ElementTree as ET
+        from panupgrade import xmlops
+        asked = []
+        body = ("<response status='success'><result><sw-updates><versions>"
+                "<entry><version>11.0.0-h1</version><downloaded>no</downloaded></entry>"
+                "<entry><version>11.0.1</version><downloaded>yes</downloaded></entry>"
+                "<entry><version>10.2.0</version><downloaded>yes</downloaded></entry>"
+                "<entry><version>10.2.4</version><downloaded>no</downloaded></entry>"
+                "</versions></sw-updates></result></response>")
+
+        def op(command):
+            asked.append(command)
+            return ET.fromstring(body)
+        got = xmlops.parse_software_list(op)
+        self.assertEqual(got["downloaded"], ["10.2.0", "11.0.1"])
+        self.assertEqual(got["bases"], {"11.0": "11.0.1", "10.2": "10.2.0"})
+        self.assertEqual(asked, ["request system software info"])
+
+
 if __name__ == "__main__":
     unittest.main()
 

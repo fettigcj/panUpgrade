@@ -1,30 +1,35 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 the panUpgrade contributors
 
-"""Work out which releases to download and install to get from A to B.
+"""Work out which images to download and install to get from A to B.
 
-The rules about *which feature releases may be skipped* are data
-(``data/path_rules.json``), not code, and the shipped file is empty and marked
-unverified. So:
+Two ways to cross feature releases, both from Palo Alto's documentation (the knowledge-base article on base images, the "Determine the
+Upgrade Path" pages, and the Skip Software Version Upgrade feature of PAN-OS 11.0):
 
-* within one feature release the path is just the target (needs no rules);
-* across feature releases the engine only answers when the rules data says how,
-  otherwise it answers "no data". It never guesses a path.
+* **skip** (from 10.1 on): install only the target. Up to three feature releases may be skipped. The target's base image and the base
+  image of every release skipped over must be on the firewall (downloaded, never installed).
+* **legacy** (below 10.1): step through every feature release: download its base image, install the latest preferred maintenance
+  release of it, reboot. A path may be legacy up to 10.1 and then skip (10.0 -> 10.1 -> 11.1).
 
-Rules format::
+The base image of a feature release is the LOWEST version of it the firewall offers, without a hotfix: usually x.y.0, but a build that
+was recalled is replaced by a later one (x.y.1), and only the firewall's own list says which. Within one feature release the path is
+just the target.
 
-    {"verified": true|false,
-     "direct_from": {"21.0": ["20.2", "20.1"]},   # target feature -> feature releases it may be reached from
-     "stepping_install": {"20.2": "20.2.3"},      # optional: version to install when 20.2 is only a stepping stone
-     "min_source": {"21.0": {"20.2": "20.2.3"}}}  # optional: to hop 20.2 -> 21.0 the firewall must already run >= 20.2.3
+Rules (``data/path_rules.json``)::
+
+    {"verified": true,
+     "skip": {"from": "10.1", "max_skipped": 3},
+     "legacy": {"preferred": {"9.1": "9.1.19"},        # the maintenance release to install at each legacy stop (pinned: never guessed)
+                "minimum_build": {"8.0": "8.0.20"}},   # a build the firewall must reach before it leaves that feature release
+     "base_image": {"11.0": "11.0.1"}}                  # only when the firewall's own list is not available
 """
 
 import json
-from collections import deque
 from dataclasses import dataclass, field
 from importlib import resources
 
-from .versions import Version
+from . import releases as releases_mod
+from .versions import Version, VersionError
 
 
 @dataclass
@@ -36,6 +41,10 @@ class PathResult:
     verified: bool = True
 
 
+class _NoData(Exception):
+    pass
+
+
 def load_rules(path=None):
     if path:
         with open(path, encoding="utf-8") as handle:
@@ -44,23 +53,42 @@ def load_rules(path=None):
         return json.load(handle)
 
 
-def _base(feature):
-    return f"{feature}.0"
+def lowest_base_images(versions):
+    """{feature release: its base image} from every version a firewall lists: the lowest one without a hotfix."""
+    found = {}
+    for text in versions or []:
+        try:
+            version = Version.parse(text)
+        except VersionError:
+            continue
+        if version.hotfix:
+            continue
+        if version.feature not in found or version < Version.parse(found[version.feature]):
+            found[version.feature] = str(version)
+    return found
 
 
-def base_of(rules, feature):
-    """The image every install in a feature release needs on the box first: x.y.0, unless that build was withdrawn and the rules
-    (``stepping_install``) name the one that replaced it."""
-    return (rules or {}).get("stepping_install", {}).get(feature) or _base(feature)
+def base_for(feature, rules, bases=None):
+    """The image every install in a feature release needs on the box first. ``bases`` is what the firewall itself offers (see
+    ``lowest_base_images``); the rules' ``base_image`` and then x.y.0 are for when its list is not available."""
+    if bases:
+        if feature not in bases:
+            raise _NoData(f"the firewall does not list any {feature} release, so there is no base image to download")
+        return bases[feature]
+    return (rules or {}).get("base_image", {}).get(feature) or f"{feature}.0"
 
 
-def keep_images(rules, current, steps, target):
+def keep_images(rules, current, steps, target, bases=None):
     """The PAN-OS images a firewall must keep for this upgrade, as version strings: what is running and its base, the target and its
     base, and every image on the path with its base. Anything else on the disk is not needed."""
     keep = set()
     for text in [current, target] + [step["version"] for step in steps]:
         version = Version.parse(str(text))
-        keep |= {str(version), str(Version.parse(base_of(rules, version.feature)))}
+        keep.add(str(version))
+        try:
+            keep.add(str(Version.parse(base_for(version.feature, rules, bases))))
+        except _NoData:
+            keep.add(str(version.base))
     return keep
 
 
@@ -79,64 +107,86 @@ def content_requirement(rules, steps):
     return best
 
 
-def compute(current, target, rules, allow_downgrade=False, allow_cross_feature_downgrade=False):
+def _keys(features):
+    return [tuple(int(n) for n in f.split(".")) for f in features]
+
+
+def compute(current, target, rules, allow_downgrade=False, bases=None, releases=None):
+    """The path from ``current`` to ``target``. ``bases``: what the firewall offers, as ``lowest_base_images`` gives it (None when not
+    known). ``releases``: the table of feature releases that exist (the shipped one when None)."""
     cur, tgt = Version.parse(current), Version.parse(target)
     verified = bool(rules.get("verified"))
     if tgt == cur:
         return PathResult(False, reason=f"target {tgt} is what is already running", kind="not_applicable")
-    if tgt < cur:
-        if not allow_downgrade:
-            return PathResult(False, reason=f"target {tgt} is not newer than {cur}", kind="not_applicable")
-        if cur.feature != tgt.feature:
-            if not allow_cross_feature_downgrade:
-                return PathResult(False, reason=f"downgrading across feature releases ({cur.feature} to {tgt.feature}) needs "
-                                                f"allow_cross_feature_downgrade = true", kind="not_applicable")
-            steps = []
-            if tgt != tgt.base:      # the older feature release's base image has to be on the box first, as for an upgrade
-                steps.append({"version": str(tgt.base), "download": True, "install": False})
-            steps.append({"version": str(tgt), "download": True, "install": True})
-            return PathResult(True, steps, f"downgrade across feature releases {cur.feature} -> {tgt.feature} (override setting is on)",
-                              verified=False)
-        return PathResult(True, [{"version": str(tgt), "download": True, "install": True}],
-                          f"downgrade within feature release {cur.feature}", verified=True)
+    if tgt < cur and not allow_downgrade:
+        return PathResult(False, reason=f"target {tgt} is not newer than {cur}", kind="not_applicable")
+    final = [{"version": str(tgt), "download": True, "install": True}]
     if cur.feature == tgt.feature:
-        steps = [{"version": str(tgt), "download": True, "install": True}]
-        return PathResult(True, steps, "same feature release: no intermediate needed", verified=True)
+        return PathResult(True, final, "same feature release: no intermediate needed" if tgt > cur else f"downgrade within feature release {cur.feature}")
 
-    direct = rules.get("direct_from", {})
-    # breadth-first over feature releases, shortest hop count first
-    queue, seen = deque([(cur.feature, [])]), {cur.feature}
-    hops = None
-    while queue:
-        feature, trail = queue.popleft()
-        if feature == tgt.feature:
-            hops = trail
-            break
-        for nxt, sources in direct.items():
-            if feature in sources and nxt not in seen:
-                seen.add(nxt)
-                queue.append((nxt, trail + [nxt]))
-    if hops is None:
-        return PathResult(False, reason=(
-            f"no path rule from {cur.feature} to {tgt.feature} in the path rules data "
-            f"(verified={verified}); not guessing"), kind="no_data", verified=verified)
+    table = releases if releases is not None else releases_mod.default()
+    ordered = sorted(set(table.keys) | {cur.feature_key, tgt.feature_key})
+    at_of = {key: i for i, key in enumerate(ordered)}
+    skip = rules.get("skip", {})
+    skip_from = tuple(int(n) for n in skip.get("from", "10.1").split("."))
+    max_skipped = int(skip.get("max_skipped", 3))
+    name = lambda key: f"{key[0]}.{key[1]}"
 
-    stepping = rules.get("stepping_install", {})
-    min_source = rules.get("min_source", {})
-    features = [cur.feature] + hops
-    steps = []
-    for i, nxt in enumerate(hops):   # the hop from features[i] into nxt
-        need = min_source.get(nxt, {}).get(features[i])
-        need = Version.parse(need) if need else None
-        if i == 0:
-            if need and cur < need:   # must first be on a new enough build of the feature release it is in
-                steps.append({"version": str(need), "download": True, "install": True})
-        else:
-            version = Version.parse(stepping.get(features[i], _base(features[i])))
-            if need and version < need:
-                version = need
-            steps.append({"version": str(version), "download": True, "install": True})
-    if str(tgt) != _base(tgt.feature):
-        steps.append({"version": _base(tgt.feature), "download": True, "install": False})
-    steps.append({"version": str(tgt), "download": True, "install": True})
-    return PathResult(True, steps, f"via {' -> '.join([cur.feature] + hops)}", verified=verified)
+    def base_step(key):
+        return {"version": base_for(name(key), rules, bases), "download": True, "install": False}
+
+    def between(a, b):
+        lo, hi = sorted((at_of[a], at_of[b]))
+        return ordered[lo + 1:hi]
+
+    def target_steps(a):
+        steps = [base_step(key) for key in between(a, tgt.feature_key)]
+        if str(tgt) != base_for(tgt.feature, rules, bases):
+            steps.append(base_step(tgt.feature_key))
+        return steps + final
+
+    try:
+        if tgt < cur:                                         # going down: the same skip rule, in the other direction
+            if min(cur.feature_key, tgt.feature_key) < skip_from or len(between(cur.feature_key, tgt.feature_key)) > max_skipped:
+                return PathResult(False, reason=(f"downgrading from {cur.feature} to {tgt.feature} is outside what the skip rule covers "
+                                                 f"(both releases {name(skip_from)} or later, at most {max_skipped} skipped); not guessing"),
+                                  kind="no_data", verified=verified)
+            steps = target_steps(cur.feature_key)
+            return PathResult(True, steps, f"downgrade {cur.feature} -> {tgt.feature} by skipping {len(between(cur.feature_key, tgt.feature_key))} "
+                                           f"release(s); the base images are downloaded, not installed", verified=False)
+
+        legacy = rules.get("legacy", {})
+        steps, here, here_version, hops = [], cur.feature_key, cur, []
+
+        def install_preferred(key, have=None):
+            feature = name(key)
+            pinned = [Version.parse(v) for v in (legacy.get("preferred", {}).get(feature), legacy.get("minimum_build", {}).get(feature)) if v]
+            if not legacy.get("preferred", {}).get(feature):
+                raise _NoData(f"stepping through {feature} (below {name(skip_from)}) installs its latest preferred maintenance release, and the "
+                              f"path rules do not name one for {feature} (legacy.preferred); not guessing")
+            wanted = max(pinned)
+            if have is None or have < wanted:
+                steps.append({"version": str(wanted), "download": True, "install": True})
+            return wanted
+
+        if here < skip_from:                                  # leave the running release on its latest preferred build first
+            install_preferred(here, have=cur)
+        while True:
+            skipped = len(between(here, tgt.feature_key))
+            if skipped == 0 or (here >= skip_from and skipped <= max_skipped):
+                break
+            nxt = ordered[at_of[here] + 1] if here < skip_from else ordered[at_of[here] + max_skipped + 1]
+            if nxt == tgt.feature_key:
+                break
+            steps += [base_step(key) for key in between(here, nxt)]
+            steps.append(base_step(nxt))
+            install_preferred(nxt)
+            hops.append(name(nxt))
+            here = nxt
+        steps += target_steps(here)
+        skipped_over = [name(k) for k in between(here, tgt.feature_key)]
+        via = f"via {' -> '.join([cur.feature] + hops + [tgt.feature])}"
+        reason = (f"{via}" + (f"; skips {', '.join(skipped_over)} (their base images are downloaded, not installed)" if skipped_over else ""))
+        return PathResult(True, steps, reason, verified=verified)
+    except _NoData as exc:
+        return PathResult(False, reason=str(exc), kind="no_data", verified=verified)

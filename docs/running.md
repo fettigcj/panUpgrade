@@ -196,7 +196,7 @@ Every setting is on one screen, grouped (HA behaviour, Panorama range, Failure h
 - **Ctrl-R** (or Delete) puts a setting back to its default.
 - **PgUp / PgDn** scroll the explanation when it is taller than the window; its last line says so and shows which lines you are looking at. The buttons always stay on screen.
 - The explanation of the setting under the cursor sits to the right of the list (below it in a window narrower than about 110 columns): what it does, then every choice it has with what each means (the current one marked with `>`), and a **Caution** for every setting that makes a run riskier (`sync_to_peer = upgrade`, `ha_config_unsynced = caution`, `allow_downgrade`, wide session bands, `max_parallel` above 1, and so on).
-- A value that is not allowed (text in a number, a band above 1, a cross-feature downgrade without `allow_downgrade`) turns red and blocks saving until it is fixed.
+- A value that is not allowed (text in a number, a band above 1) turns red and blocks saving until it is fixed.
 - The buttons work as in `select`: **Save**, **Save & Exit** (Ctrl-D), **Quit without saving** (Esc, which asks first if there are unsaved changes).
 
 Saving writes `settings.toml` containing only the settings that differ from the built-in defaults, so a later, safer default still reaches you. If the file already exists it is rewritten and its comments are not kept. In a profile it is saved in the profile's workspace; with no profile, in the folder you run it from. **Every command in that workspace then uses it** and says so (`Using settings file ... (found in the profile lab)`); name another file with `--settings FILE`, which `settings` edits too. `prepare` pins the file it used into the upgrade script.

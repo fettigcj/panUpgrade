@@ -62,24 +62,26 @@ def current_version(ctx):
             return _skip("current_version", NOT_APPLICABLE,
                          f"already running {version}, newer than the target {ctx.target} (set allow_downgrade to install down to it)")
         if version.feature_key != ctx.target.feature_key:
-            if not ctx.settings.allow_cross_feature_downgrade:
-                return _skip("current_version", NOT_APPLICABLE,
-                             f"running {version}, a different feature release from the target {ctx.target}; "
-                             f"set allow_cross_feature_downgrade to go down across feature releases")
             return CheckResult("current_version", WARN,
                                f"DOWNGRADE ACROSS FEATURE RELEASES: running {version}, target {ctx.target}. The configuration written by "
-                               f"the newer release may not load on the older one; have a saved configuration of the older release ready.",
+                               f"the newer release may not load on the older one; have a saved configuration of the older release ready "
+                               f"(Palo Alto's own downgrade procedure restores one).",
                                ack="downgrade_cross_feature")
         return CheckResult("current_version", WARN, f"DOWNGRADE: running {version}, newer than the target {ctx.target}",
                            ack="downgrade")
     return CheckResult("current_version", PASS, f"running {version}, older than the target {ctx.target}")
 
 
-def upgrade_path(ctx):
+def _path(ctx):
+    """The path from what is running to the target, with the firewall's own base images and the table of releases."""
     raw = ctx.facts.sw_version if ctx.facts and ctx.facts.sw_version else ctx.ref.sw_version
+    return paths.compute(raw, str(ctx.target), ctx.path_rules, ctx.settings.allow_downgrade,
+                         getattr(ctx.facts, "base_images", None), ctx.releases)
+
+
+def upgrade_path(ctx):
     try:
-        result = paths.compute(raw, str(ctx.target), ctx.path_rules, ctx.settings.allow_downgrade,
-                               ctx.settings.allow_cross_feature_downgrade)
+        result = _path(ctx)
     except VersionError as exc:
         return _skip("upgrade_path", NO_DATA, str(exc))
     if not result.ok:
@@ -95,9 +97,8 @@ def upgrade_path(ctx):
 
 def content_minimum(ctx):
     """PAN-OS refuses to install some releases unless the dynamic content is at least a given version. Checked up front so the install does not fail mid-run."""
-    raw = ctx.facts.sw_version if ctx.facts and ctx.facts.sw_version else ctx.ref.sw_version
     try:
-        result = paths.compute(raw, str(ctx.target), ctx.path_rules, ctx.settings.allow_downgrade, ctx.settings.allow_cross_feature_downgrade)
+        result = _path(ctx)
     except VersionError as exc:
         return _skip("content_minimum", NO_DATA, str(exc))
     if not result.ok:
@@ -195,9 +196,8 @@ def preemption(ctx):
 
 def _images_already_here(ctx):
     """True when the upgrade path needs at least one download and every image it needs is already on the firewall."""
-    raw = ctx.facts.sw_version if ctx.facts and ctx.facts.sw_version else ctx.ref.sw_version
     try:
-        result = paths.compute(raw, str(ctx.target), ctx.path_rules, ctx.settings.allow_downgrade, ctx.settings.allow_cross_feature_downgrade)
+        result = _path(ctx)
     except VersionError:
         return False
     if not result.ok:

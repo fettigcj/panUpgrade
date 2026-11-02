@@ -134,10 +134,18 @@ def parse_clock(op):
     return parse_clock_text(node.text)
 
 
-def parse_images_downloaded(op):
-    """Versions whose image is on the device (downloaded = yes). Shape seen on 10.2.x: entries under sw-updates/versions."""
+def parse_software_list(op):
+    """What the firewall's software list says: {"downloaded": versions whose image is on the device, "bases": the lowest non-hotfix version of
+    each feature release it offers}. Shape seen on 10.2.x: entries under sw-updates/versions."""
+    from .paths import lowest_base_images
     node = _result(op("request system software info"), "request system software info")
-    return sorted(_text(e, "version") for e in node.iter("entry") if _text(e, "downloaded") == "yes" and _text(e, "version"))
+    entries = [e for e in node.iter("entry") if _text(e, "version")]
+    return {"downloaded": sorted(_text(e, "version") for e in entries if _text(e, "downloaded") == "yes"),
+            "bases": lowest_base_images([_text(e, "version") for e in entries])}
+
+
+def parse_images_downloaded(op):
+    return parse_software_list(op)["downloaded"]
 
 
 def sort_newest_first(rows):
@@ -235,7 +243,11 @@ def collect_facts(op, peer_serial=None):
     attempt("jobs", parse_running_jobs, lambda v: setattr(facts, "running_jobs", v))
     attempt("sessions", parse_session_count, lambda v: setattr(facts, "session_count", v))
     attempt("disk", parse_free_mb, lambda v: setattr(facts, "disk_free_mb", v))
-    attempt("images", parse_images_downloaded, lambda v: setattr(facts, "images_downloaded", v))
+    def apply_software(listing):
+        facts.images_downloaded = listing["downloaded"]
+        facts.base_images = listing["bases"] or None
+
+    attempt("images", parse_software_list, apply_software)
     attempt("content", parse_content_versions, lambda v: setattr(facts, "content_versions", v))
     attempt("device certificate", parse_device_cert, lambda v: setattr(facts, "device_cert", v))
     attempt("clock", parse_clock, lambda v: setattr(facts, "clock_utc", v))

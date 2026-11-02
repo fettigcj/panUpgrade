@@ -892,65 +892,15 @@ class ChangeScreen(Screen):
         return None
 
 
-class PrepareScreen(ChangeScreen):
-    name, title, verb = "prepare", "prepare", "prepare"
-    INTRO = ("Gets the firewalls ready ahead of the window: brings HA members' content level, forces a passive member's configuration to "
-             "match its active, and downloads the images for the target. It changes the firewalls, so nothing starts until you have read the "
-             "plan and typed APPROVE. It never installs PAN-OS, reboots or fails anything over.")
-
-    def tasks(self):
-        return bool(self.bundle and self.bundle.plan["serials"])
-
-    def approval_body(self):
-        from . import prepare as prepare_mod
-        plan = self.bundle.plan
-        return [cli._prepare_heading(plan), ""] + [f"  {line}" for line in prepare_mod.describe(plan)]
-
-    def approver(self):
-        plan = self.bundle.plan
-        return lambda journal_path: cli._new_approval(plan["hash"], plan["serials"], [], journal_path, "typed APPROVE on the prepare screen")
-
-    def summary(self):
-        count = len(self.bundle.plan["serials"])
-        return "ok", (f"Plan read at {clock(self.bundle.created)} ({ago(time.time() - self.bundle.created)}), {self.bundle.label}: "
-                      + (f"{count} firewall{'s' if count != 1 else ''} to prepare. Nothing has been changed yet." if count
-                         else "nothing to prepare. Nothing has been changed."))
-
-    def review_buttons(self):
-        tasks = self.tasks()
-        return [("Approve and run..." if tasks else "Continue to the upgrade kit", self.begin_approval if tasks else self.run),
-                ("Rehearse (dry run)", self.rehearse), ("Read the plan again", self.read_plan), ("Home", None)]
-
-    def status(self):
-        if self.stage == "reading":
-            return "warn", "reading the plan..."
-        if self.stage == "review":
-            count = len(self.bundle.plan["serials"])
-            return "warn", (f"plan ready: {count} firewall{'s' if count != 1 else ''} to prepare - waiting for your approval" if count
-                            else "plan ready: nothing to prepare")
-        if self.stage == "approving":
-            return "warn", "waiting for you to type APPROVE"
-        if self.stage == "running":
-            return "warn", "RUNNING - changing firewalls now"
-        if self.stage == "done":
-            return ("ok" if not self.result else "error"), f"finished at {clock(self.finished, False)}" + ("" if not self.result else f" with an error (code {self.result})")
-        return "dim", "not started - open it, then press Start"
-
-
-class UpgradeScreen(ChangeScreen):
-    name, title, verb = "upgrade", "upgrade", "upgrade"
-    INTRO = ("Upgrades the chosen firewalls. An HA pair is one unit and the passive member goes first; each member is backed up, installed, "
-             "rebooted and checked, and the run stops by itself after too many failures. It reboots real firewalls, so nothing starts until you "
-             "have read the plan and typed APPROVE. Stop lets the steps in progress finish and starts nothing new; a stopped run can be continued.")
+class UnitView:
+    """The run, firewall by firewall, for a screen that changes firewalls: a list of units (an HA pair is one unit) with each one's own
+    log beside it, or the combined output (V). The screen supplies ``units()`` (lists of dicts with a serial and a hostname) and
+    ``unit_finished(unit, events)``; the bundle of a real run supplies ``events_snapshot()``."""
 
     def __init__(self, shell):
         super().__init__(shell)
-        self.standalone = False
         self.kept = None                                  # the bundle of the last real run, so its log can still be read after it ends
         self.view, self.unit_at, self.unit_pinned, self.log_offset = "units", 0, False, None
-
-    def extra_args(self):
-        return ["--accept-standalone-outage"] if self.standalone else []
 
     def reset(self):
         if not self.busy():
@@ -962,17 +912,9 @@ class UpgradeScreen(ChangeScreen):
             self.kept = self.bundle
         super()._ran(job)
 
-    # -- the run, firewall by firewall (an HA pair is one unit: passive first, then active)
     def source(self):
         """The bundle whose events are shown: the one running now, or the last one that ran."""
         return self.bundle if self.stage == "running" and self.job is not None and self.job.changes else self.kept
-
-    def units(self):
-        source = self.source()
-        if source is None:
-            return []
-        devices = {d["serial"]: d for d in source.plan["devices"]}
-        return [[devices[x] for x in unit if x in devices] for unit in source.plan["order"]]
 
     @staticmethod
     def step_name(record):
@@ -991,12 +933,7 @@ class UpgradeScreen(ChangeScreen):
         for _when, rec in events:
             if rec["state"] == "failed":
                 return "failed", f"{self._name(unit, rec)}: {self.step_name(rec)}"
-        finished = []
-        for dev in unit:
-            steps = dev["steps"]
-            last = f"{len(steps) - 1}:{steps[-1]['action']}" if steps else ""
-            finished.append(bool(steps) and any(rec["serial"] == dev["serial"] and rec["step"] == last and rec["state"] == "ok" for _w, rec in events))
-        if all(finished):
+        if self.unit_finished(unit, events):
             return "done", "all steps done"
         if final:
             return "stopped", "stopped before it finished"
@@ -1108,6 +1045,93 @@ class UpgradeScreen(ChangeScreen):
         at = end if self.log_offset is None else min(self.log_offset, end)
         at = max(0, {"pgup": at - self.visible, "pgdn": at + self.visible, "home": 0, "end": end}[key])
         self.log_offset = None if at >= end else at
+
+
+
+class PrepareScreen(UnitView, ChangeScreen):
+    name, title, verb = "prepare", "prepare", "prepare"
+    INTRO = ("Gets the firewalls ready ahead of the window: brings HA members' content level, forces a passive member's configuration to "
+             "match its active, and downloads the images for the target. It changes the firewalls, so nothing starts until you have read the "
+             "plan and typed APPROVE. It never installs PAN-OS, reboots or fails anything over.")
+
+    def tasks(self):
+        return bool(self.bundle and self.bundle.plan["serials"])
+
+    def units(self):
+        source = self.source()
+        return [] if source is None else [list(group) for group in source.groups]
+
+    @staticmethod
+    def unit_finished(unit, events):
+        """Every task planned for these firewalls has finished."""
+        wanted = [(dev["serial"], step) for dev in unit for step in dev["expected"]]
+        return bool(wanted) and all(any(rec["serial"] == serial and rec["step"] == step and rec["state"] == "ok" for _w, rec in events) for serial, step in wanted)
+
+    def approval_body(self):
+        from . import prepare as prepare_mod
+        plan = self.bundle.plan
+        return [cli._prepare_heading(plan), ""] + [f"  {line}" for line in prepare_mod.describe(plan)]
+
+    def approver(self):
+        plan = self.bundle.plan
+        return lambda journal_path: cli._new_approval(plan["hash"], plan["serials"], [], journal_path, "typed APPROVE on the prepare screen")
+
+    def summary(self):
+        count = len(self.bundle.plan["serials"])
+        return "ok", (f"Plan read at {clock(self.bundle.created)} ({ago(time.time() - self.bundle.created)}), {self.bundle.label}: "
+                      + (f"{count} firewall{'s' if count != 1 else ''} to prepare. Nothing has been changed yet." if count
+                         else "nothing to prepare. Nothing has been changed."))
+
+    def review_buttons(self):
+        tasks = self.tasks()
+        return [("Approve and run..." if tasks else "Continue to the upgrade kit", self.begin_approval if tasks else self.run),
+                ("Rehearse (dry run)", self.rehearse), ("Read the plan again", self.read_plan), ("Home", None)]
+
+    def status(self):
+        if self.stage == "reading":
+            return "warn", "reading the plan..."
+        if self.stage == "review":
+            count = len(self.bundle.plan["serials"])
+            return "warn", (f"plan ready: {count} firewall{'s' if count != 1 else ''} to prepare - waiting for your approval" if count
+                            else "plan ready: nothing to prepare")
+        if self.stage == "approving":
+            return "warn", "waiting for you to type APPROVE"
+        if self.stage == "running":
+            return "warn", "RUNNING - changing firewalls now"
+        if self.stage == "done":
+            return ("ok" if not self.result else "error"), f"finished at {clock(self.finished, False)}" + ("" if not self.result else f" with an error (code {self.result})")
+        return "dim", "not started - open it, then press Start"
+
+
+class UpgradeScreen(UnitView, ChangeScreen):
+    name, title, verb = "upgrade", "upgrade", "upgrade"
+    INTRO = ("Upgrades the chosen firewalls. An HA pair is one unit and the passive member goes first; each member is backed up, installed, "
+             "rebooted and checked, and the run stops by itself after too many failures. It reboots real firewalls, so nothing starts until you "
+             "have read the plan and typed APPROVE. Stop lets the steps in progress finish and starts nothing new; a stopped run can be continued.")
+
+    def __init__(self, shell):
+        super().__init__(shell)
+        self.standalone = False
+
+    def extra_args(self):
+        return ["--accept-standalone-outage"] if self.standalone else []
+
+    def units(self):
+        source = self.source()
+        if source is None:
+            return []
+        devices = {d["serial"]: d for d in source.plan["devices"]}
+        return [[devices[x] for x in unit if x in devices] for unit in source.plan["order"]]
+
+    @staticmethod
+    def unit_finished(unit, events):
+        """Every member has done the last step of its plan."""
+        done = []
+        for dev in unit:
+            steps = dev["steps"]
+            last = f"{len(steps) - 1}:{steps[-1]['action']}" if steps else ""
+            done.append(bool(steps) and any(rec["serial"] == dev["serial"] and rec["step"] == last and rec["state"] == "ok" for _w, rec in events))
+        return all(done)
 
     def tasks(self):
         return bool(self.bundle and self.bundle.ready())

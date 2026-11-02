@@ -13,7 +13,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest import mock
 
-from panupgrade import cli, credstore, profiles, progress, settings, shell, site, trust, tui
+from panupgrade import cli, credstore, prepare as prepare_mod, profiles, progress, settings, shell, site, trust, tui
 from panupgrade.trust import CertificateProblem
 from panupgrade.model import DeviceRef
 from panupgrade.sources import SourceError
@@ -70,6 +70,17 @@ class FakeBundle:
                      "downloads": [{"serial": "S1", "hostname": "fw-one", "version": "10.2.3"}] if serials else [], "content_tasks": []}
         self.label, self.created = "LIVE", time.time()
         self.stop = threading.Event()
+        self.groups = prepare_mod.work_groups(self.plan)
+        self.events, self._lock = [], threading.Lock()
+
+    def step(self, serial, step, state, **detail):
+        """One journal record, as the run would report it."""
+        with self._lock:
+            self.events.append((time.time(), {"type": "step", "serial": serial, "step": step, "state": state, "detail": detail}))
+
+    def events_snapshot(self):
+        with self._lock:
+            return list(self.events)
 
 
 def go(ui, key):
@@ -1233,7 +1244,7 @@ class ThePrepareScreen(ShellCase):
         self.approve(ui)
         ui.press("alt-h"); go(ui, "alt-5")
         self.assertEqual(ui.screen.stage, "running")
-        self.assertEqual([label for label, _ in ui.screen.buttons()], ["Stop after the steps in progress", "Home (it keeps running)"])
+        self.assertEqual([label for label, _ in ui.screen.buttons()], ["Stop after the steps in progress", "View: combined output", "Home (it keeps running)"])
         ui.screen.read_plan()
         self.assertEqual(self.reviews, ["12.1.10"])
         gate.set(); wait(ui)
@@ -1472,6 +1483,85 @@ class TheUpgradeScreen(ShellCase):
             lines = ui.render(80, height)
             self.assertEqual(len(lines), height)
             self.assertIn("Approve and run", tui.plain(lines))
+
+
+class ThePrepareRunFirewallByFirewall(ShellCase):
+    """Prepare gets the same choice as the upgrade: the combined output, or each pair's (or standalone firewall's) own log."""
+
+    def run_with(self, script, serials=("S1", "S2")):
+        gate, begun = threading.Event(), threading.Event()
+        holder = {}
+
+        def review(args):
+            holder["bundle"] = FakeBundle(serials)
+            holder["bundle"].plan["downloads"].append({"serial": "S3", "hostname": "fw-three", "version": "10.2.3"})
+            holder["bundle"].plan["serials"].append("S3")
+            holder["bundle"].groups = prepare_mod.work_groups(holder["bundle"].plan)
+            print("plan")
+            return holder["bundle"]
+
+        def execute(args, bundle, approve):
+            script(bundle)
+            begun.set()
+            gate.wait(3)
+            return 0
+        ui = self.make(review=review, execute=execute)
+        go(ui, "alt-5"); wait(ui)
+        ui.press("enter")
+        for ch in "APPROVE":
+            ui.press(ch)
+        ui.press("enter")
+        begun.wait(3)
+        return ui, holder["bundle"], gate
+
+    def test_a_pair_is_one_unit_and_a_standalone_firewall_another(self):
+        def script(bundle):
+            bundle.step("S1", "backup before sync", "started")
+            bundle.step("S3", "download 10.2.3", "started")
+        ui, bundle, gate = self.run_with(script)
+        text = self.text(ui, 130, 30)
+        self.assertIn("fw-two + fw-one", text)
+        self.assertIn("fw-three", text)
+        self.assertIn("View: combined output", text)
+        gate.set(); wait(ui)
+
+    def test_each_units_log_holds_only_its_own_events_and_v_switches_to_the_combined_output(self):
+        def script(bundle):
+            bundle.step("S2", "backup before sync", "started"); bundle.step("S2", "backup before sync", "ok")
+            bundle.step("S3", "download 10.2.3", "started")
+        ui, bundle, gate = self.run_with(script)
+        right = "\n".join(line.split("| ", 1)[1] for line in self.text(ui, 130, 30).splitlines() if "| " in line and "Background jobs" not in line)
+        self.assertRegex(right, r"\d\d:\d\d:\d\d  fw-two\s+backup before sync  started")
+        self.assertNotIn("fw-three", right)
+        ui.press("down")
+        right = "\n".join(line.split("| ", 1)[1] for line in self.text(ui, 130, 30).splitlines() if "| " in line)
+        self.assertIn("fw-three       download 10.2.3  started", right)
+        ui.press("v")
+        self.assertIn("View: by firewall", self.text(ui, 130, 30))
+        gate.set(); wait(ui)
+
+    def test_a_unit_is_done_when_everything_planned_for_it_is_done_and_failed_when_a_task_failed(self):
+        def script(bundle):
+            bundle.step("S1", "sync to peer", "started"); bundle.step("S1", "sync to peer", "ok")
+            bundle.step("S1", "download 10.2.3", "started"); bundle.step("S1", "download 10.2.3", "ok")
+            bundle.step("S3", "download 10.2.3", "started"); bundle.step("S3", "download 10.2.3", "failed", error="no space")
+        ui, bundle, gate = self.run_with(script)
+        text = self.text(ui, 130, 30)
+        self.assertIn("ok fw-two + fw-one", text)
+        self.assertIn("!! fw-three", text)
+        self.assertIn("FAILED: no space", text)
+        gate.set(); wait(ui)
+
+    def test_the_logs_can_still_be_read_after_the_run(self):
+        def script(bundle):
+            bundle.step("S3", "download 10.2.3", "started"); bundle.step("S3", "download 10.2.3", "ok")
+        ui, bundle, gate = self.run_with(script)
+        gate.set(); wait(ui)
+        ui.press("down")                                               # nothing is running now: choose the unit to read
+        text = self.text(ui, 130, 30)
+        self.assertIn("finished at", text)
+        self.assertIn("fw-three       download 10.2.3  ok", text)
+        self.assertIn("fw-two + fw-one", text)                          # the pair that never got going says so
 
 
 class TheRunFirewallByFirewall(ShellCase):

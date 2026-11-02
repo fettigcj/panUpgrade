@@ -716,14 +716,11 @@ def _backend_and_source(args):
     return SimBackend(data, fail=fail), fleet, label
 
 
-class UpgradeBundle:
-    """What the review of an upgrade found, kept for the run that follows: the plan, the connection to carry it out, and any earlier run of
-    this exact plan that did not finish. ``stop`` asks the run to start nothing new (steps already going finish)."""
+class RunEvents:
+    """The journal records of a run, kept with the time they arrived, for the screen to sort by firewall."""
 
-    def __init__(self, plan, settings, backend, fleet, label, previous):
-        self.plan, self.settings, self.backend, self.fleet, self.label, self.previous = plan, settings, backend, fleet, label, previous
-        self.created, self.stop = time.time(), threading.Event()
-        self.events, self._events_lock = [], threading.Lock()            # [(time, journal record)] of the run, for the screen to sort by firewall
+    def _start_events(self):
+        self.events, self._events_lock = [], threading.Lock()            # [(time, journal record)]
 
     def record(self, record):
         with self._events_lock:
@@ -732,6 +729,16 @@ class UpgradeBundle:
     def events_snapshot(self):
         with self._events_lock:
             return list(self.events)
+
+
+class UpgradeBundle(RunEvents):
+    """What the review of an upgrade found, kept for the run that follows: the plan, the connection to carry it out, and any earlier run of
+    this exact plan that did not finish. ``stop`` asks the run to start nothing new (steps already going finish)."""
+
+    def __init__(self, plan, settings, backend, fleet, label, previous):
+        self.plan, self.settings, self.backend, self.fleet, self.label, self.previous = plan, settings, backend, fleet, label, previous
+        self.created, self.stop = time.time(), threading.Event()
+        self._start_events()
 
     def ready(self):
         return [d for d in self.plan["devices"] if d["verdict"] in ("ready", "caution")]
@@ -813,12 +820,14 @@ def _upgrade_execute(args, style, bundle, approve=None):
     return 0 if result["failures"] == 0 else 1
 
 
-class PrepareBundle:
+class PrepareBundle(RunEvents):
     """What the review of a prepare found, kept for the run that follows: the plan, who is who, and the connection to carry it out."""
 
     def __init__(self, plan, names, backend, fleet, label, settings):
         self.plan, self.names, self.backend, self.fleet, self.label, self.settings = plan, names, backend, fleet, label, settings
         self.created, self.stop = time.time(), threading.Event()       # stop: start no new task (those going finish)
+        self.groups = prepare_mod.work_groups(plan)                    # the firewalls it works on, by pair, for the screen
+        self._start_events()
 
 
 def _guarded(style, fn):
@@ -893,7 +902,7 @@ def _prepare_execute(args, style, bundle, approve=None):
     plan, names, backend, label, settings = bundle.plan, bundle.names, bundle.backend, bundle.label, bundle.settings
     result = None
     if plan["serials"]:
-        result = _prepare_tasks(args, style, plan, names, backend, settings, label, approve, bundle.stop)
+        result = _prepare_tasks(args, style, plan, names, backend, settings, label, approve, bundle.stop, bundle.record)
         if isinstance(result, int):
             return result
         sys.stdout.write(console.render_outcomes(result, names, style, finished="prepared"))
@@ -920,7 +929,7 @@ def _prepare_execute(args, style, bundle, approve=None):
     return 0
 
 
-def _prepare_tasks(args, style, plan, names, backend, settings, label, approve=None, stop=None):
+def _prepare_tasks(args, style, plan, names, backend, settings, label, approve=None, stop=None, record=None):
     """Approve and run the preparation tasks (config sync, image downloads). Returns the result, or an exit code."""
     if args.dry_run and not args.approval:
         approval = approval_mod.Approval(plan["hash"], list(plan["serials"]), [], "dry run: nothing changes, so nothing was asked", "")
@@ -941,6 +950,13 @@ def _prepare_tasks(args, style, plan, names, backend, settings, label, approve=N
     journal = (Journal.resume if resuming else Journal.create)(journal_path, plan["hash"])
     print(style.line("info", f"journal: {journal_path}" + (" (continuing)" if resuming else "")))
     journal.listener, close_view = _listener(style, names, sorted(names), settings)
+    if record is not None:                      # the screen keeps every event too, so it can show them firewall by firewall
+        printer = journal.listener
+
+        def listener(rec):
+            record(rec)
+            printer(rec)
+        journal.listener = listener
     if label == "LIVE":
         print(style.line("stop", f"LIVE RUN - this will change real firewalls (config sync and image downloads); journal {journal_path}"))
     try:

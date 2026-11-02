@@ -176,6 +176,28 @@ def build(source, settings, selection, target=None, rules=None):
     return plan
 
 
+def work_groups(plan):
+    """What the screen sorts a run into: one entry per HA pair (its two members) or standalone firewall, each member a dict with its
+    serial, hostname and the (journal) step names this prepare will finish for it. The same grouping the run itself works in."""
+    groups = {}
+
+    def member(key, serial, hostname):
+        group = groups.setdefault(key, {})
+        return group.setdefault(serial, {"serial": serial, "hostname": hostname, "expected": []})
+
+    for unit in plan["units"]:
+        key = frozenset({unit["active"], unit["passive"]})
+        member(key, unit["passive"], unit["passive_name"])
+        member(key, unit["active"], unit["active_name"])["expected"].append("sync to peer" if unit["sync_config"] else "content check")
+    partner = {s: frozenset({u["active"], u["passive"]}) for u in plan["units"] for s in (u["active"], u["passive"])}
+    for task in plan.get("content_tasks", []):
+        member(partner.get(task["serial"], frozenset({task["serial"]})), task["serial"], task["hostname"])["expected"].append(
+            "update content (minimum for the target)")
+    for task in plan["downloads"]:
+        member(partner.get(task["serial"], frozenset({task["serial"]})), task["serial"], task["hostname"])["expected"].append(f"download {task['version']}")
+    return [list(group.values()) for group in groups.values()]
+
+
 def template(plan):
     return {"plan_hash": plan["hash"], "serials": [], "acks": [], "approved_by": "", "note": "",
             "cautions_available": [], "affected_firewalls": plan["serials"]}

@@ -40,6 +40,7 @@ class Backend:
     def preflight(self, serial): raise NotImplementedError          # {version, pending_changes, running_jobs}
     def backup(self, serial): raise NotImplementedError             # {sha256, bytes, parsed_ok}
     def download(self, serial, version): raise NotImplementedError
+    def delete_image(self, serial, version): raise NotImplementedError   # remove a downloaded PAN-OS image; never the running one
     def install(self, serial, version): raise NotImplementedError
     def reboot_and_wait(self, serial, timeout_s): raise NotImplementedError   # the version it came back on
     def state(self, serial): raise NotImplementedError              # {version, ha_state, running_jobs, ha_config_sync, ha_session_sync, session_count}

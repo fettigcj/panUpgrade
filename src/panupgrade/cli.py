@@ -873,6 +873,7 @@ def _prepare_review(args, style):
     names = {u[k]: u[k + "_name"] for u in plan["units"] for k in ("active", "passive")}
     names.update({d["serial"]: d["hostname"] for d in plan["downloads"]})
     names.update({t["serial"]: t["hostname"] for t in plan["content_tasks"]})
+    names.update({d["serial"]: d["hostname"] for d in plan["deletions"]})
     n_content = sum(1 for u in plan["units"] if u["content"])
     n_config = sum(1 for u in plan["units"] if u["sync_config"])
     print(style.bold(f"{label}: prepare plan {plan['hash'][:12]} - {n_content} content sync(s), {len(plan['content_tasks'])} minimum-content install(s), "
@@ -886,6 +887,8 @@ def _prepare_review(args, style):
             print(style.line("sync", f"{u['active_name']} (active) -> {u['passive_name']} (passive), once the content versions match"))
     for t in plan["content_tasks"]:
         print(style.line("start", f"{t['hostname']}: install the latest content (has {t['have']}; {t['for_version']} needs {t['needed']} or newer)"))
+    for line in prepare_mod.deletion_lines(plan):
+        print(style.line("warn", line))
     for d in plan["downloads"]:
         print(style.line("start", f"{d['hostname']}: download {d['version']}"))
     for c in plan["content_report"]:

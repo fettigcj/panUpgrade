@@ -184,6 +184,93 @@ class SelectionCriteria(unittest.TestCase):
         self.assertIn("hostname contains site1", Selection(name_contains="site1").describe())
 
 
+class DeletingUnneededImages(unittest.TestCase):
+    """`prepare` may delete the PAN-OS images a firewall does not need: it keeps what runs, the base images, the path and the target."""
+
+    IMAGES = ["19.1.0", "19.1.7", "20.2.0", "20.2.1", "20.2.3"]
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.j = str(Path(self.tmp.name, "p.jsonl"))
+
+    def data(self, version="20.2.3", images=None):
+        d = device("S1", version=version)
+        d["facts"]["images_downloaded"] = list(self.IMAGES if images is None else images)
+        return fleet_data(d)
+
+    def build(self, data=None, **opts):
+        s = settings.load(None, [f"{k}={v}" for k, v in opts.items()])
+        return prepare.build(FakeFleet(data or self.data()), s, Selection(), TARGET, TEST_RULES), s
+
+    def test_nothing_is_deleted_unless_the_setting_is_on(self):
+        plan, _ = self.build()
+        self.assertEqual(plan["deletions"], [])
+
+    def test_it_keeps_the_running_image_its_base_and_the_target_and_names_the_rest(self):
+        plan, _ = self.build(delete_unneeded_images="true")
+        self.assertEqual([d["version"] for d in plan["deletions"]], ["19.1.0", "19.1.7", "20.2.1"])
+        self.assertEqual(plan["deletions"][0]["keeps"], ["20.2.0", "20.2.3", TARGET])
+        self.assertEqual(plan["serials"], ["S1"])
+        line = prepare.describe(plan)[0]
+        self.assertIn("DELETE the PAN-OS images it does not need: 19.1.0, 19.1.7, 20.2.1", line)
+        self.assertIn("keeps 20.2.0, 20.2.3, " + TARGET, line)
+
+    def test_the_deletions_are_part_of_what_is_approved(self):
+        on, _ = self.build(delete_unneeded_images="true")
+        off, _ = self.build()
+        self.assertNotEqual(on["hash"], off["hash"])
+
+    def test_a_downgrade_keeps_the_running_image_and_the_base_and_drops_the_newer_ones(self):
+        data = self.data(version="20.2.11-h1", images=["20.2.0", "20.2.5", "20.2.9", "20.2.11", "20.2.11-h1"])
+        plan, _ = self.build(data, delete_unneeded_images="true", allow_downgrade="true")
+        self.assertEqual(sorted(d["version"] for d in plan["deletions"]), ["20.2.11", "20.2.5"])
+
+    def test_an_image_name_it_cannot_read_is_never_deleted_and_nothing_goes_without_a_list(self):
+        plan, _ = self.build(self.data(images=["weird-build", "19.1.0"]), delete_unneeded_images="true")
+        self.assertEqual([d["version"] for d in plan["deletions"]], ["19.1.0"])
+        plan, _ = self.build(self.data(images=[]), delete_unneeded_images="true")
+        self.assertEqual(plan["deletions"], [])
+
+    def test_the_run_deletes_before_it_downloads_and_leaves_exactly_what_is_needed(self):
+        plan, s = self.build(delete_unneeded_images="true")
+        sim = SimBackend(self.data())
+        result = prepare.run(plan, Approval(plan["hash"], plan["serials"]), sim, Journal.create(self.j, plan["hash"]), s)
+        self.assertEqual(result["failures"], 0)
+        self.assertEqual(sim.nodes["S1"].downloaded, {"20.2.0", "20.2.3", TARGET})
+        order = [c[1] for c in sim.calls if c[1] in ("delete image", "download")]
+        self.assertEqual(order, ["delete image"] * 3 + ["download"])
+
+    def test_the_image_that_is_running_is_never_deleted_even_if_asked(self):
+        sim = SimBackend(self.data())
+        with self.assertRaisesRegex(executor.BackendError, "is the image that is running"):
+            sim.delete_image("S1", "20.2.3")
+
+    def test_the_screens_expect_each_deletion_among_a_firewalls_steps(self):
+        plan, _ = self.build(delete_unneeded_images="true")
+        expected = prepare.work_groups(plan)[0][0]["expected"]
+        self.assertIn("delete image 19.1.0", expected)
+        self.assertIn(f"download {TARGET}", expected)
+
+    def test_what_to_keep_covers_a_skip_level_path_and_a_withdrawn_base(self):
+        from panupgrade import paths
+        steps = paths.compute("20.2.3", "21.1.2", TEST_RULES).steps
+        keep = paths.keep_images(TEST_RULES, "20.2.3", steps, "21.1.2")
+        self.assertTrue({"20.2.3", "20.2.0", "21.1.2", "21.1.0"} <= keep, keep)
+        revoked = dict(TEST_RULES, stepping_install={"20.2": "20.2.1"})
+        self.assertIn("20.2.1", paths.keep_images(revoked, "20.2.3", [], "20.2.9"))
+        self.assertNotIn("20.2.0", paths.keep_images(revoked, "20.2.3", [], "20.2.9"))
+
+    def test_only_that_one_delete_command_is_on_the_write_allow_list(self):
+        from panupgrade_live.panorama import WRITE_ALLOWED
+        allowed = lambda xml: any(p.fullmatch(xml) for p in WRITE_ALLOWED)
+        self.assertTrue(allowed("<delete><software><version>10.2.1</version></software></delete>"))
+        self.assertTrue(allowed("<delete><software><version>10.2.11-h1</version></software></delete>"))
+        for bad in ("<delete><software></software></delete>", "<delete><config><version>10.2.1</version></config></delete>",
+                    "<delete><software><version>10.2.1</version><x/></software></delete>", "<delete><software><version>*</version></software></delete>"):
+            self.assertFalse(allowed(bad), bad)
+
+
 class PrepareTask(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

@@ -85,7 +85,7 @@ def build(source, settings, selection, target=None, rules=None):
     rules = rules if rules is not None else paths.load_rules()
     refs = {r.serial: r for r in source.list_devices()}
     want = Version.parse(target) if target else None
-    units, downloads, skipped, notes, content_report, content_tasks = [], [], [], [], [], []
+    units, downloads, skipped, notes, content_report, content_tasks, deletions = [], [], [], [], [], [], []
     for ref in refs.values():
         if not selection.matches(ref):
             continue
@@ -121,6 +121,19 @@ def build(source, settings, selection, target=None, rules=None):
             for step in steps:
                 if step["download"] and step["version"] not in have:
                     downloads.append({"serial": ref.serial, "hostname": ref.hostname, "version": step["version"]})
+            if settings.delete_unneeded_images and have:
+                try:
+                    keep = paths.keep_images(rules, version, steps, want)
+                except VersionError:
+                    keep = None                                 # cannot say what is needed, so nothing is deleted
+                for image in sorted(have):
+                    try:
+                        readable = str(Version.parse(image))
+                    except VersionError:
+                        continue                                # what cannot be read is never deleted
+                    if keep is not None and readable not in keep:
+                        deletions.append({"serial": ref.serial, "hostname": ref.hostname, "version": image,
+                                          "keeps": sorted(keep, key=Version.parse)})
         # HA pairs: dynamic content and config, from the active member's point of view
         if facts.ha_mode == "active-passive" and facts.ha_state == "active":
             if want is not None and not steps:
@@ -167,11 +180,12 @@ def build(source, settings, selection, target=None, rules=None):
                               "content_diffs": {k: list(v) for k, v in diffs.items()}, "content_reason": reason})
     in_units = {s for u in units if u["content"] for s in (u["active"], u["passive"])}
     content_tasks = [t for t in content_tasks if t["serial"] not in in_units]        # a pair's own content step already covers its members
-    serials = sorted({u["active"] for u in units} | {d["serial"] for d in downloads} | {t["serial"] for t in content_tasks})
+    serials = sorted({u["active"] for u in units} | {d["serial"] for d in downloads} | {t["serial"] for t in content_tasks}
+                     | {d["serial"] for d in deletions})
     plan = {"kind": "prepare", "target": target, "mode": "nothing changed until an approved `prepare` run",
-            "units": units, "downloads": downloads, "content_tasks": content_tasks, "serials": serials, "skipped": skipped, "notes": notes,
+            "units": units, "downloads": downloads, "deletions": deletions, "content_tasks": content_tasks, "serials": serials, "skipped": skipped, "notes": notes,
             "content_report": content_report}
-    plan["hash"] = hashlib.sha256(json.dumps({"units": units, "downloads": downloads, "content_tasks": content_tasks, "target": target},
+    plan["hash"] = hashlib.sha256(json.dumps({"units": units, "downloads": downloads, "deletions": deletions, "content_tasks": content_tasks, "target": target},
                                              sort_keys=True).encode()).hexdigest()
     return plan
 
@@ -193,6 +207,8 @@ def work_groups(plan):
     for task in plan.get("content_tasks", []):
         member(partner.get(task["serial"], frozenset({task["serial"]})), task["serial"], task["hostname"])["expected"].append(
             "update content (minimum for the target)")
+    for task in plan.get("deletions", []):
+        member(partner.get(task["serial"], frozenset({task["serial"]})), task["serial"], task["hostname"])["expected"].append(f"delete image {task['version']}")
     for task in plan["downloads"]:
         member(partner.get(task["serial"], frozenset({task["serial"]})), task["serial"], task["hostname"])["expected"].append(f"download {task['version']}")
     return [list(group.values()) for group in groups.values()]
@@ -226,8 +242,18 @@ def describe(plan):
                          f"onto the passive, once the content versions match")
     lines += [f"{t['hostname']}: install the latest dynamic content (has {t['have']}; {t['for_version']} needs {t['needed']} or newer, or PAN-OS refuses the install)"
               for t in plan.get("content_tasks", [])]
+    lines += deletion_lines(plan)
     lines += [f"{d['hostname']}: download {d['version']} (does not install it)" for d in plan["downloads"]]
     return lines
+
+
+def deletion_lines(plan):
+    """One line per firewall that has images to delete, saying which and what it keeps."""
+    by_firewall = {}
+    for d in plan.get("deletions", []):
+        by_firewall.setdefault((d["serial"], d["hostname"]), []).append(d)
+    return [f"{hostname}: DELETE the PAN-OS image{'s' if len(found) != 1 else ''} it does not need: {', '.join(d['version'] for d in found)} "
+            f"(keeps {', '.join(found[0]['keeps'])})" for (_serial, hostname), found in by_firewall.items()]
 
 
 def _fold(parts):
@@ -363,6 +389,11 @@ def run(plan, approval, backend, journal, settings=None, stop=None):
             if attempt(active, "backup before sync", "", backup_passive, record_serial=passive):
                 attempt(active, "sync to peer", f"synced {unit['active_name']} -> {unit['passive_name']}", sync)
 
+    def do_delete(task):
+        version = task["version"]
+        attempt(task["serial"], f"delete image {version}", f"deleted {version}",
+                lambda s=task["serial"], v=version: backend.delete_image(s, v))
+
     def do_download(task):
         version = task["version"]
         attempt(task["serial"], f"download {version}", f"downloaded {version}",
@@ -374,11 +405,13 @@ def run(plan, approval, backend, journal, settings=None, stop=None):
     for unit in plan["units"]:
         partner[unit["active"]] = partner[unit["passive"]] = frozenset({unit["active"], unit["passive"]})
     groups = {}
-    blank = lambda: {"units": [], "downloads": [], "content_tasks": []}
+    blank = lambda: {"units": [], "downloads": [], "content_tasks": [], "deletions": []}
     for unit in plan["units"]:
         groups.setdefault(partner[unit["active"]], blank())["units"].append(unit)
     for task in plan.get("content_tasks", []):
         groups.setdefault(partner.get(task["serial"], frozenset({task["serial"]})), blank())["content_tasks"].append(task)
+    for task in plan.get("deletions", []):
+        groups.setdefault(partner.get(task["serial"], frozenset({task["serial"]})), blank())["deletions"].append(task)
     for task in plan["downloads"]:
         groups.setdefault(partner.get(task["serial"], frozenset({task["serial"]})), blank())["downloads"].append(task)
 
@@ -403,6 +436,8 @@ def run(plan, approval, backend, journal, settings=None, stop=None):
             do_unit(unit)
         for task in group["content_tasks"]:
             do_content_task(task)
+        for task in group["deletions"]:                 # room first, then the images the target needs
+            do_delete(task)
         for task in group["downloads"]:
             do_download(task)
 

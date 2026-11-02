@@ -48,6 +48,22 @@ def _base(feature):
     return f"{feature}.0"
 
 
+def base_of(rules, feature):
+    """The image every install in a feature release needs on the box first: x.y.0, unless that build was withdrawn and the rules
+    (``stepping_install``) name the one that replaced it."""
+    return (rules or {}).get("stepping_install", {}).get(feature) or _base(feature)
+
+
+def keep_images(rules, current, steps, target):
+    """The PAN-OS images a firewall must keep for this upgrade, as version strings: what is running and its base, the target and its
+    base, and every image on the path with its base. Anything else on the disk is not needed."""
+    keep = set()
+    for text in [current, target] + [step["version"] for step in steps]:
+        version = Version.parse(str(text))
+        keep |= {str(version), str(Version.parse(base_of(rules, version.feature)))}
+    return keep
+
+
 def content_requirement(rules, steps):
     """The highest app-content number any installed step needs, as (number, version), or (None, None). A figure for the exact maintenance release (seen on a device) wins over the release-train floor from the release notes."""
     best = (None, None)

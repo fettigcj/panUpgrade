@@ -16,7 +16,7 @@ import textwrap
 import threading
 import time
 
-from . import report
+from . import progress, report
 
 # outcome -> (emoji, plain tag, ANSI colour)
 GLYPHS = {
@@ -81,6 +81,8 @@ class Style:
         return self.paint(tag, code) + " "
 
     def line(self, kind, text, indent=0):
+        if kind in ("fail", "warn"):
+            progress.finding(kind, text)              # as data too, for whoever is watching the work (the shell's whole-fleet entry)
         _, _, code = GLYPHS[kind]
         if self.width and len(text) + indent + 3 > self.width:
             text = textwrap.fill(text, max(self.width - indent - 3, 40), subsequent_indent=" " * (indent + 3), break_long_words=False)

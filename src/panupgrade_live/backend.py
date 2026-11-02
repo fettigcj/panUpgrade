@@ -182,6 +182,28 @@ class LiveBackend(Backend):
         job = self._job_id(self._send(_version_xml("download", version), serial))
         self._wait_job(serial, job, self.settings.download_timeout_s, f"download {version}")
 
+    def delete_image(self, serial, version):
+        """Remove one downloaded image. Refused for the image that is running or flagged current; checked afterwards, never assumed."""
+        def listed():
+            try:
+                info = self.read.op_xml(SOFTWARE_INFO, target=serial)
+            except SourceError as exc:
+                raise BackendError(str(exc)) from None
+            return next((e for e in info.iter("entry") if e.findtext("version") == version), None)
+        running = (self._info(serial).findtext("sw-version") or "").strip()
+        entry = listed()
+        if entry is None or entry.findtext("downloaded") != "yes":
+            return {"already_absent": version}
+        if version == running or entry.findtext("current") == "yes":
+            raise BackendError(f"{serial}: {version} is the image that is running; it is never deleted")
+        self._send(f"<delete><software><version>{version}</version></software></delete>", serial)
+
+        def gone():
+            again = listed()
+            return again is None or again.findtext("downloaded") != "yes"
+        self._wait_until(serial, gone, 120, f"image {version} to be gone from the firewall")
+        return {"deleted": version}
+
     def install(self, serial, version):
         job = self._job_id(self._send(_version_xml("install", version), serial))
         self._wait_job(serial, job, self.settings.install_timeout_s, f"install {version}")

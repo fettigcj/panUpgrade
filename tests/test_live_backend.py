@@ -115,6 +115,42 @@ class Downloads(unittest.TestCase):
             backend(api).install("S1", "10.2.2")
 
 
+class DeleteImage(unittest.TestCase):
+    SYSINFO = ("op", "show system info", "S1")
+    DELETE = ("write", "<delete><software><version>10.2.1</version></software></delete>", "S1")
+
+    @staticmethod
+    def images(*rows):
+        return ok("<sw-updates><versions>" + "".join(
+            f"<entry><version>{v}</version><downloaded>{d}</downloaded><current>{c}</current></entry>" for v, d, c in rows) + "</versions></sw-updates>")
+
+    def sysinfo(self, version="10.2.4"):
+        return ok(f"<system><sw-version>{version}</sw-version></system>")
+
+    def test_it_sends_the_delete_and_checks_the_image_is_gone(self):
+        api = Scripted({self.SYSINFO: [self.sysinfo()],
+                        INFO: [self.images(("10.2.1", "yes", "no"), ("10.2.4", "yes", "yes")), self.images(("10.2.1", "no", "no"), ("10.2.4", "yes", "yes"))],
+                        self.DELETE: [ok("deleted")]})
+        self.assertEqual(backend(api).delete_image("S1", "10.2.1"), {"deleted": "10.2.1"})
+        self.assertIn(self.DELETE, api.log)
+
+    def test_the_running_image_is_refused_before_anything_is_sent(self):
+        api = Scripted({self.SYSINFO: [self.sysinfo()], INFO: [self.images(("10.2.4", "yes", "yes"))]})
+        with self.assertRaisesRegex(BackendError, "is the image that is running"):
+            backend(api).delete_image("S1", "10.2.4")
+        self.assertNotIn("write", [k[0] for k in api.log])
+
+    def test_an_image_that_is_not_there_is_not_an_error_and_sends_nothing(self):
+        api = Scripted({self.SYSINFO: [self.sysinfo()], INFO: [self.images(("10.2.1", "no", "no"))]})
+        self.assertEqual(backend(api).delete_image("S1", "10.2.1"), {"already_absent": "10.2.1"})
+        self.assertNotIn("write", [k[0] for k in api.log])
+
+    def test_an_image_that_stays_after_the_delete_is_an_error(self):
+        api = Scripted({self.SYSINFO: [self.sysinfo()], INFO: [self.images(("10.2.1", "yes", "no"))], self.DELETE: [ok("deleted")]})
+        with self.assertRaisesRegex(BackendError, "to be gone"):
+            backend(api).delete_image("S1", "10.2.1")
+
+
 class Reboot(unittest.TestCase):
     INFOQ = ("op", "show system info", "S1")
     RESTART = ("write", "<request><restart><system/></restart></request>", "S1")

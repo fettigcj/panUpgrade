@@ -59,6 +59,9 @@ class Settings:
     restore_roles: str = "leave"
     # Who fetches images: firewall (default, downloads from the vendor) | panorama
     image_source: str = "firewall"
+    # `prepare` deletes the PAN-OS images a firewall does not need for this upgrade (it keeps the running image, the base images
+    # underneath the running and target releases, every image on the upgrade path, and the target). Off: nothing is ever deleted.
+    delete_unneeded_images: bool = False
     # Placeholders, conservative; tune them from your own first-batch evidence
     min_free_disk_mb: int = 4096
     download_timeout_s: int = 3600
@@ -80,6 +83,9 @@ class Settings:
                        "suspends, the passive takes over running its own, different configuration.")
         if self.allow_downgrade:
             out.append("allow_downgrade=true: firewalls running a newer release than the target are installed down to it.")
+        if self.delete_unneeded_images:
+            out.append("delete_unneeded_images=true: `prepare` deletes the PAN-OS images on a firewall that this upgrade does not need "
+                       "(it keeps the running image, the base images and the target).")
         if self.allow_cross_feature_downgrade:
             out.append("allow_cross_feature_downgrade=true: firewalls may be installed down across feature releases; "
                        "the newer release's configuration may not load on the older one.")

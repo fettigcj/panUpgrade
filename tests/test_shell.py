@@ -1585,6 +1585,45 @@ class TheSoftwareListAFirewallOffers(unittest.TestCase):
         self.assertEqual([r["version"] for r in xmlops.parse_software_versions(op)], ["10.2.3"])
 
 
+class FindingsAreData(unittest.TestCase):
+    """What a run reports as a problem or a caution reaches the screen as data, from the place that decided it, not from the printed text."""
+
+    def test_a_fail_or_warn_line_is_reported_once_as_data_and_other_lines_are_not(self):
+        from panupgrade import console
+        heard = []
+        progress.listen(None, None, lambda kind, text: heard.append((kind, text)))
+        try:
+            style = console.Style()
+            style.line("fail", "fw-one: BLOCKED - 3584 MB free")
+            style.line("warn", "the batch may be short")
+            style.line("ok", "fine")
+            style.line("start", "download")
+        finally:
+            progress.listen(None)
+        self.assertEqual(heard, [("fail", "fw-one: BLOCKED - 3584 MB free"), ("warn", "the batch may be short")])
+
+    def test_a_job_keeps_what_its_thread_reported_and_a_second_job_does_not_see_it(self):
+        from panupgrade import console
+
+        def work():
+            console.Style().line("fail", "from the first job")
+            return 0
+        first = shell.Job(work, "one")
+        while first.running:
+            time.sleep(0.01)
+        second = shell.Job(lambda: 0, "two")
+        while second.running:
+            time.sleep(0.01)
+        self.assertEqual(first.findings, [("fail", "from the first job")])
+        self.assertEqual(second.findings, [])
+
+    def test_printed_text_that_only_looks_like_a_finding_is_not_one(self):
+        job = shell.Job(lambda: print("[FAIL] this is only text") or 0, "text")
+        while job.running:
+            time.sleep(0.01)
+        self.assertEqual(job.findings, [])
+
+
 class ThePrepareRunFirewallByFirewall(ShellCase):
     """Prepare gets the same choice as the upgrade: the combined output, or each pair's (or standalone firewall's) own log."""
 
@@ -1658,8 +1697,8 @@ class ThePrepareRunFirewallByFirewall(ShellCase):
             bundle.step("S3", "download 10.2.3", "started"); bundle.step("S3", "download 10.2.3", "ok")
             bundle.step("S1", "sync to peer", "started"); bundle.step("S1", "sync to peer", "ok")
             bundle.step("S1", "download 10.2.3", "started"); bundle.step("S1", "download 10.2.3", "ok")
-            print("[FAIL] fw-three: BLOCKED - 3584 MB free, setting min_free_disk_mb is 4096")
-            print("[WARN] The upgrade batch may not include firewalls that failed to prepare")
+            progress.finding("fail", "fw-three: BLOCKED - 3584 MB free, setting min_free_disk_mb is 4096")
+            progress.finding("warn", "The upgrade batch may not include firewalls that failed to prepare")
         ui, bundle, gate = self.run_with(script)
         gate.set(); wait(ui)
         text = self.text(ui, 130, 30)

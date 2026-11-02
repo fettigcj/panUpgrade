@@ -64,6 +64,12 @@ class SimBackend(Backend):
     def download(self, serial, version):
         self._enter(serial, "download", version).downloaded.add(version)
 
+    def delete_image(self, serial, version):
+        n = self._enter(serial, "delete image", version)
+        if version == n.version:
+            raise BackendError(f"{serial}: {version} is the image that is running; it is never deleted")
+        n.downloaded.discard(version)
+
     def install(self, serial, version):
         n = self._enter(serial, "install", version)
         if version not in n.downloaded:

@@ -226,6 +226,8 @@ WRITE_ALLOWED = [
     re.compile(r"<request><system><software><download><version>[0-9]+\.[0-9]+\.[0-9]+(?:-h[0-9]+)?</version></download></software></system></request>"),
     re.compile(r"<request><system><software><install><version>[0-9]+\.[0-9]+\.[0-9]+(?:-h[0-9]+)?</version></install></software></system></request>"),
     re.compile(r"<request><restart><system/></restart></request>"),
+    # remove one downloaded PAN-OS image (prepare, when delete_unneeded_images is on; the backend never names the running one)
+    re.compile(r"<delete><software><version>[0-9]+\.[0-9]+\.[0-9]+(?:-h[0-9]+)?</version></software></delete>"),
     # dynamic content (CDSS): download the latest, install the latest - for content, antivirus and WildFire only
     re.compile(r"<request><(content|anti-virus|wildfire)><upgrade><download><latest/></download></upgrade></\1></request>"),
     re.compile(r"<request><(content|anti-virus|wildfire)><upgrade><install><version>latest</version></install></upgrade></\1></request>"),

@@ -135,6 +135,7 @@ class Job:
         self.stage = ""                                   # the latest words from progress.say
         self.activity = []                                # every progress note, with the time: [(HH:MM:SS, words, is a stage)]
         self.phase_text = ""                              # the named stage it is in now ("Reading firewall 3 of 6: e2")
+        self.findings = []                                # what it reported as a problem or a caution: [("fail" | "warn", words)]
         self.abort_requested = False
         self._out, self._err = io.StringIO(), io.StringIO()
         self._fn = fn
@@ -163,10 +164,13 @@ class Job:
         self._note(text, True)
         self.phase_text = text
 
+    def _finding(self, kind, text):
+        self.findings.append((kind, text))
+
     def _run(self):
         out, err = self._out, self._err
         _capture_start(out, err)
-        progress.listen(self._note, self._phase)
+        progress.listen(self._note, self._phase, self._finding)
         progress.set_output(out)
         try:
             self.value = self._fn()
@@ -1018,7 +1022,6 @@ class ChangeScreen(Screen):
 
 
 FLEET = [{"serial": "", "hostname": "Whole fleet", "fleet": True}]       # the list's first entry: everything that is not one firewall's own steps
-PROBLEM_LINE = re.compile(r"^\s*\[(FAIL|WARN|STOP)\]")
 
 
 class UnitView:
@@ -1059,13 +1062,14 @@ class UnitView:
         return [] if job is None else job.log()
 
     def fleet_problems(self):
-        """(failures, warnings): the lines of the combined output that report one, so a blocked plan or a failed verification is never only in the text."""
+        """(failures, warnings): what the run itself reported, as data, so a blocked plan or a failed verification is never only in the text."""
         if self.job is None:
             return [], []
-        lines = [line.strip() for line in self.job.live().splitlines() if PROBLEM_LINE.match(line) and "LIVE RUN" not in line]
+        found = list(self.job.findings)
+        failures = [f"[FAIL] {text}" for kind, text in found if kind == "fail"]
         if self.job.failed:
-            lines.append(f"[FAIL] the run ended with code {self.job.code}")
-        return [l for l in lines if not l.startswith("[WARN]") and not l.startswith("[STOP]")], [l for l in lines if l.startswith("[WARN]") or l.startswith("[STOP]")]
+            failures.append(f"[FAIL] the run ended with code {self.job.code}")
+        return failures, [f"[WARN] {text}" for kind, text in found if kind == "warn"]
 
     def fleet_state(self):
         failures, warnings = self.fleet_problems()

@@ -28,7 +28,7 @@ SECTIONS = [
     ("Panorama range", ["spread_limit", "panorama_compare"]),
     ("Failure handling", ["max_failures", "max_parallel", "api_rate_per_s", "pending_changes"]),
     ("Downgrades", ["allow_downgrade", "allow_cross_feature_downgrade"]),
-    ("Images, disk and time", ["image_source", "min_free_disk_mb", "download_timeout_s", "install_timeout_s", "reboot_timeout_s",
+    ("Images, disk and time", ["image_source", "delete_unneeded_images", "min_free_disk_mb", "download_timeout_s", "install_timeout_s", "reboot_timeout_s",
                                "poll_interval_s", "backup_dir", "approval_max_age_hours"]),
 ]
 # name -> (what it does, {choice or "true"/"false": what that value means})
@@ -84,6 +84,12 @@ INFO = {
                                       {"true": "allowed", "false": "refused"}),
     "image_source": ("Who downloads the software image.",
                      {"firewall": "each firewall downloads it from the vendor", "panorama": "Panorama downloads it and pushes it"}),
+    "delete_unneeded_images": ("During `prepare`, delete the PAN-OS images a firewall holds that this upgrade does not need, to make room. "
+                               "It keeps the image that is running, the base image of the running release and of the target release "
+                               "(normally x.y.0), every image on the upgrade path, and the target. The approval lists each deletion. "
+                               "Nothing is deleted unless the target is known and the firewall's own image list could be read.",
+                               {"true": "delete the other images during prepare",
+                                "false": "the default. Never delete an image"}),
     "min_free_disk_mb": ("Free disk space a firewall needs before an image is downloaded, in MB.", {}),
     "download_timeout_s": ("How long to wait for an image download, in seconds.", {}),
     "install_timeout_s": ("How long to wait for an install, in seconds.", {}),

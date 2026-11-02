@@ -2,41 +2,11 @@
 
 Upgrade a fleet of Palo Alto Networks firewalls through Panorama, safely.
 
-panUpgrade reads your fleet, tells you what would happen to each firewall and why, and changes nothing until a person approves a specific list of firewalls. It handles HA pairs as one unit (passive member first), checks sessions before and after, keeps a journal of every step so an interrupted run can be resumed, and refuses to run on a plan that has changed since it was approved.
+panUpgrade is a text menu system for upgrading PAN-OS across a fleet through Panorama. It reads the fleet and builds a plan for the target version you choose: what would happen to each firewall, in what order, and why. Plans are generated from the fleet as it is now, so they can be prepared and approved ahead of time and then executed during a maintenance window. Nothing changes until a person approves a specific list of firewalls, and a plan that has changed since it was approved is refused.
+
+It handles HA pairs as one unit (passive member first), runs independent pairs side by side, checks sessions before and after, and keeps a journal of every step so an interrupted run can be resumed.
 
 > **Status: pre-release (0.1.0.dev0).** It has been exercised against a lab fleet only. Read [docs/running.md](docs/running.md) before pointing it at production, and try everything with `--dry-run` first.
-
-## The one-screen way
-
-At a terminal, just type:
-
-```
-panupgrade
-```
-
-One screen walks through the whole job, in order: **sign in**, **choose firewalls**, **read the fleet**, **plan**, **prepare** and **upgrade**, each with your typed APPROVE. Each step shows where it stands. Alt-H goes home, Alt-A signs in, Alt-F chooses firewalls, Alt-R reads the fleet, Alt-P plans, Alt-S opens the settings, Alt-J lists the background jobs, and Alt-1 to Alt-9 jump to the steps in order. Reading Panorama happens in the background while the screen stays live; the last answer is kept when you leave a screen, and a wide window shows the running and finished jobs down the right-hand side. Everything the screen does is also available as a command, listed below, for scripts and for anyone who prefers them.
-
-## How it works
-
-| Step | Command | Changes anything? |
-|---|---|---|
-| See the state of the fleet | `panupgrade report` | No |
-| Choose firewalls | `panupgrade select` | No |
-| Change the settings | `panupgrade settings` | Only the settings file |
-| See what an upgrade would do | `panupgrade plan --target X` | No |
-| Get ready (content, config sync, image downloads) | `panupgrade prepare` | Yes, after you type APPROVE |
-| Upgrade | the script `prepare` writes, or `panupgrade upgrade` | Yes, only the firewalls the approval names |
-
-`prepare` finishes by writing an **upgrade kit**: a sign-off pack (HTML, text, Excel), the firewall list, the approval, and a ready-to-run script. Take the pack to whoever must agree; running the script is the go-ahead.
-
-## Safety model
-
-- Nothing changes without an approval that names firewalls (never "all") and acknowledges every caution on them.
-- An approval is bound to the plan it was made for. If a firewall's version, HA role or planned steps change, the run is refused and the message says what changed.
-- Every step is journaled before and after it runs. A step that was started but not finished is reported for you to check and is never silently repeated.
-- Config is backed up and verified before any install or reboot.
-- Safe defaults: an HA pair whose passive member is out of sync is blocked, and `prepare` is the only place a config sync is forced. Loosening a safety setting prints a caution.
-- Panorama's TLS certificate is verified. Opt out (`--insecure-tls`) only for a lab with a self-signed certificate; it prints a warning.
 
 ## Install
 
@@ -81,6 +51,38 @@ panupgrade help
 Leave the environment with `deactivate`. If `panupgrade` is "not found", the environment isn't active: check for `(.venv)` at the start of the prompt.
 
 More detail, including running the tests, is in [docs/venv.md](docs/venv.md).
+
+## Using the menu system
+
+After installation (above), with the virtual environment active, launch the menu system by typing:
+
+```
+panupgrade
+```
+
+One screen walks through the whole job, in order: **sign in**, **choose firewalls**, **read the fleet**, **plan**, **prepare** and **upgrade**, each with your typed APPROVE. Each step shows where it stands. Alt-H goes home, Alt-A signs in, Alt-F chooses firewalls, Alt-R reads the fleet, Alt-P plans, Alt-S opens the settings, Alt-J lists the background jobs, and Alt-1 to Alt-9 jump to the steps in order. Reading Panorama happens in the background while the screen stays live; the last answer is kept when you leave a screen, and a wide window shows the running and finished jobs down the right-hand side. Everything the screen does is also available as a command, listed below, for scripts and for anyone who prefers them.
+
+## How it works
+
+| Step | Command | Changes anything? |
+|---|---|---|
+| See the state of the fleet | `panupgrade report` | No |
+| Choose firewalls | `panupgrade select` | No |
+| Change the settings | `panupgrade settings` | Only the settings file |
+| See what an upgrade would do | `panupgrade plan --target X` | No |
+| Get ready (content, config sync, image downloads) | `panupgrade prepare` | Yes, after you type APPROVE |
+| Upgrade | the script `prepare` writes, or `panupgrade upgrade` | Yes, only the firewalls the approval names |
+
+`prepare` finishes by writing an **upgrade kit**: a sign-off pack (HTML, text, Excel), the firewall list, the approval, and a ready-to-run script. Take the pack to whoever must agree; running the script is the go-ahead.
+
+## Safety model
+
+- Nothing changes without an approval that names firewalls (never "all") and acknowledges every caution on them.
+- An approval is bound to the plan it was made for. If a firewall's version, HA role or planned steps change, the run is refused and the message says what changed.
+- Every step is journaled before and after it runs. A step that was started but not finished is reported for you to check and is never silently repeated.
+- Config is backed up and verified before any install or reboot.
+- Safe defaults: an HA pair whose passive member is out of sync is blocked, and `prepare` is the only place a config sync is forced. Loosening a safety setting prints a caution.
+- Panorama's TLS certificate is verified. Opt out (`--insecure-tls`) only for a lab with a self-signed certificate; it prints a warning.
 
 ## First look (no firewall needed)
 

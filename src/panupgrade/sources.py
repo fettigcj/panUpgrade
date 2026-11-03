@@ -8,6 +8,7 @@ exercised with no firewall. The live, Panorama-backed source lives in ``panupgra
 """
 
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .model import DeviceRef, Facts
 
@@ -104,7 +105,45 @@ class FakeFleet(Source):
             raise SourceError(f"unreadable facts: {exc}") from None
 
 
-def snapshot(source, include=None):
+def read_facts(source, serials, workers=1, announce=None):
+    """Read the facts of several firewalls, up to ``workers`` at a time. Returns {serial: Facts, or the SourceError that stopped it}.
+
+    The firewalls are independent, so this is the one place the slow part of a fleet read is spread out. ``announce(done, total, serial)``
+    is called on the calling thread as each one finishes (the worker threads have no screen of their own). With one worker, or one
+    firewall, nothing is threaded."""
+    serials = list(dict.fromkeys(serials))
+    found = {}
+
+    def one(serial):
+        try:
+            return serial, source.facts(serial)
+        except SourceError as exc:
+            return serial, exc
+
+    if workers <= 1 or len(serials) <= 1:
+        for done, serial in enumerate(serials, 1):
+            if announce:
+                announce(done, len(serials), serial)
+            found[serial] = one(serial)[1]
+        return found
+    pool = ThreadPoolExecutor(max_workers=min(workers, len(serials)), thread_name_prefix="read")
+    futures = [pool.submit(one, s) for s in serials]
+    try:
+        for done, future in enumerate(as_completed(futures), 1):
+            serial, result = future.result()
+            found[serial] = result
+            if announce:
+                announce(done, len(serials), serial)
+    except BaseException:                   # Ctrl-C: queued reads are dropped, the ones in flight finish
+        for future in futures:
+            future.cancel()
+        pool.shutdown(wait=True)
+        raise
+    pool.shutdown()
+    return found
+
+
+def snapshot(source, include=None, workers=1):
     """The source's current state in the fleet-file shape (what FakeFleet reads), so a rehearsal starts from live facts.
 
     Devices that cannot be read keep ``connected`` as reported and carry a ``collect_error``; nothing is invented.
@@ -113,23 +152,23 @@ def snapshot(source, include=None):
     from . import progress
     progress.phase("Asking Panorama for the list of firewalls")
     refs = source.list_devices()
-    total = sum(1 for r in refs if r.connected and (include is None or r.serial in include))
-    devices, read = [], 0
+    wanted = [r.serial for r in refs if r.connected and (include is None or r.serial in include)]
+    names = {r.serial: r.hostname for r in refs}
+    got = read_facts(source, wanted, workers,
+                     lambda done, count, serial: progress.phase(f"Reading firewall {done} of {count}: {names[serial]}"))
+    devices = []
     for ref in refs:
         entry = {"serial": ref.serial, "hostname": ref.hostname, "model": ref.model, "sw_version": ref.sw_version,
                  "connected": ref.connected, "device_group": ref.device_group, "tags": list(ref.tags),
                  "ha_state": ref.ha_state, "peer_serial": ref.peer_serial}
-        if include is not None and ref.serial not in include:
-            entry["facts"] = {}          # not selected and not a selected device's HA peer: never read
-        elif ref.connected:
-            read += 1
-            progress.phase(f"Reading firewall {read} of {total}: {ref.hostname}")
-            try:
-                entry["facts"] = {k: v for k, v in asdict(source.facts(ref.serial)).items() if v is not None}
-            except SourceError as exc:
-                entry["collect_error"], entry["facts"] = str(exc), {}
+        if ref.serial in got:
+            result = got[ref.serial]
+            if isinstance(result, SourceError):
+                entry["collect_error"], entry["facts"] = str(result), {}
+            else:
+                entry["facts"] = {k: v for k, v in asdict(result).items() if v is not None}
         else:
-            entry["facts"] = {}
+            entry["facts"] = {}          # not selected and not a selected device's HA peer (never read), or not connected
         devices.append(entry)
     progress.phase("Reading Panorama's version")
     return {"panorama": {"version": source.panorama_version()}, "devices": devices}

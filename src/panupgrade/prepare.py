@@ -30,7 +30,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import paths
 from .executor import BackendError, ExecutionRefused
-from .sources import SourceError
+from . import progress
+from .sources import SourceError, read_facts
 from .versions import Version, VersionError
 
 
@@ -86,6 +87,25 @@ def build(source, settings, selection, target=None, rules=None):
     refs = {r.serial: r for r in source.list_devices()}
     want = Version.parse(target) if target else None
     units, downloads, skipped, notes, content_report, content_tasks, deletions = [], [], [], [], [], [], []
+    # The reads are the slow part, so they are done side by side first: every selected firewall, and the HA peer of each active one
+    # (read once, even when it is selected too). Anything not read ahead is read when it is first needed.
+    ahead = [r.serial for r in refs.values() if selection.matches(r) and r.connected]
+    ahead += [r.peer_serial for r in refs.values() if selection.matches(r) and r.connected and r.peer_serial in refs
+              and r.ha_state == "active"]
+    names = {r.serial: r.hostname for r in refs.values()}
+    read = read_facts(source, ahead, settings.max_parallel if settings else 1,
+                      lambda done, count, serial: progress.phase(f"Reading firewall {done} of {count}: {names.get(serial, serial)}"))
+
+    def facts_of(serial):
+        if serial not in read:
+            try:
+                read[serial] = source.facts(serial)
+            except SourceError as exc:
+                read[serial] = exc
+        if isinstance(read[serial], SourceError):
+            raise read[serial]
+        return read[serial]
+
     for ref in refs.values():
         if not selection.matches(ref):
             continue
@@ -93,7 +113,7 @@ def build(source, settings, selection, target=None, rules=None):
             skipped.append({"serial": ref.serial, "hostname": ref.hostname, "why": "not connected to Panorama"})
             continue
         try:
-            facts = source.facts(ref.serial)
+            facts = facts_of(ref.serial)
         except SourceError as exc:
             skipped.append({"serial": ref.serial, "hostname": ref.hostname, "why": f"facts unreadable: {exc}"})
             continue
@@ -144,7 +164,7 @@ def build(source, settings, selection, target=None, rules=None):
                     skipped.append({"serial": ref.serial, "hostname": ref.hostname, "why": "peer serial unknown"})
                 continue
             try:
-                peer_facts = source.facts(peer)
+                peer_facts = facts_of(peer)
             except SourceError:
                 peer_facts = None
             peer_version = (peer_facts.sw_version if peer_facts is not None and peer_facts.sw_version else None) or (refs[peer].sw_version if peer in refs else None)

@@ -6,7 +6,7 @@ How it fits together: `plan` gives every firewall a list of steps (section 1). `
 
 ## 1. Which steps a firewall is given
 
-`planner._steps` ([planner.py:299]). The same function, run for a model firewall of each kind with default settings (`TARGET` is a version, `CURRENT` the one it runs now):
+`planner._steps` ([planner.py:302]). The same function, run for a model firewall of each kind with default settings (`TARGET` is a version, `CURRENT` the one it runs now):
 
 - **standalone**: `download TARGET` → `backup` → `install TARGET` → `reboot` → `verify`
 - **HA passive (its active peer is in the run)**: `download TARGET` → `backup` → `install TARGET` → `reboot` → `verify` → `verify HA`
@@ -675,7 +675,7 @@ Found by reading every decision in the code that looks at the config-sync or ses
 | module | function (line) | the condition, as written | verbs |
 |---|---|---|---|
 | checks | `ha_peer` (checks.py:152) | `problems == ['HA1 config sync'] and f.ha_session_sync and (f.ha_links_ok is not False)` | plan, upgrade, prepare |
-| prepare | `build` (prepare.py:143) | `facts.ha_config_sync is False` | prepare |
+| prepare | `build` (prepare.py:163) | `facts.ha_config_sync is False` | prepare |
 | executor | `_do` (executor.py:250) | `after['ha_config_sync'] is not True` | upgrade |
 | executor | `_do` (executor.py:270) | `not _band_ok(before or 0, after or 0, settings.failover_band)` | upgrade |
 | executor | `_do` (executor.py:294) | `got['ha_session_sync'] is not True` | upgrade |

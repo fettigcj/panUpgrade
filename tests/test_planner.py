@@ -26,7 +26,10 @@ class StagesWhileThePlanIsBuilt(unittest.TestCase):
             plan(fleet(pair("A1", "A2"), device("S1", version="20.1.4")))
         finally:
             progress.listen(None)
-        self.assertEqual(heard, ["Checking firewall 1 of 3: a1", "Checking firewall 2 of 3: a2", "Checking firewall 3 of 3: s1"])
+        self.assertEqual([h for h in heard if h.startswith("Checking")],
+                         ["Checking firewall 1 of 3: a1", "Checking firewall 2 of 3: a2", "Checking firewall 3 of 3: s1"])
+        reads = [h.split(":")[0] for h in heard if h.startswith("Reading")]       # read side by side, so the order they finish in is not fixed
+        self.assertEqual(sorted(reads), ["Reading firewall 1 of 3", "Reading firewall 2 of 3", "Reading firewall 3 of 3"])
 
     def test_only_the_selected_firewalls_are_counted(self):
         from panupgrade import progress
@@ -36,7 +39,7 @@ class StagesWhileThePlanIsBuilt(unittest.TestCase):
             plan(fleet(pair("A1", "A2"), device("S1", version="20.1.4")), Selection(serials=["S1"]))
         finally:
             progress.listen(None)
-        self.assertEqual(heard, ["Checking firewall 1 of 1: s1"])
+        self.assertEqual(heard, ["Reading firewall 1 of 1: s1", "Checking firewall 1 of 1: s1"])
 
     def test_reading_a_snapshot_says_how_far_it_has_got(self):
         from panupgrade import progress
@@ -47,8 +50,9 @@ class StagesWhileThePlanIsBuilt(unittest.TestCase):
             snapshot(fleet(pair("A1", "A2")), {"A1", "A2"})
         finally:
             progress.listen(None)
-        self.assertEqual(heard, ["Asking Panorama for the list of firewalls", "Reading firewall 1 of 2: a1", "Reading firewall 2 of 2: a2",
-                                 "Reading Panorama's version"])
+        self.assertEqual([h.split(":")[0] for h in heard],
+                         ["Asking Panorama for the list of firewalls", "Reading firewall 1 of 2", "Reading firewall 2 of 2", "Reading Panorama's version"])
+        self.assertEqual({h.split(": ")[1] for h in heard if h.startswith("Reading firewall")}, {"a1", "a2"})
 
 
 class HappyPaths(unittest.TestCase):

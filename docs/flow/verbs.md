@@ -47,16 +47,18 @@ flowchart TD
     n_panupgrade_planner__glob_any["planner._glob_any<br/><i>True when ``value`` matches any pattern, ignoring case. A pattern with</i>"]
     n_panupgrade_versions_Version_parse["versions.Version.parse"]
     n_panupgrade_sources_snapshot["sources.snapshot<br/><i>The source's current state in the fleet-file shape (what FakeFleet rea</i>"]
+    n_panupgrade_sources_read_facts["sources.read_facts<br/><i>Read the facts of several firewalls, up to ``workers`` at a time. Retu</i>"]
+    n_panupgrade_sources_read_facts_facts["facts<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_sources_snapshot_list_devices["list_devices<br/><i>one of: FakeFleet / OpSource / Source</i>"]
-    n_panupgrade_sources_snapshot_facts["facts<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_sources_snapshot_panorama_version["panorama_version<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_cli__report_list_devices["list_devices<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_cli__report --> n_panupgrade_planner_Selection_matches
     n_panupgrade_planner_Selection_matches --> n_panupgrade_planner__glob_any
     n_panupgrade_planner_Selection_matches --> n_panupgrade_versions_Version_parse
     n_panupgrade_cli__report --> n_panupgrade_sources_snapshot
+    n_panupgrade_sources_snapshot --> n_panupgrade_sources_read_facts
+    n_panupgrade_sources_read_facts -.-> n_panupgrade_sources_read_facts_facts
     n_panupgrade_sources_snapshot -.-> n_panupgrade_sources_snapshot_list_devices
-    n_panupgrade_sources_snapshot -.-> n_panupgrade_sources_snapshot_facts
     n_panupgrade_sources_snapshot -.-> n_panupgrade_sources_snapshot_panorama_version
     n_panupgrade_cli__report -.-> n_panupgrade_cli__report_list_devices
 ```
@@ -76,6 +78,8 @@ flowchart TD
     n_panupgrade_versions_Version_parse["versions.Version.parse"]
     n_panupgrade_planner_Selection_matches["planner.Selection.matches"]
     n_panupgrade_planner__glob_any["planner._glob_any<br/><i>True when ``value`` matches any pattern, ignoring case. A pattern with</i>"]
+    n_panupgrade_sources_read_facts["sources.read_facts<br/><i>Read the facts of several firewalls, up to ``workers`` at a time. Retu</i>"]
+    n_panupgrade_sources_read_facts_facts["facts<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_planner__device["planner._device"]
     n_panupgrade_checks_run_device_checks["checks.run_device_checks<br/><i>Run every check in order. Stops early only when the device cannot be r</i>"]
     n_panupgrade_checks__guard["checks._guard"]
@@ -128,7 +132,6 @@ flowchart TD
     n_panupgrade_planner__digest_body["planner._digest_body<br/><i>What an approval is bound to: everything a person decides on, and noth</i>"]
     n_panupgrade_planner_build_plan_list_devices["list_devices<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_planner_build_plan_panorama_version["panorama_version<br/><i>one of: FakeFleet / OpSource / Source</i>"]
-    n_panupgrade_planner_build_plan_facts["facts<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_planner_build_plan_panorama_clock["panorama_clock<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_cli__plan --> n_panupgrade_cli__build
     n_panupgrade_cli__build --> n_panupgrade_paths_load_rules
@@ -138,6 +141,8 @@ flowchart TD
     n_panupgrade_planner_build_plan --> n_panupgrade_planner_Selection_matches
     n_panupgrade_planner_Selection_matches --> n_panupgrade_planner__glob_any
     n_panupgrade_planner_Selection_matches --> n_panupgrade_versions_Version_parse
+    n_panupgrade_planner_build_plan --> n_panupgrade_sources_read_facts
+    n_panupgrade_sources_read_facts -.-> n_panupgrade_sources_read_facts_facts
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__device
     n_panupgrade_planner_build_plan --> n_panupgrade_checks_run_device_checks
     n_panupgrade_checks_run_device_checks --> n_panupgrade_checks__guard
@@ -227,7 +232,6 @@ flowchart TD
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__digest_body
     n_panupgrade_planner_build_plan -.-> n_panupgrade_planner_build_plan_list_devices
     n_panupgrade_planner_build_plan -.-> n_panupgrade_planner_build_plan_panorama_version
-    n_panupgrade_planner_build_plan -.-> n_panupgrade_planner_build_plan_facts
     n_panupgrade_planner_build_plan -.-> n_panupgrade_planner_build_plan_panorama_clock
 ```
 
@@ -277,6 +281,8 @@ flowchart TD
     n_panupgrade_versions_Version_parse["versions.Version.parse"]
     n_panupgrade_planner_Selection_matches["planner.Selection.matches"]
     n_panupgrade_planner__glob_any["planner._glob_any<br/><i>True when ``value`` matches any pattern, ignoring case. A pattern with</i>"]
+    n_panupgrade_sources_read_facts["sources.read_facts<br/><i>Read the facts of several firewalls, up to ``workers`` at a time. Retu</i>"]
+    n_panupgrade_sources_read_facts_facts["facts<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_planner__device["planner._device"]
     n_panupgrade_checks_run_device_checks["checks.run_device_checks<br/><i>Run every check in order. Stops early only when the device cannot be r</i>"]
     n_panupgrade_checks__guard["checks._guard"]
@@ -322,7 +328,6 @@ flowchart TD
     n_panupgrade_planner__digest_body["planner._digest_body<br/><i>What an approval is bound to: everything a person decides on, and noth</i>"]
     n_panupgrade_planner_build_plan_list_devices["list_devices<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_planner_build_plan_panorama_version["panorama_version<br/><i>one of: FakeFleet / OpSource / Source</i>"]
-    n_panupgrade_planner_build_plan_facts["facts<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_planner_build_plan_panorama_clock["panorama_clock<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_cli__upgrade --> n_panupgrade_cli__upgrade_execute
     n_panupgrade_cli__upgrade_execute --> n_panupgrade_cli_UpgradeBundle_ready
@@ -366,6 +371,8 @@ flowchart TD
     n_panupgrade_planner_build_plan --> n_panupgrade_planner_Selection_matches
     n_panupgrade_planner_Selection_matches --> n_panupgrade_planner__glob_any
     n_panupgrade_planner_Selection_matches --> n_panupgrade_versions_Version_parse
+    n_panupgrade_planner_build_plan --> n_panupgrade_sources_read_facts
+    n_panupgrade_sources_read_facts -.-> n_panupgrade_sources_read_facts_facts
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__device
     n_panupgrade_planner_build_plan --> n_panupgrade_checks_run_device_checks
     n_panupgrade_checks_run_device_checks --> n_panupgrade_checks__guard
@@ -419,7 +426,6 @@ flowchart TD
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__digest_body
     n_panupgrade_planner_build_plan -.-> n_panupgrade_planner_build_plan_list_devices
     n_panupgrade_planner_build_plan -.-> n_panupgrade_planner_build_plan_panorama_version
-    n_panupgrade_planner_build_plan -.-> n_panupgrade_planner_build_plan_facts
     n_panupgrade_planner_build_plan -.-> n_panupgrade_planner_build_plan_panorama_clock
     n_panupgrade_cli__upgrade_review --> n_panupgrade_cli__unfinished_run
 ```
@@ -461,6 +467,7 @@ flowchart TD
     n_panupgrade_planner_build_plan["planner.build_plan"]
     n_panupgrade_versions_Version_parse["versions.Version.parse"]
     n_panupgrade_planner_Selection_matches["planner.Selection.matches"]
+    n_panupgrade_sources_read_facts["sources.read_facts<br/><i>Read the facts of several firewalls, up to ``workers`` at a time. Retu</i>"]
     n_panupgrade_planner__device["planner._device"]
     n_panupgrade_checks_run_device_checks["checks.run_device_checks<br/><i>Run every check in order. Stops early only when the device cannot be r</i>"]
     n_panupgrade_planner__verdict["planner._verdict"]
@@ -479,7 +486,6 @@ flowchart TD
     n_panupgrade_planner__digest_body["planner._digest_body<br/><i>What an approval is bound to: everything a person decides on, and noth</i>"]
     n_panupgrade_planner_build_plan_list_devices["list_devices<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_planner_build_plan_panorama_version["panorama_version<br/><i>one of: FakeFleet / OpSource / Source</i>"]
-    n_panupgrade_planner_build_plan_facts["facts<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_planner_build_plan_panorama_clock["panorama_clock<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_cli__prepare_review["cli._prepare_review<br/><i>Read the fleet and say what prepare would do. Changes nothing. Returns</i>"]
     n_panupgrade_prepare_build["prepare.build"]
@@ -522,6 +528,7 @@ flowchart TD
     n_panupgrade_planner_build_plan --> n_panupgrade_versions_Version_parse
     n_panupgrade_planner_build_plan --> n_panupgrade_paths_load_rules
     n_panupgrade_planner_build_plan --> n_panupgrade_planner_Selection_matches
+    n_panupgrade_planner_build_plan --> n_panupgrade_sources_read_facts
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__device
     n_panupgrade_planner_build_plan --> n_panupgrade_checks_run_device_checks
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__verdict
@@ -540,7 +547,6 @@ flowchart TD
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__digest_body
     n_panupgrade_planner_build_plan -.-> n_panupgrade_planner_build_plan_list_devices
     n_panupgrade_planner_build_plan -.-> n_panupgrade_planner_build_plan_panorama_version
-    n_panupgrade_planner_build_plan -.-> n_panupgrade_planner_build_plan_facts
     n_panupgrade_planner_build_plan -.-> n_panupgrade_planner_build_plan_panorama_clock
     n_panupgrade_cli__prepare --> n_panupgrade_cli__prepare_review
     n_panupgrade_cli__prepare_review --> n_panupgrade_paths_load_rules
@@ -548,6 +554,7 @@ flowchart TD
     n_panupgrade_prepare_build --> n_panupgrade_paths_load_rules
     n_panupgrade_prepare_build --> n_panupgrade_versions_Version_parse
     n_panupgrade_prepare_build --> n_panupgrade_planner_Selection_matches
+    n_panupgrade_prepare_build --> n_panupgrade_sources_read_facts
     n_panupgrade_prepare_build --> n_panupgrade_paths_compute
     n_panupgrade_paths_compute --> n_panupgrade_versions_Version_parse
     n_panupgrade_paths_compute --> n_panupgrade_releases_default

@@ -498,7 +498,7 @@ def _report(args):
         refs = live.list_devices()
         chosen = [r for r in refs if _selection(args).matches(r)]
         include = {r.serial for r in chosen} | {r.peer_serial for r in chosen if r.peer_serial}
-        snap = snapshot(live, include)
+        snap = snapshot(live, include, workers=_load_settings(args).max_parallel)
         snap["devices"] = [d for d in snap["devices"] if d["serial"] in include]
     except (SourceError, OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -706,7 +706,7 @@ def _backend_and_source(args):
         refs = live.list_devices()
         chosen = [r for r in refs if _selection(args).matches(r)]
         include = {r.serial for r in chosen} | {r.peer_serial for r in chosen if r.peer_serial}
-        data = snapshot(live, include)
+        data = snapshot(live, include, workers=_load_settings(args).max_parallel)
         label = "DRY RUN" if args.dry_run else "LIVE"
         print(f"read {len(include)} of {len(refs)} managed devices: the {len(chosen)} selected plus their HA peers; "
               f"the other {len(refs) - len(include)} were not touched")

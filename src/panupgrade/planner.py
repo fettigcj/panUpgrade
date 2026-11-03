@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 
 from . import __version__, checks, paths, progress
 from .model import (ERROR, EXCLUDED, FAIL, INFO, NO_DATA, NOT_APPLICABLE, SAID_ONCE, SKIP, WARN, CheckResult)
-from .sources import SourceError
+from .sources import SourceError, read_facts
 from .versions import Version, VersionError
 
 
@@ -102,6 +102,9 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
     devices = {}
     ctxs = {}
     wanted = sum(1 for r in refs if selection.matches(r))
+    names = {r.serial: r.hostname for r in refs}
+    read = read_facts(source, [r.serial for r in refs if selection.matches(r) and r.connected], settings.max_parallel,     # the slow part, side by side
+                      lambda done, count, serial: progress.phase(f"Reading firewall {done} of {count}: {names[serial]}"))
     checked = 0
     for ref in refs:
         if not selection.matches(ref):
@@ -112,10 +115,10 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
         checked += 1
         progress.phase(f"Checking firewall {checked} of {wanted}: {ref.hostname}")
         if ref.connected:
-            try:
-                facts = source.facts(ref.serial)
-            except SourceError as exc:
-                error = str(exc)
+            if isinstance(read[ref.serial], SourceError):
+                error = str(read[ref.serial])
+            else:
+                facts = read[ref.serial]
         peer = by_serial.get(getattr(ref, "peer_serial", None))
         ctx = checks.Context(ref, facts, target, settings, rules, pano_version, error, panorama_clock=source.panorama_clock(),
                              releases=releases, peer_version=peer.sw_version if peer else None)

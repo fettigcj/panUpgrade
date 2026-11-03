@@ -231,10 +231,25 @@ def parse_ha(op):
 def collect_facts(op, peer_serial=None):
     """Run every read-only query; whatever fails or is missing stays None. Returns (Facts, problems)."""
     facts, problems = Facts(), []
+    asked = {}
+
+    def once(command, **kw):
+        """``show system info`` feeds both the version and the content versions: it is asked once, not twice."""
+        if command != "show system info" or kw:
+            return op(command, **kw)
+        if command not in asked:
+            try:
+                asked[command] = (op(command), None)
+            except XmlOpError as exc:
+                asked[command] = (None, exc)
+        answer, error = asked[command]
+        if error is not None:
+            raise error
+        return answer
 
     def attempt(label, fn, apply):
         try:
-            apply(fn(op))
+            apply(fn(once))
         except (XmlOpError, ET.ParseError) as exc:
             problems.append(f"{label}: {exc}")
 

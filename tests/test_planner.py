@@ -212,6 +212,57 @@ class PendingChanges(unittest.TestCase):
         self.assertEqual(self.pend(pending_changes="ignore"), "ready")
 
 
+class BlockedPeer(unittest.TestCase):
+    """Half a pair is not upgraded against a problem the tool has just found with the other half."""
+
+    def blocked_passive(self, **over):
+        d = pair("A1", "A2")
+        d[1]["facts"]["pending_changes"] = True                    # A2 (passive) is blocked
+        return plan(fleet(d), **over)
+
+    def test_the_active_member_is_held_when_its_passive_peer_is_blocked_and_says_why(self):
+        p = self.blocked_passive()
+        self.assertEqual(dev(p, "A2")["verdict"], "blocked")
+        a1 = dev(p, "A1")
+        self.assertEqual(a1["verdict"], "blocked")
+        reason = next(r["reason"] for r in a1["results"] if r["check"] == "peer_blocked")
+        self.assertIn("a2", reason)
+        self.assertIn("pending_changes", reason)
+        self.assertIn("hand the traffic", reason)
+        self.assertEqual(p["order"], [])                           # nothing at all is planned for this pair
+
+    def test_the_passive_member_is_held_when_its_active_peer_is_blocked(self):
+        d = pair("A1", "A2")
+        d[0]["facts"]["pending_changes"] = True                    # A1 (active) is blocked
+        p = plan(fleet(d))
+        self.assertEqual((dev(p, "A1")["verdict"], dev(p, "A2")["verdict"]), ("blocked", "blocked"))
+        self.assertIn("two releases", next(r["reason"] for r in dev(p, "A2")["results"] if r["check"] == "peer_blocked"))
+
+    def test_the_setting_can_let_it_through_as_a_caution(self):
+        p = self.blocked_passive(blocked_peer="caution")
+        self.assertEqual(dev(p, "A1")["verdict"], "caution")
+        self.assertIn("active_before_passive", [c["code"] for c in p["cautions"]])
+        self.assertEqual(p["order"], [["A1"]])
+
+    def test_a_peer_that_is_only_left_out_of_the_selection_is_still_just_a_caution(self):
+        p = plan(fleet(pair("A1", "A2")), Selection(serials=["A1"]))
+        self.assertEqual(dev(p, "A1")["verdict"], "caution")
+        self.assertIn("active_before_passive", [c["code"] for c in p["cautions"]])
+
+    def test_a_peer_that_cannot_be_read_holds_the_other_member_too(self):
+        d = pair("A1", "A2")
+        d[1]["collect_error"] = "device is slow to answer"
+        p = plan(fleet(d))
+        self.assertEqual(dev(p, "A2")["verdict"], "skipped")        # no data: it is left alone
+        self.assertEqual(dev(p, "A1")["verdict"], "blocked")
+
+    def test_other_pairs_are_not_affected(self):
+        d = pair("A1", "A2")
+        d[1]["facts"]["pending_changes"] = True
+        p = plan(fleet(d, pair("B1", "B2")))
+        self.assertEqual(p["order"], [["B2", "B1"]])
+
+
 class SessionBaseline(unittest.TestCase):
     def test_missing_session_count_is_no_data_not_a_crash(self):
         d = pair("A1", "A2")
@@ -246,10 +297,11 @@ class HaCautions(unittest.TestCase):
         p = plan(fleet(d), Selection(serials=["A1"]))
         self.assertEqual(dev(p, "A1")["verdict"], "ready")
 
-    def test_blocked_passive_makes_active_a_caution(self):
+    def test_blocked_passive_holds_the_active_by_default_and_only_cautions_it_when_asked(self):
         d = pair("A1", "A2")
         d[1]["facts"]["pending_changes"] = True
-        self.assertEqual(dev(plan(fleet(d)), "A1")["verdict"], "caution")
+        self.assertEqual(dev(plan(fleet(d)), "A1")["verdict"], "blocked")
+        self.assertEqual(dev(plan(fleet(d), blocked_peer="caution"), "A1")["verdict"], "caution")
 
     def test_unhealthy_ha_sync_blocks(self):
         d = pair("A1", "A2")

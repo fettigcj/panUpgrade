@@ -23,7 +23,7 @@ BUTTON_LABELS = ["Save", "Save & Exit", "Quit without saving"]
 SAVE_ONLY, SAVE_EXIT, QUIT = 0, 1, 2
 
 SECTIONS = [
-    ("HA behaviour", ["failover_band", "post_upgrade_band", "restore_roles", "sync_to_peer", "sync_timeout_s", "ha_config_unsynced",
+    ("HA behaviour", ["failover_band", "post_upgrade_band", "restore_roles", "sync_to_peer", "sync_timeout_s", "ha_config_unsynced", "blocked_peer",
                       "sync_content", "content_settle_s"]),
     ("Panorama range", ["spread_limit", "panorama_compare"]),
     ("Failure handling", ["max_failures", "max_parallel", "api_rate_per_s", "pending_changes"]),
@@ -55,6 +55,11 @@ INFO = {
                            "Only used when sync_to_peer is Disable; with Both or UpgradeOnly the tool syncs the pair itself.",
                            {"block": "refuse to plan such a pair at all, so nobody runs into it unread",
                             "caution": "plan it anyway, flag that moment on the active member, and accept it when the batch is prepared"}),
+    "blocked_peer": ("What to do with an HA member that could be upgraded when the other member of its pair is blocked by a check (or "
+                     "could not be read). The active member's upgrade hands the traffic to its peer for the whole reboot, and either "
+                     "upgrade leaves the pair on two releases. A peer that is only not selected, or already on the target, is not affected.",
+                     {"block": "the default. Hold this member too, saying why, so half a pair is never upgraded against a problem",
+                      "caution": "plan it anyway and flag it, to be accepted when the batch is prepared"}),
     "sync_content": ("Dynamic content (applications and threats, antivirus, WildFire). HA members should run the same versions, "
                      "and a mismatch holds up the configuration sync.",
                      {"never": "leave content as it is",

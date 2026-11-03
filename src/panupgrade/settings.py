@@ -43,6 +43,12 @@ class Settings:
     # when the batch is prepared; the passive's own upgrade is unaffected. Only used when sync_to_peer = Disable: with Both or
     # UpgradeOnly the tool syncs the pair itself instead.
     ha_config_unsynced: str = "block"
+    # A pair whose HA peer is BLOCKED by a check (or could not be read at all). The active member's upgrade hands traffic to the peer
+    # for the whole reboot, and either member's upgrade leaves the pair on two releases, so the tool does not go ahead with half of a
+    # pair whose other half it has just found a problem with. block (the default): the member that could be upgraded is held too, with
+    # the peer's reason. caution: it is planned anyway and only flagged. A peer that is merely not selected, or already on the target,
+    # is not a problem and is only flagged either way.
+    blocked_peer: str = "block"
     # Dynamic content (the cloud-delivered security services: applications/threats, antivirus, WildFire). HA peers should run
     # the same versions, and a mismatch gates the config sync. never | prepare (install the latest on both members as part of the
     # approved preparation; the approval prompt lists it and says it is outside the customer's own content schedule).
@@ -79,6 +85,9 @@ class Settings:
         if self.ha_config_unsynced == "caution":
             out.append("ha_config_unsynced=caution: a pair whose passive config is not synchronized is planned anyway; when the active member "
                        "suspends, the passive takes over running its own, different configuration.")
+        if self.blocked_peer == "caution":
+            out.append("blocked_peer=caution: a member whose HA peer is blocked by a check is planned anyway; the active member hands traffic to "
+                       "that peer while it reboots.")
         if self.allow_downgrade:
             out.append("allow_downgrade=true: firewalls running a newer release than the target are installed down to it (across feature "
                        "releases too; the newer release's configuration may not load on the older one).")
@@ -96,6 +105,7 @@ _CHOICES = {
     "sync_to_peer": ("Disable", "Both", "UpgradeOnly"),
     "sync_content": ("never", "prepare"),
     "ha_config_unsynced": ("block", "caution"),
+    "blocked_peer": ("block", "caution"),
 }
 
 

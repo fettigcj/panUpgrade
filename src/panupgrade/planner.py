@@ -237,6 +237,16 @@ def _apply_pair_rules(devices, ctxs, by_serial, target):
             peer_differs = True
         if not peer_differs or peer in plannable:
             continue          # the peer is already on the target, or is in this run too
+        problem = _peer_problem(devices.get(peer))
+        if problem and ctx.settings.blocked_peer == "block":
+            if is_active:
+                said = ("it would hand the traffic to that peer while it reboots")
+            else:
+                said = ("upgrading only this member would leave the pair on two releases with its active peer unable to follow")
+            _add(dev, CheckResult("peer_blocked", FAIL,
+                                  f"held: its HA peer ({peer_ref.hostname}) is {problem}; {said}. Fix the peer and plan again, or set "
+                                  f"blocked_peer to caution to go ahead anyway"))
+            continue
         if is_active:
             _add(dev, CheckResult(
                 "active_before_passive", WARN,
@@ -250,6 +260,20 @@ def _apply_pair_rules(devices, ctxs, by_serial, target):
                 f"so the pair will run different versions until the peer is upgraded too (for example after you swap roles "
                 f"by hand and run the tool again for the other half).",
                 ack="lopsided_pair"))
+
+
+def _peer_problem(peer):
+    """Why an HA peer that is not in this run is a problem (words that fit "its peer is ..."), or "" when it is merely left out."""
+    if peer is None:
+        return ""
+    if peer["verdict"] == "blocked":
+        found = next((r for r in peer["results"] if r["status"] in (FAIL, ERROR)), None) or next(
+            (r for r in peer["results"] if r["status"] == SKIP and r.get("kind") == NO_DATA), None)
+        return "blocked" + (f" ({found['check']}: {found['reason']})" if found else "")
+    if peer["verdict"] == "skipped" and peer["skip_kind"] == NO_DATA:
+        found = next((r for r in peer["results"] if r["status"] == SKIP and r.get("kind") == NO_DATA), None)
+        return "unreadable" + (f" ({found['reason']})" if found else "")
+    return ""
 
 
 def _planned_versions(devices, refs, target):

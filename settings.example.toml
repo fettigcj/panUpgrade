@@ -22,6 +22,7 @@ pending_changes    = "block"   # uncommitted candidate config on a firewall: blo
 
 # ---- Downgrades ----------------------------------------------------------------------------------------------
 delete_unneeded_images         = false   # prepare deletes PAN-OS images this upgrade does not need (keeps running, base images, path, target)
+blocked_peer                   = "block"   # block | caution: a member whose HA peer is blocked by a check is held too (block) or only flagged
 allow_downgrade                = false   # install a release older than the one running (across feature releases too, by the skip rule)
 
 # ---- Images, disk, time --------------------------------------------------------------------------------------

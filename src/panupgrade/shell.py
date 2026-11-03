@@ -765,7 +765,7 @@ class TargetScreen(Screen):
             else:
                 item = items[self.at]
                 self.trail.append((item["key"], self.at))
-                if len(self.trail) == 3 and len(item["rows"]) == 1:        # a maintenance release with no hotfix: nothing more to choose
+                if len(self.trail) == 3 and len(item["rows"]) == 1 and not item["rows"][0][0].hotfix:      # no hotfix of it exists: nothing more to choose
                     only = item["rows"][0][1]["version"]
                     self.trail.pop()
                     self.shell.session.target = only

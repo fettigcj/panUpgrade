@@ -6,8 +6,10 @@
 Two ways to cross feature releases, both from Palo Alto's documentation (the knowledge-base article on base images, the "Determine the
 Upgrade Path" pages, and the Skip Software Version Upgrade feature of PAN-OS 11.0):
 
-* **skip** (from 10.1 on): install only the target. Up to three feature releases may be skipped. The target's base image and the base
-  image of every release skipped over must be on the firewall (downloaded, never installed).
+* **skip** (from 10.1 on): install only the target. Up to three feature releases may be skipped. The target's base image must be on
+  the firewall (downloaded, never installed). Whether the bases of the releases skipped over must be too is not settled: the
+  LIVEcommunity example got by without them, the owner's reading of the documentation says they are needed. ``skip.download_skipped_bases``
+  chooses (off: they are not downloaded; the lab run of 10.2.10 -> 12.1.10-h2 is the test).
 * **legacy** (below 10.1): step through every feature release: download its base image, install the latest preferred maintenance
   release of it, reboot. A path may be legacy up to 10.1 and then skip (10.0 -> 10.1 -> 11.1).
 
@@ -18,7 +20,7 @@ just the target.
 Rules (``data/path_rules.json``)::
 
     {"verified": true,
-     "skip": {"from": "10.1", "max_skipped": 3},
+     "skip": {"from": "10.1", "max_skipped": 3, "download_skipped_bases": false},
      "legacy": {"preferred": {"9.1": "9.1.19"},        # the maintenance release to install at each legacy stop (pinned: never guessed)
                 "minimum_build": {"8.0": "8.0.20"}},   # a build the firewall must reach before it leaves that feature release
      "base_image": {"11.0": "11.0.1"}}                  # only when the firewall's own list is not available
@@ -130,6 +132,7 @@ def compute(current, target, rules, allow_downgrade=False, bases=None, releases=
     skip = rules.get("skip", {})
     skip_from = tuple(int(n) for n in skip.get("from", "10.1").split("."))
     max_skipped = int(skip.get("max_skipped", 3))
+    with_skipped_bases = bool(skip.get("download_skipped_bases", False))
     name = lambda key: f"{key[0]}.{key[1]}"
 
     def base_step(key):
@@ -139,8 +142,11 @@ def compute(current, target, rules, allow_downgrade=False, bases=None, releases=
         lo, hi = sorted((at_of[a], at_of[b]))
         return ordered[lo + 1:hi]
 
+    def skipped_bases(a, b):
+        return [base_step(key) for key in between(a, b)] if with_skipped_bases else []
+
     def target_steps(a):
-        steps = [base_step(key) for key in between(a, tgt.feature_key)]
+        steps = skipped_bases(a, tgt.feature_key)
         if str(tgt) != base_for(tgt.feature, rules, bases):
             steps.append(base_step(tgt.feature_key))
         return steps + final
@@ -153,7 +159,7 @@ def compute(current, target, rules, allow_downgrade=False, bases=None, releases=
                                   kind="no_data", verified=verified)
             steps = target_steps(cur.feature_key)
             return PathResult(True, steps, f"downgrade {cur.feature} -> {tgt.feature} by skipping {len(between(cur.feature_key, tgt.feature_key))} "
-                                           f"release(s); the base images are downloaded, not installed", verified=False)
+                                           f"release(s); only the target's base image is downloaded", verified=False)
 
         legacy = rules.get("legacy", {})
         steps, here, here_version, hops = [], cur.feature_key, cur, []
@@ -178,7 +184,7 @@ def compute(current, target, rules, allow_downgrade=False, bases=None, releases=
             nxt = ordered[at_of[here] + 1] if here < skip_from else ordered[at_of[here] + max_skipped + 1]
             if nxt == tgt.feature_key:
                 break
-            steps += [base_step(key) for key in between(here, nxt)]
+            steps += skipped_bases(here, nxt)
             steps.append(base_step(nxt))
             install_preferred(nxt)
             hops.append(name(nxt))
@@ -186,7 +192,9 @@ def compute(current, target, rules, allow_downgrade=False, bases=None, releases=
         steps += target_steps(here)
         skipped_over = [name(k) for k in between(here, tgt.feature_key)]
         via = f"via {' -> '.join([cur.feature] + hops + [tgt.feature])}"
-        reason = (f"{via}" + (f"; skips {', '.join(skipped_over)} (their base images are downloaded, not installed)" if skipped_over else ""))
+        reason = (f"{via}" + (f"; skips {', '.join(skipped_over)} ("
+                              + ("their base images are downloaded, not installed" if with_skipped_bases else "no image of theirs is downloaded") + ")"
+                              if skipped_over else ""))
         return PathResult(True, steps, reason, verified=verified)
     except _NoData as exc:
         return PathResult(False, reason=str(exc), kind="no_data", verified=verified)

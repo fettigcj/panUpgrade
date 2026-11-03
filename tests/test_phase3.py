@@ -249,12 +249,15 @@ class DeletingUnneededImages(unittest.TestCase):
         self.assertIn("delete image 19.1.0", expected)
         self.assertIn(f"download {TARGET}", expected)
 
-    def test_what_to_keep_covers_a_skip_path_with_the_bases_in_between_and_a_recalled_base(self):
+    def test_what_to_keep_covers_a_skip_path_and_a_recalled_base(self):
         from panupgrade import paths
         from tests.support import TEST_RELEASES
         steps = paths.compute("20.2.3", "21.1.2", TEST_RULES, releases=TEST_RELEASES).steps
         keep = paths.keep_images(TEST_RULES, "20.2.3", steps, "21.1.2")
-        self.assertTrue({"20.2.3", "20.2.0", "21.0.0", "21.1.2", "21.1.0"} <= keep, keep)
+        self.assertEqual(keep, {"20.2.3", "20.2.0", "21.1.2", "21.1.0"})
+        with_bases = {**TEST_RULES, "skip": {**TEST_RULES["skip"], "download_skipped_bases": True}}
+        steps = paths.compute("20.2.3", "21.1.2", with_bases, releases=TEST_RELEASES).steps
+        self.assertIn("21.0.0", paths.keep_images(with_bases, "20.2.3", steps, "21.1.2"))
         recalled = {"20.2": "20.2.1"}
         keep = paths.keep_images(TEST_RULES, "20.2.3", [], "20.2.9", recalled)
         self.assertIn("20.2.1", keep)

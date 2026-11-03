@@ -3,7 +3,8 @@
   "source": "Palo Alto Networks: the knowledge-base article on the base image for skip upgrades (KCSArticleDetail id kA14u0000008WwHCAU), the 'Determine the Upgrade Path' pages of the PAN-OS 10.2 and 11.1 upgrade guides, the Skip Software Version Upgrade feature (PAN-OS 11.0 release notes), and the LIVEcommunity thread 'Upgrade PAN OS from 10.1 to 11.1'; read 2026-11-02",
   "skip": {
     "from": "10.1",
-    "max_skipped": 3
+    "max_skipped": 3,
+    "download_skipped_bases": false
   },
   "legacy": {
     "preferred": {},

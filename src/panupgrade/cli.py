@@ -888,7 +888,7 @@ def _prepare_review(args, style):
     for t in plan["content_tasks"]:
         print(style.line("start", f"{t['hostname']}: install the latest content (has {t['have']}; {t['for_version']} needs {t['needed']} or newer)"))
     for line in prepare_mod.deletion_lines(plan):
-        print(style.line("warn", line))
+        print(style.line("info", line))
     for d in plan["downloads"]:
         print(style.line("start", f"{d['hostname']}: download {d['version']}"))
     for c in plan["content_report"]:

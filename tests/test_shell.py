@@ -1779,7 +1779,7 @@ class ThePrepareRunFirewallByFirewall(ShellCase):
         self.assertIn("1 problem reported, 1 warning(s)", text)
         self.assertIn("ok fw-two + fw-one", text)                                  # the firewalls' own steps did succeed
         self.assertIn("[FAIL] fw-three: BLOCKED - 3584 MB free", text)             # and the fleet's log (shown first) says what is wrong
-        self.assertIn("Everything it printed, in order:", text)
+        self.assertNotIn("download 10.2.3  ok", text.split("|", 1)[1] if "|" in text else "")         # the whole-fleet log is a summary, not the output
 
     def test_the_stage_the_run_is_in_shows_beside_the_whole_fleet_while_the_firewalls_are_done(self):
         gate, begun = threading.Event(), threading.Event()
@@ -1800,6 +1800,84 @@ class ThePrepareRunFirewallByFirewall(ShellCase):
         text = self.text(ui, 130, 30)
         self.assertIn(">> Whole fleet", text)
         self.assertIn("Post-preparation verifications: reading the fleet again", text)
+        gate.set(); wait(ui)
+
+    def test_the_whole_fleet_entry_is_a_summary_with_the_problems_the_warnings_and_the_stages_not_the_whole_output(self):
+        def script(bundle):
+            bundle.step("S3", "download 10.2.3", "started")
+            print("a line of plain output that only the combined view should carry")
+            progress.phase("Post-preparation verifications: reading the fleet again")
+            progress.finding("fail", "fw-three: BLOCKED - 3584 MB free")
+            progress.finding("warn", "the batch may be short")
+        ui, bundle, gate = self.run_with(script)
+        gate.set(); wait(ui)
+        text = self.text(ui, 130, 30)
+        self.assertIn("Problems (1)", text)
+        self.assertIn("Warnings (1)", text)
+        self.assertIn("Stages", text)
+        self.assertIn("Post-preparation verifications: reading the fleet again", text)
+        self.assertNotIn("a line of plain output", text)
+        ui.press("v")
+        self.assertIn("a line of plain output", self.text(ui, 130, 30))
+
+    def test_tab_moves_the_keys_between_the_buttons_the_list_and_the_log_and_the_log_scrolls_a_line_at_a_time(self):
+        def script(bundle):
+            for n in range(60):
+                bundle.step("S3", f"step {n}", "started"); bundle.step("S3", f"step {n}", "ok")
+        ui, bundle, gate = self.run_with(script)
+        screen = ui.screen
+        ui.press("down"); ui.press("down")                                   # the unit with the long log (past the whole fleet and the pair)
+        self.assertEqual(screen.zone, "buttons")
+        ui.press("tab")
+        self.assertEqual(screen.zone, "list")
+        ui.press("up")                                                       # in the list, Up / Down still choose the unit
+        self.assertEqual(screen.unit_at, 1)
+        ui.press("down")
+        self.assertEqual(screen.unit_at, 2)
+        ui.press("enter")                                                    # Enter in the list goes into the log
+        self.assertEqual(screen.zone, "log")
+        ui.press("up")
+        self.assertIsNotNone(screen.log_offset)
+        first = screen.log_offset
+        ui.press("up")
+        self.assertEqual(screen.log_offset, first - 1)                       # one line per key
+        ui.press("pgup")
+        self.assertLess(screen.log_offset, first - 1)
+        ui.press("home")
+        self.assertEqual(screen.log_offset, 0)
+        ui.press("end")
+        self.assertIsNone(screen.log_offset)                                 # back to following the newest line
+        self.assertEqual(screen.unit_at, 2)                                  # scrolling did not move the chosen unit
+        ui.press("left")
+        self.assertEqual(screen.zone, "list")
+        ui.press("tab"); ui.press("tab")
+        self.assertEqual(screen.zone, "buttons")
+        gate.set(); wait(ui)
+
+    def test_enter_and_space_do_not_press_a_button_while_the_list_or_the_log_has_the_keys(self):
+        def script(bundle):
+            bundle.step("S3", "download 10.2.3", "started")
+        ui, bundle, gate = self.run_with(script)
+        ui.press("tab")                                                      # the list
+        ui.press("tab")                                                      # the log
+        ui.press("enter"); ui.press(" ")
+        self.assertEqual(len([j for j in ui.jobs if j.running and j.changes]), 1)       # the run was not stopped or restarted
+        self.assertEqual(ui.screen.zone, "log")
+        ui.press("esc")
+        self.assertEqual(ui.screen.zone, "list")
+        self.assertEqual(ui.screen.name, "prepare")                          # Esc backed up a pane; it did not leave the screen
+        gate.set(); wait(ui)
+
+    def test_a_long_list_of_units_keeps_the_chosen_one_on_screen(self):
+        def script(bundle):
+            for n in range(40):
+                bundle.step("S3", f"step {n}", "started")
+        ui, bundle, gate = self.run_with(script)
+        screen = ui.screen
+        screen.units = lambda: [[{"serial": f"X{n}", "hostname": f"unit-{n:02d}", "expected": []}] for n in range(30)]
+        for _ in range(25):
+            ui.press("down")
+        self.assertIn("unit-24", self.text(ui, 130, 24))
         gate.set(); wait(ui)
 
     def test_the_logs_can_still_be_read_after_the_run(self):

@@ -1098,10 +1098,12 @@ class UnitView:
         super().__init__(shell)
         self.kept = None                                  # the bundle of the last real run, so its log can still be read after it ends
         self.view, self.unit_at, self.unit_pinned, self.log_offset = "units", 0, False, None
+        self.zone = "buttons"                             # where the keys go: the buttons (as ever), the list of units, or the log beside it
 
     def reset(self):
         if not self.busy():
             self.kept = None
+            self.zone = "buttons"
         super().reset()
 
     def _ran(self, job):
@@ -1122,9 +1124,21 @@ class UnitView:
         units = self.units()
         return [FLEET] + units if units else []
 
-    def fleet_output(self):
-        job = self.job
-        return [] if job is None else job.log()
+    def fleet_summary(self):
+        """What belongs to no one firewall, and only that: the problems and warnings the run reported, then the stages it went through.
+        Everything it printed is the combined output (V)."""
+        failures, warnings = self.fleet_problems()
+        lines = []
+        if failures:
+            lines += [("error", f"Problems ({len(failures)})")] + [("error", f"  {line}") for line in failures] + [("", "")]
+        if warnings:
+            lines += [("warn", f"Warnings ({len(warnings)})")] + [("warn", f"  {line}") for line in warnings] + [("", "")]
+        stages = [(when, words) for when, words, is_stage in (self.job.activity if self.job is not None else []) if is_stage]
+        if stages:
+            lines += [("bold", "Stages")] + [("", f"  {when}  {words}") for when, words in stages] + [("", "")]
+        if not failures and not warnings and self.stage != "running":
+            lines.append(("ok", "Nothing was reported beyond the firewalls' own steps."))
+        return lines + [("dim", "Everything it printed: View: combined output (V).")]
 
     def fleet_problems(self):
         """(failures, warnings): what the run itself reported, as data, so a blocked plan or a failed verification is never only in the text."""
@@ -1149,11 +1163,7 @@ class UnitView:
     def unit_log(self, unit):
         """The styled lines shown for one entry of the list."""
         if unit is FLEET:
-            failures, warnings = self.fleet_problems()
-            lines = [("error", line) for line in failures] + [("warn", line) for line in warnings]
-            if lines:
-                lines += [("", ""), ("dim", "Everything it printed, in order:")]
-            return lines + [("", line) for line in self.fleet_output()] or [("dim", "(nothing has happened here yet)")]
+            return self.fleet_summary()
         return [self.event_line(unit, when, rec) for when, rec in self.unit_events(unit)] or [("dim", "(nothing has happened here yet)")]
 
     def unit_events(self, unit):
@@ -1224,26 +1234,37 @@ class UnitView:
         if not units:
             return None
         at = self.shown_unit(units)
+        zone = self.zone
         listing = []
         for n, unit in enumerate(units):
             state, words = self.unit_state(unit)
             mark = {"waiting": ("dim", ".. "), "idle": ("dim", ".. "), "running": ("warn", ">> "), "done": ("ok", "ok "), "failed": ("error", "!! "),
                     "stopped": ("error", "-- "), "warn": ("warn", "?? ")}[state]
             label = " + ".join(d["hostname"] for d in unit)
-            listing += [[("focus" if n == at else "bold", f" {'>' if n == at else ' '}"), mark, ("bold", label)],
+            listing += [[("focus" if n == at and zone != "log" else "bold", f" {'>' if n == at else ' '}"), mark, ("bold", label)],
                         [("", "     "), (mark[0] if state != "waiting" else "dim", words)]]
         unit = units[at]
         state, words = self.unit_state(unit)
         log = self.unit_log(unit)
         left = 40
         space = max(room - 3, 2)
+        self.visible = space
         end = max(len(log) - space, 0)
         start = end if self.log_offset is None else max(0, min(self.log_offset, end))
-        detail = [[("bold", f" {' + '.join(d['hostname'] for d in unit)}"), ("dim", f"   {state}: {words}")], []]
+        title = " + ".join(d["hostname"] for d in unit)
+        detail = [[("focus" if zone == "log" else "bold", f" {title} "), ("dim", f"   {state}: {words}")], []]
         detail += [[(style, " " + text)] for style, text in log[start:start + space]]
-        detail.append([("dim", f" lines {start + 1}-{min(start + space, len(log))} of {len(log)}  (PgUp / PgDn scroll)")] if len(log) > space else [])
+        if len(log) > space:
+            how = "Up / Down / PgUp / PgDn scroll; Left or Tab goes back" if zone == "log" else "Tab: scroll this log"
+            detail.append([("dim", f" lines {start + 1}-{min(start + space, len(log))} of {len(log)}  ({how})")])
+        elif zone == "log":
+            detail.append([("dim", " (all of it is showing; Left or Tab goes back)")])
+        else:
+            detail.append([])
+        keep = max(room // 2, 1) if width >= 100 else max(room // 2, 2)               # units that fit, two rows each
+        top = max(0, min(at - keep // 2, len(units) - keep))
+        listing = listing[2 * top:2 * (top + keep)]
         if width < 100:                                   # two columns do not fit: the list, then the log
-            listing = [row for row in listing][:max(room // 2, 2)]
             return (listing + [[]] + detail)[:room]
         rows = []
         for n in range(room):
@@ -1254,6 +1275,7 @@ class UnitView:
 
     def toggle_view(self):
         self.view = "text" if self.view == "units" else "units"
+        self.zone = "buttons"
 
     def buttons(self):
         out = super().buttons()
@@ -1261,6 +1283,8 @@ class UnitView:
         if self.stage in ("running", "done") and source is not None and (self.stage == "running" or source.events_snapshot()):
             out.insert(len(out) - 1, ("View: combined output" if self.view == "units" else "View: by firewall", self.toggle_view))
         return out
+
+    ZONES = ["buttons", "list", "log"]
 
     def press(self, key):
         if self.stage in ("running", "done") and self.source() is not None:
@@ -1270,11 +1294,27 @@ class UnitView:
             if self.showing_units():
                 units = self.all_units()
                 at = self.shown_unit(units) if units else 0
+                zone = self.zone
+                if key in ("tab", "shift-tab"):                                  # buttons -> the list -> the log -> the buttons
+                    self.zone = self.ZONES[(self.ZONES.index(zone) + (1 if key == "tab" else -1)) % 3]
+                    return None
+                if zone == "list" and key in ("right", "enter"):
+                    self.zone = "log"
+                    return None
+                if zone in ("list", "log") and key in ("left", "esc"):
+                    self.zone = "buttons" if zone == "list" else "list"
+                    return None
+                if zone == "log":
+                    if key in ("up", "down", "pgup", "pgdn", "home", "end") and units:
+                        self._scroll_log(key, units[at])
+                    return None
                 if key in ("up", "down") and units:
                     self.unit_at, self.unit_pinned, self.log_offset = max(0, min(at + (1 if key == "down" else -1), len(units) - 1)), True, None
                     return None
-                if key in ("pgup", "pgdn", "home", "end"):
-                    self._scroll_log(key, units[at] if units else None)
+                if key in ("pgup", "pgdn", "home", "end") and units:
+                    self._scroll_log(key, units[at])
+                    return None
+                if zone == "list":
                     return None
         return super().press(key)
 
@@ -1284,9 +1324,9 @@ class UnitView:
         total = len(self.unit_log(unit)) if unit else 0
         end = max(total - self.visible, 0)
         at = end if self.log_offset is None else min(self.log_offset, end)
-        at = max(0, {"pgup": at - self.visible, "pgdn": at + self.visible, "home": 0, "end": end}[key])
+        at = {"up": at - 1, "down": at + 1, "pgup": at - self.visible, "pgdn": at + self.visible, "home": 0, "end": end}[key]
+        at = max(0, min(at, end))
         self.log_offset = None if at >= end else at
-
 
 
 class PrepareScreen(UnitView, ChangeScreen):

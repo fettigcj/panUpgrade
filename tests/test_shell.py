@@ -1512,7 +1512,7 @@ class ChoosingTheTargetFromAFirewall(ShellCase):
             ui.press(ch)
         self.assertEqual(ui.session.target, "12.1.10" + "9.9.9")
 
-    def test_pick_a_firewall_then_one_of_its_versions_and_the_target_becomes_exactly_that_text(self):
+    def test_pick_a_firewall_then_narrow_the_versions_tier_by_tier_and_the_target_becomes_exactly_that_text(self):
         ui, asked = self.make_picker()
         self.assertEqual(ui.screen.name, "targets")
         text = self.text(ui)
@@ -1522,23 +1522,96 @@ class ChoosingTheTargetFromAFirewall(ShellCase):
         ui.press("enter"); wait(ui)
         self.assertEqual(len(asked), 1)
         text = self.text(ui)
+        self.assertIn("Major release", text)
+        self.assertIn("2 versions", text)
+        ui.press("enter")                                                  # 10
+        self.assertIn("Feature release", self.text(ui))
+        ui.press("enter")                                                  # 10.2
+        text = self.text(ui)
+        self.assertIn("Maintenance release", text)
+        self.assertIn("10.2.4", text)
+        self.assertIn("10.2.3", text)
+        self.assertIn("running", text)
+        ui.press("enter")                                                  # 10.2.4: it has a hotfix, so the hotfix tier is next
+        text = self.text(ui)
+        self.assertIn("Hotfix", text)
         self.assertIn("10.2.4-h2", text)
         self.assertIn("downloaded, latest", text)
-        self.assertIn("current", text)
         ui.press("enter")
         self.assertEqual(ui.session.target, "10.2.4-h2")
         self.assertEqual(ui.screen.name, "home")
         self.assertIn("Target set to 10.2.4-h2", self.text(ui))
 
-    def test_escape_goes_back_a_step_and_then_home_without_changing_the_target(self):
+    def test_a_maintenance_release_without_a_hotfix_is_chosen_straight_away(self):
         ui, asked = self.make_picker()
         ui.press("enter"); wait(ui)
+        ui.press("enter"); ui.press("enter")
+        ui.press("down")                                                   # 10.2.3, which has no hotfix
+        ui.press("enter")
+        self.assertEqual((ui.session.target, ui.screen.name), ("10.2.3", "home"))
+
+    def test_while_the_firewall_is_asked_the_screen_says_so_and_offers_nothing_to_pick(self):
+        gate, begun = threading.Event(), threading.Event()
+
+        def read_versions(args, serial):
+            begun.set()
+            gate.wait(3)
+            return self.OFFERED
+        ui = self.make(read_versions=read_versions)
+        ui.press("down"); ui.press("down"); ui.press("down")
+        ui.press("enter"); wait(ui)
+        ui.press("down"); ui.press("enter")                                # the second firewall
+        begun.wait(3)
+        text = self.text(ui)
+        self.assertIn("Getting the available PAN-OS versions from " + REFS[1].hostname, text)
+        self.assertNotIn(REFS[0].hostname + " ", text.replace("Getting", ""))   # the list of firewalls is not shown to be picked from
+        ui.press("enter")                                                  # nothing happens: no second question
+        self.assertEqual(len([j for j in ui.jobs if j.title.startswith("Versions offered")]), 1)
+        gate.set(); wait(ui)
+        self.assertIn("Major release", self.text(ui))
+
+    def test_escape_while_it_is_asked_cancels_and_returns_to_the_firewalls(self):
+        gate, begun = threading.Event(), threading.Event()
+
+        def read_versions(args, serial):
+            begun.set()
+            gate.wait(3)
+            return self.OFFERED
+        ui = self.make(read_versions=read_versions)
+        ui.press("down"); ui.press("down"); ui.press("down")
+        ui.press("enter"); wait(ui)
+        ui.press("enter")
+        begun.wait(3)
         ui.press("esc")
         self.assertEqual(ui.screen.name, "targets")
-        self.assertIn(REFS[0].hostname, self.text(ui))
+        self.assertIn("Pick a firewall", self.text(ui))
+        gate.set(); wait(ui)
+        self.assertIn("Pick a firewall", self.text(ui))                    # the late answer does not pull the person into a list
+
+    def test_escape_goes_back_one_tier_at_a_time_then_to_the_firewalls_then_home_without_changing_the_target(self):
+        ui, asked = self.make_picker()
+        ui.press("enter"); wait(ui)
+        ui.press("enter"); ui.press("enter")                               # 10, 10.2
+        ui.press("esc")
+        self.assertIn("Feature release", self.text(ui))
+        ui.press("esc")
+        self.assertIn("Major release", self.text(ui))
+        ui.press("esc")
+        self.assertEqual(ui.screen.name, "targets")
+        self.assertIn("Pick a firewall", self.text(ui))
         ui.press("esc")
         self.assertEqual(ui.screen.name, "home")
         self.assertEqual(ui.session.target, "12.1.10")
+
+    def test_a_long_list_is_cut_into_short_ones(self):
+        many = [{"version": f"{maj}.{minor}.{m}" + (f"-h{h}" if h else ""), "downloaded": False, "current": False, "latest": False, "released": ""}
+                for maj, minor in ((10, 1), (10, 2), (11, 0), (11, 1), (12, 1)) for m in range(0, 12) for h in range(0, 4)]
+        ui, asked = self.make_picker(versions=many)
+        ui.press("enter"); wait(ui)
+        text = self.text(ui, 100, 30)
+        self.assertIn("96 versions", text)                                 # 240 versions, shown as the three majors
+        rows = [line for line in text.splitlines() if "versions" in line and line.strip().startswith((">", "10", "11", "12"))]
+        self.assertEqual(len(rows), 3)
 
     def test_a_firewall_that_cannot_say_leaves_a_reason_and_the_list_of_firewalls(self):
         ui, asked = self.make_picker(error="no route to the update server")

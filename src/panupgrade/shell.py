@@ -27,6 +27,7 @@ from pathlib import Path
 
 from . import cli, credstore, profiles, progress, site
 from .sources import SourceError
+from .versions import Version, VersionError
 
 SPIN = "|/-\\"
 HOTKEYS = [("alt-h", "home", "Alt-H home"), ("alt-a", "auth", "Alt-A sign in"), ("alt-f", "select", "Alt-F firewalls"),
@@ -594,25 +595,33 @@ class SelectScreen(Screen):
 
 
 class TargetScreen(Screen):
-    """Choose the target from what a firewall itself lists as available: pick a firewall of the fleet, then one of its versions. The home
-    screen's text field still takes any version typed by hand; this is for when the exact spelling (hotfix suffixes, dots, dashes) matters."""
+    """Choose the target from what a firewall itself offers. Pick a firewall of the fleet, wait while it is asked, then narrow the list
+    down a tier at a time: major release, feature release, maintenance release, hotfix. Enter goes in (and the last Enter chooses),
+    Esc goes back out. The home screen's text field still takes anything typed; this is for when the exact spelling matters."""
     name, title = "targets", "choose the target from a firewall's list"
+    TIERS = ["Major release", "Feature release", "Maintenance release", "Hotfix"]
 
     def __init__(self, shell):
         super().__init__(shell)
         self.reset()
 
     def reset(self):
+        if getattr(self, "job", None) is not None and self.job.running:
+            self.job.abort()
         self.job, self.args, self.refs, self.chosen, self.versions, self.at, self.note = None, None, None, None, None, 0, ""
+        self.trail = []                                   # [(key chosen at each tier, where the cursor was there)]
+
+    def busy(self):
+        return self.job is not None and self.job.running
 
     def enter(self):
         if self.pending:
             self.route_pending()
             return
-        self.at, self.note = 0, ""
+        self.at, self.note, self.trail = 0, "", []
         self.chosen, self.versions = None, None
         session = self.shell.session
-        if self.refs is not None or (self.job is not None and self.job.running):
+        if self.refs is not None or self.busy():
             return
         if not session.address.strip():
             self.note = "Choose or make a Panorama profile, or type its address, on the home screen first (Alt-H)."
@@ -635,7 +644,7 @@ class TargetScreen(Screen):
             self.note = "No firewall is connected to Panorama, so there is none to ask."
 
     def _ask(self, ref):
-        self.chosen, self.versions, self.at, self.note = ref, None, 0, ""
+        self.chosen, self.versions, self.at, self.note, self.trail = ref, None, 0, "", []
         args = self.shell.session.args_for("select")
         self.job = self.shell.start_job(f"Versions offered by {ref.hostname}", lambda: self.shell.read_versions(args, ref.serial),
                                         lambda job: self._versions_read(job, args))
@@ -649,73 +658,129 @@ class TargetScreen(Screen):
         if job.code or not isinstance(job.value, list):
             self.note = (job.text or "could not read the firewall's software list").strip()
             self.chosen = None
-        elif not job.value:
-            self.note = f"{self.chosen.hostname} lists no versions. Pick another firewall, or type the version on the home screen."
-            self.chosen = None
         else:
-            self.versions = job.value
+            self.versions = [(Version.parse(r["version"]), r) for r in job.value if _readable(r.get("version"))]
+            if not self.versions:
+                self.note = f"{self.chosen.hostname} lists no versions this tool can read. Pick another firewall, or type the version on the home screen."
+                self.chosen, self.versions = None, None
 
-    def items(self):
-        return self.versions if self.versions is not None else (self.refs or [])
+    # -- the tiers: what the list shows at the depth the person has reached
+    def tier_items(self):
+        """The entries at this depth, newest first: {label, rows (every version below it), leaf (the one version, at the last tier)}."""
+        depth = len(self.trail)
+        rows = self.versions
+        for tier, key in enumerate(k for k, _at in self.trail):
+            rows = [(v, r) for v, r in rows if (v.major, v.minor, v.maint)[tier] == key]
+        if depth == 3:
+            return [{"label": r["version"], "rows": [(v, r)], "leaf": r, "key": r["version"]} for v, r in sorted(rows, key=lambda p: p[0], reverse=True)]
+        groups = {}
+        for v, r in rows:
+            groups.setdefault((v.major, v.minor, v.maint)[depth], []).append((v, r))
+        out = []
+        for key in sorted(groups, reverse=True):
+            prefix = [k for k, _at in self.trail] + [key]
+            out.append({"label": ".".join(str(n) for n in prefix), "rows": groups[key], "leaf": None, "key": key})
+        return out
+
+    @staticmethod
+    def tags(item):
+        rows = [r for _v, r in item["rows"]]
+        return [name for name, flag in (("running", any(r.get("current") for r in rows)), ("downloaded", any(r.get("downloaded") for r in rows)),
+                                        ("latest", any(r.get("latest") for r in rows))) if flag]
 
     def render(self, width, height):
         lines = [[("bold", " panupgrade - choose the target from a firewall's list")], []]
-        busy = self.job is not None and self.job.running
-        if busy:
-            lines.append([("warn", f" {SPIN[int(time.monotonic() * 4) % 4]} {self.job.elapsed()}s {self.job.title}: {self.job.words()}")])
+        if self.busy():
+            asking = self.versions is None and self.chosen is not None
+            what = f"Getting the available PAN-OS versions from {self.chosen.hostname}..." if asking else "Reading the firewall list from Panorama..."
+            lines += [[("warn", f" {SPIN[int(time.monotonic() * 4) % 4]} {what}  {self.job.elapsed()}s")],
+                      [("dim", f"   {self.job.words()}")], [],
+                      [("dim", " Nothing to choose yet: the firewall is being asked. Esc cancels.")]]
+            return [cut(line, width - 1) for line in lines[:height]]
         if self.note:
             lines += wrapped("error", self.note, width)
-        if self.versions is None and self.refs is None:
-            if not busy:
-                lines += wrapped("dim", "Enter tries again; Esc goes home.", width)
+        if self.refs is None:
+            lines += wrapped("dim", "Enter tries again; Esc goes home.", width)
             return [cut(line, width - 1) for line in lines[:height]]
         if self.versions is None:
             lines += wrapped("dim", "Pick a firewall; it will be asked which PAN-OS versions it offers. Up / Down choose, Enter asks, Esc goes home.", width)
+            items, text = self.refs, lambda r: (f"{r.hostname.ljust(24)} {r.serial.ljust(16)} {r.sw_version or '?'}" + (f"  {r.ha_state}" if r.ha_state else ""))
         else:
-            lines += wrapped("dim", f"Versions {self.chosen.hostname} ({self.chosen.sw_version or 'version unknown'}) lists, newest first. Enter makes one the target; "
-                                    f"Esc goes back to the firewalls.", width)
+            depth = len(self.trail)
+            where = " > ".join(["versions"] + [".".join(str(n) for n in [k for k, _a in self.trail][:i + 1]) for i in range(depth)])
+            lines.append([("bold", f" {self.chosen.hostname}"), ("dim", f" ({self.chosen.sw_version or 'version unknown'})   {where}")])
+            lines += wrapped("dim", f"{self.TIERS[depth]}. Enter " + ("chooses it as the target" if depth == 3 else "opens it") +
+                                    "; Esc goes back" + (" to the firewalls" if depth == 0 else "") + ". Newest first.", width)
+            items = self.tier_items()
+
+            def text(item):
+                leaf = item["leaf"]
+                tags = ", ".join(self.tags(item))
+                if leaf is not None:
+                    return f"{item['label'].ljust(16)} {tags.ljust(26)} {leaf.get('released', '')}"
+                return f"{item['label'].ljust(16)} {tags.ljust(26)} {len(item['rows'])} version{'s' if len(item['rows']) != 1 else ''}"
         lines.append([])
         room = max(height - len(lines) - 1, 3)
-        items = self.items()
         top = max(0, min(self.at - room // 2, len(items) - room))
         for n in range(top, min(top + room, len(items))):
             on = n == self.at
-            item = items[n]
-            if self.versions is None:
-                text = f"{item.hostname.ljust(24)} {item.serial.ljust(16)} {item.sw_version or '?'}" + (f"  {item.ha_state}" if item.ha_state else "")
-            else:
-                tags = [t for t, flag in (("current", item["current"]), ("downloaded", item["downloaded"]), ("latest", item["latest"])) if flag]
-                text = f"{item['version'].ljust(16)} {', '.join(tags).ljust(26)} {item['released']}"
-            lines.append([("focus" if on else "", f" {'>' if on else ' '} {text}")])
+            lines.append([("focus" if on else "", f" {'>' if on else ' '} {text(items[n])}")])
         if len(items) > room:
             lines.append([("dim", f" {self.at + 1} of {len(items)}  (PgUp / PgDn scroll)")])
         return [cut(line, width - 1) for line in lines[:height]]
 
     def press(self, key):
-        items = self.items()
         if key == "esc":
-            if self.versions is not None and not (self.job is not None and self.job.running):
+            if self.busy():
+                if self.versions is None and self.chosen is not None:      # cancel the question: back to the list of firewalls
+                    self.job.abort()
+                    self.job, self.chosen = None, None
+                    return None
+                return "home"
+            if self.trail:
+                _key, self.at = self.trail.pop()
+                return None
+            if self.versions is not None:
                 self.versions, self.chosen, self.at = None, None, 0
                 return None
             return "home"
-        if self.job is not None and self.job.running:
+        if self.busy():
             return None
         if self.refs is None and self.versions is None:
             if key == "enter":
                 self.enter()
             return None
+        items = self.tier_items() if self.versions is not None else (self.refs or [])
         if key in ("up", "down", "pgup", "pgdn", "home", "end") and items:
             step = {"up": -1, "down": 1, "pgup": -10, "pgdn": 10}.get(key)
             self.at = 0 if key == "home" else len(items) - 1 if key == "end" else max(0, min(self.at + step, len(items) - 1))
         elif key == "enter" and items:
             if self.versions is None:
                 self._ask(items[self.at])
-            else:
-                chosen = items[self.at]["version"]
+            elif len(self.trail) == 3:
+                chosen = items[self.at]["leaf"]["version"]
                 self.shell.session.target = chosen
                 self.shell.message = f"Target set to {chosen}, as {self.chosen.hostname} lists it."
                 return "home"
+            else:
+                item = items[self.at]
+                self.trail.append((item["key"], self.at))
+                if len(self.trail) == 3 and len(item["rows"]) == 1:        # a maintenance release with no hotfix: nothing more to choose
+                    only = item["rows"][0][1]["version"]
+                    self.trail.pop()
+                    self.shell.session.target = only
+                    self.shell.message = f"Target set to {only}, as {self.chosen.hostname} lists it."
+                    return "home"
+                self.at = 0
         return None
+
+
+def _readable(text):
+    try:
+        Version.parse(text)
+        return True
+    except VersionError:
+        return False
 
 
 class ChangeScreen(Screen):

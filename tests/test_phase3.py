@@ -3,6 +3,7 @@
 import contextlib
 import io
 import json
+import re
 import tempfile
 import time
 import unittest
@@ -871,7 +872,7 @@ class SelectCommandAndDryRun(unittest.TestCase):
     def test_prepare_writes_the_approval_and_a_script_that_runs_the_upgrade(self):
         code, out, _ = self._prepare_with_typed_answers(["APPROVE"])
         self.assertEqual(code, 0, out)
-        kit_files = sorted(p.name for p in (self.dir / "kit").iterdir() if not p.name.startswith("report-"))
+        kit_files = sorted(p.name for p in (self.dir / "kit").iterdir() if not p.name.startswith("PanUpgrade_"))
         self.assertEqual(sorted(n.rsplit(".", 1)[-1] for n in kit_files), sorted(["json", "txt", ("bat" if __import__("os").name == "nt" else "sh")]))
         approval = next((self.dir / "kit").glob("*.approval.json"))
         script = next((self.dir / "kit").glob("run-*")).read_text(encoding="utf-8")
@@ -883,12 +884,22 @@ class SelectCommandAndDryRun(unittest.TestCase):
                                     str(next((self.dir / "kit").glob("*.serials.txt"))), "--approval", str(approval),
                                     "--journal", str(self.dir / "up.jsonl"), "--color", "never")
         self.assertEqual(code, 0, out)
+        log = next(self.dir.glob("PanUpgrade_UpgradeLog_*.html")).read_text(encoding="utf-8")      # beside the journal: no profile in use
+        self.assertIn('data-panel="fw2"', log)
+        self.assertIn("2 of 2 firewalls finished all their steps", log)
 
     def test_there_is_one_prompt_for_the_preparation_and_the_kit_and_report_follow_without_another(self):
         code, out, _ = self._prepare_with_typed_answers(["APPROVE"])          # a second answer would raise: it is never asked for
         self.assertEqual(code, 0, out)
         kit_dir = self.dir / "kit"
-        self.assertEqual(sorted(p.suffix for p in kit_dir.glob("report-*")), [".html", ".txt", ".xlsx"])
+        self.assertEqual(sorted(p.suffix for p in kit_dir.glob("PanUpgrade_ProposedPlan_*")), [".html", ".txt", ".xlsx"])
+        for plan_file in kit_dir.glob("PanUpgrade_ProposedPlan_*"):     # a target with dots in it must not eat the time stamp: one set per run
+            self.assertRegex(plan_file.stem, rf"^PanUpgrade_ProposedPlan_{re.escape(TARGET)}_\d{{8}}-\d{{6}}$")
+        self.assertEqual(sorted(p.suffix for p in kit_dir.glob("PanUpgrade_PreparationLog_*")), [".html", ".txt"])
+        page = next(kit_dir.glob("PanUpgrade_PreparationLog_*.html")).read_text(encoding="utf-8")
+        self.assertIn('data-panel="all"', page)                         # the All activity tab ...
+        self.assertIn('data-panel="fw1"', page)                         # ... and one tab per firewall
+        self.assertIn("A1", page)
         self.assertEqual(len(list(kit_dir.glob("run-*"))), 1)
         record = json.loads(next(kit_dir.glob("*.approval.json")).read_text(encoding="utf-8"))
         self.assertIn("by running the generated script", record["approved_by"])

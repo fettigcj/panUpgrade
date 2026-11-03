@@ -151,6 +151,28 @@ def render_plan(plan, style, verbose=False):
     return "\n".join(out) + "\n"
 
 
+def describe_event(record, names):
+    """One journal record as (kind, text) for a log line, or None when it is not a step. ``kind`` is a glyph name (start, wait, sync, ok, fail, info)."""
+    if record.get("type") != "step":
+        return None
+    step = record["step"].split(":", 1)[-1]
+    state, detail = record["state"], record.get("detail") or {}
+    if step == "baseline":
+        return "info", f"session baseline {detail.get('sessions')} (from {names.get(detail.get('taken_from'), detail.get('taken_from'))})"
+    if state == "started":
+        kind = "start" if step.split()[0] in ("preflight", "download", "install", "reboot", "backup") else "wait"
+        if step.startswith("sync"):
+            kind = "sync"
+        return kind, step
+    if state == "ok":
+        kind = "sync" if step.startswith("sync") else "ok"
+        extra = ", ".join(f"{k}={v}" for k, v in detail.items() if k in ("version", "sessions_before", "sessions_after", "ha_state", "synced_from", "skipped", "config_sync", "peer_version"))
+        return kind, (f"{step}  {extra}" if extra else step)
+    if state == "failed":
+        return "fail", f"{step}: {detail.get('error', '')}"
+    return "info", f"{step} {state}"
+
+
 class EventPrinter:
     """Prints one line per journal event as the run happens: time, glyph, device, step, brief detail."""
 
@@ -159,29 +181,10 @@ class EventPrinter:
         self.width = max([len(n) for n in names.values()] + [8])
 
     def __call__(self, record):
-        if record.get("type") != "step":
+        described = describe_event(record, self.names)
+        if described is None:
             return
-        step = record["step"].split(":", 1)[-1]
-        state, detail = record["state"], record.get("detail") or {}
-        if step == "baseline":
-            print(f"{self.style.dim(time.strftime('%H:%M:%S'))}  {self.style.glyph('info')}{self.style.bold(self.names.get(record['serial'], record['serial']).ljust(self.width))}  "
-                  f"session baseline {detail.get('sessions')} (from {self.names.get(detail.get('taken_from'), detail.get('taken_from'))})", file=self.out, flush=True)
-            return
-        if state == "started":
-            kind = "start" if step.split()[0] in ("preflight", "download", "install", "reboot", "backup") else "wait"
-            if step.startswith("sync"):
-                kind = "sync"
-            text = step
-        elif state == "ok":
-            kind, text = "ok", step
-            if step.startswith("sync"):
-                kind = "sync"
-            extra = ", ".join(f"{k}={v}" for k, v in detail.items() if k in ("version", "sessions_before", "sessions_after", "ha_state", "synced_from", "skipped", "config_sync", "peer_version"))
-            text = f"{step}  {extra}" if extra else step
-        elif state == "failed":
-            kind, text = "fail", f"{step}: {detail.get('error', '')}"
-        else:
-            kind, text = "info", f"{step} {state}"
+        kind, text = described
         stamp = time.strftime("%H:%M:%S", time.localtime())
         name = self.names.get(record["serial"], record["serial"]).ljust(self.width)
         print(f"{self.style.dim(stamp)}  {self.style.glyph(kind)}{self.style.bold(name)}  {text}", file=self.out, flush=True)

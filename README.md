@@ -73,7 +73,7 @@ One screen walks through the whole job, in order: **sign in**, **choose firewall
 | Get ready (content, config sync, image downloads) | `panupgrade prepare` | Yes, after you type APPROVE |
 | Upgrade | the script `prepare` writes, or `panupgrade upgrade` | Yes, only the firewalls the approval names |
 
-`prepare` finishes by writing an **upgrade kit**: a sign-off pack (HTML, text, Excel), the firewall list, the approval, and a ready-to-run script. Take the pack to whoever must agree; running the script is the go-ahead.
+`prepare` finishes by writing an **upgrade kit**: the proposed plan for sign-off (HTML, text, Excel), the firewall list, the approval, and a ready-to-run script. Take the pack to whoever must agree; running the script is the go-ahead.
 
 ## Safety model
 

@@ -16,7 +16,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from . import (approval as approval_mod, fleetreport, console, executor, paths, prepare as prepare_mod, progress, releases as releases_mod, report,
-               settings as settings_mod, xlsxout)
+               runlog, settings as settings_mod, xlsxout)
 from . import credstore, profiles, site, trust
 from .credstore import NeedsSignIn
 from .trust import CertificateProblem
@@ -622,6 +622,24 @@ def _has_steps(path):
         return True
 
 
+def _write_run_log(args, style, run, plan, hosts, journal, journal_path, label, result):
+    """Leave the readable record of a run (HTML with a tab per firewall, and text) where the person looks: the profile's prepared folder,
+    or beside the journal when no profile is in use. Never lets a problem writing it hide the outcome of the run itself."""
+    if not journal.events:
+        return
+    try:
+        folder = Path(args.kit_dir) if getattr(args, "kit_dir", None) else (_ws(args, "prepared") if _profile(args) else Path(journal_path).parent)
+        folder.mkdir(parents=True, exist_ok=True)
+        data = runlog.build(run, plan, hosts, journal.events, label, journal_path, result)
+        stamp, kind = datetime.now().strftime("%Y%m%d-%H%M%S"), runlog.KINDS[run]
+        html_file = folder / runlog.file_name(kind, data["target"], stamp, "html")
+        html_file.write_text(runlog.to_html(data), encoding="utf-8")
+        (folder / runlog.file_name(kind, data["target"], stamp, "txt")).write_text(runlog.to_text(data), encoding="utf-8")
+        print(style.line("info", f"{data['heading'].lower()}: {html_file} (also .txt)"))
+    except OSError as exc:
+        print(style.line("warn", f"could not write the {run} log: {exc}"))
+
+
 def _discard_if_empty(journal, resuming):
     """A run that was refused before doing anything leaves nothing behind that would block the next attempt."""
     if not resuming and not journal.events:
@@ -809,6 +827,7 @@ def _upgrade_execute(args, style, bundle, approve=None):
     else:
         print(style.line("info", f"{label} - no write command is sent to any real device; the run is rehearsed against a model"
                          + (" seeded from live state" if label == "DRY RUN" else "")))
+    result = None
     try:
         result = executor.run(plan, approval, backend, journal, settings, stop=bundle.stop)
     except executor.ExecutionRefused:
@@ -816,6 +835,7 @@ def _upgrade_execute(args, style, bundle, approve=None):
         raise
     finally:
         close_view()
+        _write_run_log(args, style, "upgrade", plan, names, journal, journal_path, label, result)
     sys.stdout.write(console.render_outcomes(result, names, style))
     return 0 if result["failures"] == 0 else 1
 
@@ -962,13 +982,16 @@ def _prepare_tasks(args, style, plan, names, backend, settings, label, approve=N
         journal.listener = listener
     if label == "LIVE":
         print(style.line("stop", f"LIVE RUN - this will change real firewalls (config sync and image downloads); journal {journal_path}"))
+    result = None
     try:
-        return prepare_mod.run(plan, approval, backend, journal, settings, stop=stop)
+        result = prepare_mod.run(plan, approval, backend, journal, settings, stop=stop)
+        return result
     except executor.ExecutionRefused:
         _discard_if_empty(journal, resuming)
         raise
     finally:
         close_view()
+        _write_run_log(args, style, "preparation", plan, names, journal, journal_path, label, result)
 
 
 def _issue_kit(args, style, label):
@@ -1001,11 +1024,11 @@ def _issue_kit(args, style, label):
     args.kit_dir = args.kit_dir or str(_ws(args, "prepared"))
     kit_dir = Path(args.kit_dir)
     kit_dir.mkdir(parents=True, exist_ok=True)
-    stem = kit_dir / f"report-{args.target}-{stamp}"
-    stem.with_suffix(".html").write_text(report.to_html(plan), encoding="utf-8")
-    stem.with_suffix(".txt").write_text(report.to_text(plan), encoding="utf-8")
-    xlsxout.write_workbook(stem.with_suffix(".xlsx"), plan)
-    print(style.line("info", f"report for sign-off: {stem.with_suffix('.html')} (also .txt and .xlsx)"))
+    name = lambda extension: kit_dir / runlog.file_name("ProposedPlan", args.target, stamp, extension)       # (the target has dots: never with_suffix)
+    name("html").write_text(report.to_html(plan), encoding="utf-8")
+    name("txt").write_text(report.to_text(plan), encoding="utf-8")
+    xlsxout.write_workbook(name("xlsx"), plan)
+    print(style.line("info", f"proposed plan for sign-off: {name('html')} (also .txt and .xlsx)"))
     if not ready:
         print(style.line("stop", "nothing is ready to upgrade, so there is nothing to approve"))
         return 1

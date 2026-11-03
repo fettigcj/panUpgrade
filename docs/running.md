@@ -137,11 +137,13 @@ panupgrade prepare --panorama <panorama-address> --target 10.2.2 --settings sett
 
 When it finishes, `prepare` writes the **upgrade kit** into `prepared\` (change with `--kit-dir`):
 
-- a sign-off pack (HTML, text and Excel)
+- the proposed plan for sign-off: `PanUpgrade_ProposedPlan_<target>_<time>` as HTML, text and Excel
 - the firewall list and the approval
 - a ready-to-run script, `run-upgrade-<target>-<time>.bat` on Windows or `.sh` elsewhere
 
-There is no second prompt. Take the pack to whoever must agree, then come back to the script.
+There is no second prompt. Take the proposed plan to whoever must agree, then come back to the script.
+
+Each `prepare` and each `upgrade` also leaves a log of what it did, as `PanUpgrade_PreparationLog_<target>_<time>` and `PanUpgrade_UpgradeLog_<target>_<time>` (HTML and text). The HTML has an **All activity** tab and one tab per firewall hostname. They are written when the run ends, including a run that failed or was stopped, into the same `prepared\` folder (beside the journal when no profile is in use). The journal in `runs\` stays the machine record.
 
 ### 4. Upgrade
 

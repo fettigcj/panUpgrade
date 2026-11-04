@@ -5,6 +5,7 @@
 # ---- HA behaviour --------------------------------------------------------------------------------------------
 failover_band      = 0.30      # after failing the active member over, the new active node's sessions must be within +/-30% of before
 post_upgrade_band  = 0.50      # after the upgrade, the active node's sessions must be within +/-50% of the pair's baseline
+upgrade_suspended  = true      # a member that is suspended carries no traffic: upgrade it like a passive member (false = block it until it is functional)
 restore_roles      = "leave"   # once both members are done: leave | restore (fail back to the original active)
 sync_to_peer       = "Both"    # force the passive member to match the active one: Disable (never) | Both (in `prepare` AND again during the upgrade) | UpgradeOnly (only during the upgrade)
 sync_timeout_s     = 600

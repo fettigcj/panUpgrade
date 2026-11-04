@@ -62,6 +62,9 @@ class Settings:
     allow_downgrade: bool = False
     # What to do about a pending (uncommitted) candidate config: block | warn | ignore
     pending_changes: str = "block"
+    # An HA member that is suspended when planned carries no traffic, so it is upgraded like a passive member (first in its pair). The tool never
+    # suspends it again or re-enables it as a decision of its own. false: a suspended member is blocked (make it functional first).
+    upgrade_suspended: bool = True
     # HA roles after both members are upgraded: leave | restore
     restore_roles: str = "leave"
     # Who fetches images: firewall (default, downloads from the vendor) | panorama

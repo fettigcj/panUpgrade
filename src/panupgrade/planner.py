@@ -222,7 +222,7 @@ def _apply_pair_rules(devices, ctxs, by_serial, target):
     plannable = {s for s, d in devices.items() if d["verdict"] in ("ready", "caution")}
     for serial in sorted(plannable):
         dev, ctx = devices[serial], ctxs[serial]
-        if ctx.facts.ha_mode != "active-passive" or ctx.facts.ha_state not in ("active", "passive"):
+        if ctx.facts.ha_mode != "active-passive" or ctx.facts.ha_state not in ("active", "passive", "suspended"):
             continue
         is_active = ctx.facts.ha_state == "active"
         peer = dev["peer_serial"]
@@ -355,7 +355,7 @@ def _order(devices, by_serial):
         peer = dev["peer_serial"]
         if peer and peer in devices and devices[peer]["verdict"] in ("ready", "caution"):
             members.append(peer)
-        members.sort(key=lambda s: (devices[s]["ha_state"] != "passive", s))
+        members.sort(key=lambda s: (devices[s]["ha_state"] not in ("passive", "suspended"), s))
         seen.update(members)
         units.append(members)
     return units

@@ -482,3 +482,37 @@ class NoStaleState(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ASuspendedMember(unittest.TestCase):
+    """A member that is suspended when planned carries no traffic: upgraded like a passive member unless upgrade_suspended is false."""
+
+    @staticmethod
+    def suspended_pair():
+        data = pair("A1", "A2")
+        data[1]["facts"]["ha_state"] = "suspended"
+        return data
+
+    def test_it_is_planned_like_a_passive_member_by_default(self):
+        p = plan(fleet(self.suspended_pair()))
+        d = dev(p, "A2")
+        self.assertEqual(d["verdict"], "ready")
+        self.assertNotIn("fail over", actions(d))
+        self.assertNotIn("go live", actions(d))
+        self.assertIn("verify HA", actions(d))
+        self.assertEqual([r["status"] for r in d["results"] if r["check"] == "session_baseline"], ["skip"])
+
+    def test_the_suspended_member_goes_first_in_its_pair(self):
+        p = plan(fleet(self.suspended_pair()))
+        self.assertEqual(p["order"], [["A2", "A1"]])
+        self.assertIn("wait for the passive firewall's upgrade to finish", actions(dev(p, "A1")))
+
+    def test_upgrade_suspended_false_blocks_it_and_says_which_setting(self):
+        p = plan(fleet(self.suspended_pair()), upgrade_suspended=False)
+        d = dev(p, "A2")
+        self.assertEqual(d["verdict"], "blocked")
+        self.assertTrue(any("upgrade_suspended" in r["reason"] for r in d["results"] if r["check"] == "ha_state"))
+
+    def test_the_setting_is_part_of_the_plan_hash(self):
+        a, b = plan(fleet(self.suspended_pair())), plan(fleet(self.suspended_pair()), upgrade_suspended=False)
+        self.assertNotEqual(a["hash"], b["hash"])

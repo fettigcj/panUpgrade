@@ -65,7 +65,7 @@ flowchart LR
 | `reachable` | yes | - | - | - |
 | `current_version` | yes | sw_version | allow_downgrade | - |
 | `upgrade_path` | yes | sw_version | allow_downgrade | - |
-| `ha_state` | yes | ha_mode, ha_state | - | - |
+| `ha_state` | yes | ha_mode, ha_state | upgrade_suspended | - |
 | `ha_peer` | yes | ha_config_sync, ha_links_ok, ha_mode, ha_session_sync, ha_state, sw_version | ha_config_unsynced, sync_to_peer | - |
 | `preemption` | no | ha_mode, preemption | - | - |
 | `disk_space` | yes | disk_free_mb, images_downloaded, sw_version | allow_downgrade, min_free_disk_mb | - |

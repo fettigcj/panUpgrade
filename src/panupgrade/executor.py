@@ -294,7 +294,7 @@ def _do(action, index, dev, backend, journal, settings):
         if not res.get("parsed_ok") or not res.get("sha256"):
             raise StepFailed(f"backup was not verified: {res!r}")
         if _baseline(journal, dev) is None:
-            source = serial if dev["ha_state"] != "passive" else dev["peer_serial"]
+            source = serial if dev["ha_state"] not in ("passive", "suspended") else dev["peer_serial"]
             journal.record(serial, "baseline", "ok", {"sessions": backend.state(source).get("session_count"), "taken_from": source})
         return {"sha256": res["sha256"], "bytes": res.get("bytes")}
     elif action == "sync to peer":
@@ -354,6 +354,9 @@ def _do(action, index, dev, backend, journal, settings):
         backend.functional(serial)
     elif action == "verify HA":
         got = backend.state(serial)
+        if got["ha_state"] == "suspended" and dev["ha_state"] == "suspended":
+            raise StepFailed("the member was suspended when planned and is still suspended after the upgrade, so the reboot did not clear the "
+                             "suspension; make it functional by hand (or run the tool again with the member suspended) when you want it back in the pair")
         if got["ha_session_sync"] is not True:
             raise StepFailed(f"HA2 session sync is {got['ha_session_sync']!r}")
         # Config sync is judged BEFORE the first member is upgraded (preflight and prepare). While the peer runs another version it cannot sync

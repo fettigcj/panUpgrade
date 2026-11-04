@@ -344,7 +344,7 @@ flowchart TD
     d2_3{"not res.get('parsed_ok') or not res.get('sha256')"}
     d2_4(["raise f'backup was not verified: {res!r}'"])
     d2_5{"_baseline(journal, dev) is None"}
-    d2_6["source = serial if dev['ha_state'] != 'passive' else dev['peer_serial']"]
+    d2_6["source = serial if dev['ha_state'] not in ('passive', 'suspended') else dev['peer_s…"]
     d2_7["journal.record(serial, 'baseline', 'ok', {'sessions': backend.state(source).get('se…"]
     d2_8(["return {'sha256': res['sha256'], 'bytes': res.get('bytes')}"])
     d2_1 --> d2_2
@@ -600,28 +600,32 @@ executor.py:355
 flowchart TD
     d11_1(["step: 'verify HA'"])
     d11_2["got = backend.state(serial)"]
-    d11_3{"got['ha_session_sync'] is not True"}
-    d11_4(["raise f'HA2 session sync is {got['ha_session_sync']!r}'"])
-    d11_5["peer_version = backend.state(peer)['version'] if peer else None"]
-    d11_6{"got['ha_state'] == 'active'"}
-    d11_7["base = _baseline(journal, dev)"]
-    d11_8{"base == 0"}
-    d11_9(["return {'ha_state': got['ha_state'], 'skipped': 'no session baseline (acknowledged)…"])
-    d11_10{"not base or not _band_ok(base, got['session_count'] or 0, settings.post_upgrade_ban…"}
-    d11_11(["raise f'active node has {got['session_count']} sessions vs baseline {base}, outside…"])
-    d11_12(["return {'ha_state': got['ha_state'], **said}"])
+    d11_3{"got['ha_state'] == 'suspended' and dev['ha_state'] == 'suspended'"}
+    d11_4(["raise 'the member was suspended when planned and is still suspended after the upgra…"])
+    d11_5{"got['ha_session_sync'] is not True"}
+    d11_6(["raise f'HA2 session sync is {got['ha_session_sync']!r}'"])
+    d11_7["peer_version = backend.state(peer)['version'] if peer else None"]
+    d11_8{"got['ha_state'] == 'active'"}
+    d11_9["base = _baseline(journal, dev)"]
+    d11_10{"base == 0"}
+    d11_11(["return {'ha_state': got['ha_state'], 'skipped': 'no session baseline (acknowledged)…"])
+    d11_12{"not base or not _band_ok(base, got['session_count'] or 0, settings.post_upgrade_ban…"}
+    d11_13(["raise f'active node has {got['session_count']} sessions vs baseline {base}, outside…"])
+    d11_14(["return {'ha_state': got['ha_state'], **said}"])
     d11_1 --> d11_2
     d11_2 --> d11_3
     d11_3 -->|yes| d11_4
     d11_3 -->|no| d11_5
-    d11_5 --> d11_6
-    d11_6 -->|yes| d11_7
+    d11_5 -->|yes| d11_6
+    d11_5 -->|no| d11_7
     d11_7 --> d11_8
     d11_8 -->|yes| d11_9
-    d11_8 -->|no| d11_10
+    d11_9 --> d11_10
     d11_10 -->|yes| d11_11
     d11_10 -->|no| d11_12
-    d11_6 -->|no| d11_12
+    d11_12 -->|yes| d11_13
+    d11_12 -->|no| d11_14
+    d11_8 -->|no| d11_14
     classDef api stroke:#2f6fed,stroke-width:3px
     classDef refuse stroke:#d64545,stroke-width:3px
     classDef done stroke:#2e9e5b,stroke-width:3px
@@ -630,15 +634,16 @@ flowchart TD
     class d11_1 entry
     class d11_2 api
     class d11_4 refuse
-    class d11_5 api
-    class d11_9 done
-    class d11_11 refuse
-    class d11_12 done
+    class d11_6 refuse
+    class d11_7 api
+    class d11_11 done
+    class d11_13 refuse
+    class d11_14 done
 ```
 
 ### 'restore roles'
 
-executor.py:372
+executor.py:375
 
 ```mermaid
 flowchart TD
@@ -659,7 +664,7 @@ flowchart TD
 
 ### anything else
 
-executor.py:377
+executor.py:380
 
 ```mermaid
 flowchart TD
@@ -681,12 +686,12 @@ Found by reading every decision in the code that looks at the config-sync or ses
 
 | module | function (line) | the condition, as written | verbs |
 |---|---|---|---|
-| checks | `ha_peer` (checks.py:152) | `problems == ['HA1 config sync'] and f.ha_session_sync and (f.ha_links_ok is not False)` | plan, upgrade, prepare |
+| checks | `ha_peer` (checks.py:159) | `problems == ['HA1 config sync'] and f.ha_session_sync and (f.ha_links_ok is not False)` | plan, upgrade, prepare |
 | prepare | `build` (prepare.py:163) | `facts.ha_config_sync is False` | prepare |
 | executor | `_do` (executor.py:307) | `after['ha_config_sync'] is not True` | upgrade |
 | executor | `_do` (executor.py:327) | `not _band_ok(before or 0, after or 0, settings.failover_band)` | upgrade |
-| executor | `_do` (executor.py:357) | `got['ha_session_sync'] is not True` | upgrade |
-| executor | `_do` (executor.py:368) | `not base or not _band_ok(base, got['session_count'] or 0, settings.post_upgrade_band)` | upgrade |
+| executor | `_do` (executor.py:360) | `got['ha_session_sync'] is not True` | upgrade |
+| executor | `_do` (executor.py:371) | `not base or not _band_ok(base, got['session_count'] or 0, settings.post_upgrade_band)` | upgrade |
 | fleetreport | `_attention` (fleetreport.py:47) | `facts.get('ha_config_sync') is False and (not mixed)` | report |
 
 ## Helpers the charts call

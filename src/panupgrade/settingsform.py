@@ -23,7 +23,7 @@ BUTTON_LABELS = ["Save", "Save & Exit", "Quit without saving"]
 SAVE_ONLY, SAVE_EXIT, QUIT = 0, 1, 2
 
 SECTIONS = [
-    ("HA behaviour", ["failover_band", "post_upgrade_band", "restore_roles", "sync_to_peer", "sync_timeout_s", "busy_wait_s", "settle_after_failover_s", "settle_after_reboot_s", "ha_config_unsynced", "blocked_peer",
+    ("HA behaviour", ["failover_band", "post_upgrade_band", "restore_roles", "upgrade_suspended", "sync_to_peer", "sync_timeout_s", "busy_wait_s", "settle_after_failover_s", "settle_after_reboot_s", "ha_config_unsynced", "blocked_peer",
                       "sync_content", "content_settle_s"]),
     ("Panorama range", ["spread_limit", "panorama_compare"]),
     ("Failure handling", ["max_failures", "max_parallel", "api_rate_per_s", "pending_changes"]),
@@ -39,6 +39,10 @@ INFO = {
     "restore_roles": ("What to do with the HA roles once both members are upgraded.",
                       {"leave": "leave the roles as the upgrade left them",
                        "restore": "fail back, so the member that was active at the start is active again"}),
+    "upgrade_suspended": ("An HA member that is suspended carries no traffic. Whether to upgrade it, treating it like a passive member (first in its pair). "
+                          "The tool does not suspend it again, and does not re-enable it as a choice of its own: after the reboot the member "
+                          "is expected to rejoin as passive, and the run fails that firewall with a clear message if it is still suspended.",
+                          {"true": "the default. Upgrade a suspended member", "false": "a suspended member is blocked until someone makes it functional"}),
     "sync_to_peer": ("Whether the tool forces the passive member of an HA pair to match the active member's configuration. The sync "
                      "overwrites whatever the passive is running, so the passive's own configuration is backed up and verified first.",
                      {"Disable": "never force a sync. A pair whose passive is out of sync is only reported (and, depending on "

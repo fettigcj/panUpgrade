@@ -129,6 +129,13 @@ def ha_state(ctx):
         return CheckResult("ha_state", FAIL, f"unrecognised HA mode {f.ha_mode!r}")
     if f.ha_state is None:
         return _no_data("ha_state", "HA state")
+    if f.ha_state == "suspended" and f.ha_mode == "active-passive" and ctx.settings.upgrade_suspended:
+        return CheckResult("ha_state", INFO,
+                           "this member is suspended: it carries no traffic, so it is upgraded like a passive member (first in its pair). "
+                           "The tool does not suspend it again; whether the suspension clears at the reboot is checked afterwards")
+    if f.ha_state == "suspended":
+        return CheckResult("ha_state", FAIL, "HA state is 'suspended' and upgrade_suspended is false; set it to true to upgrade a suspended member, "
+                                             "or make the member functional first")
     if f.ha_state not in ("active", "passive", "active-primary", "active-secondary"):
         return CheckResult("ha_state", FAIL, f"HA state is {f.ha_state!r}; expected a healthy active or passive member")
     return CheckResult("ha_state", PASS, f"{f.ha_mode}, this member is {f.ha_state}")
@@ -248,8 +255,8 @@ def running_jobs(ctx):
 def session_baseline(ctx):
     """The active node's session count is the yardstick for the failover and post-upgrade bands."""
     f = ctx.facts
-    if f.ha_mode == "active-passive" and f.ha_state == "passive":
-        return _skip("session_baseline", NOT_APPLICABLE, "passive node carries no traffic; the active node is judged")
+    if f.ha_mode == "active-passive" and f.ha_state in ("passive", "suspended"):
+        return _skip("session_baseline", NOT_APPLICABLE, f"{f.ha_state} node carries no traffic; the active node is judged")
     count = f.session_count
     if count is None:
         return _no_data("session_baseline", "the session count")

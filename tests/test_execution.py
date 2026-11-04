@@ -487,6 +487,40 @@ class HappyPath(Base):
         self.assertEqual(result["outcome"]["A1"][0], "done")
 
 
+class ASuspendedMemberIsUpgradedAndMustRejoin(Base):
+    def suspended(self):
+        data = fleet_data(pair("A1", "A2"))
+        data["devices"][1]["facts"]["ha_state"] = "suspended"
+        return data
+
+    def test_the_suspended_member_is_upgraded_first_and_the_pair_finishes(self):
+        data = self.suspended()
+
+        class Rejoins(SimBackend):      # the expectation to verify on a lab firewall: the reboot clears the suspension and it comes back passive
+            def reboot_and_wait(self, serial, timeout_s):
+                got = super().reboot_and_wait(serial, timeout_s)
+                if self.nodes[serial].state == "suspended":
+                    self.nodes[serial].state = "passive"
+                return got
+        _, _, sim, _, result = self.go(data, backend=Rejoins(data))
+        self.assertEqual({v[0] for v in result["outcome"].values()}, {"done"})
+        self.assertEqual(sim.nodes["A2"].version, T)
+        self.assertEqual(sim.nodes["A1"].version, T)
+
+    def test_a_member_that_is_still_suspended_after_the_reboot_fails_with_a_plain_message(self):
+        data = self.suspended()
+
+        class StaysSuspended(SimBackend):
+            def reboot_and_wait(self, serial, timeout_s):
+                got = super().reboot_and_wait(serial, timeout_s)
+                self.nodes[serial].state = "suspended"
+                return got
+        _, _, sim, _, result = self.go(data, backend=StaysSuspended(data))
+        self.assertEqual(result["outcome"]["A2"][0], "failed")
+        self.assertIn("still suspended", result["outcome"]["A2"][1])
+        self.assertNotEqual(sim.nodes["A1"].version, T)          # the active member waits: it never fails over to a peer that did not rejoin
+
+
 class Resume(Base):
     def test_resume_skips_finished_work_and_never_retries_a_failed_device(self):
         data = fleet_data(device("S1"), device("S2"), device("S3"))

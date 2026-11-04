@@ -132,6 +132,13 @@ class LiveBackend(Backend):
 
     # ---- Backend interface
 
+    def running_jobs(self, serial):
+        """One query (`show jobs all`) instead of the full state read: the look right before a step must be fresh."""
+        try:
+            return xmlops.parse_running_jobs(self._op(serial))
+        except (xmlops.XmlOpError, ET.ParseError, SourceError) as exc:
+            raise BackendError(f"{serial}: cannot read the job list: {exc}") from None
+
     def preflight(self, serial):
         facts, problems = xmlops.collect_facts(self._op(serial))
         if facts.sw_version is None:

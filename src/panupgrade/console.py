@@ -170,6 +170,8 @@ def describe_event(record, names):
         return kind, (f"{step}  {extra}" if extra else step)
     if state == "failed":
         return "fail", f"{step}: {detail.get('error', '')}"
+    if state == "note" and detail.get("message"):
+        return "info", f"{step}: {detail['message']}"
     return "info", f"{step} {state}"
 
 

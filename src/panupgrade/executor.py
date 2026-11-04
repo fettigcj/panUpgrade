@@ -37,6 +37,11 @@ class ExecutionRefused(Exception):
 class Backend:
     """What the executor may ask of a device. The simulator implements it; a live adapter comes later."""
 
+    real_time = True      # False for a simulation: waits that only exist because real firewalls take time are skipped
+
+    def running_jobs(self, serial):                                 # how many jobs are not finished; one cheap look where the backend can
+        return self.state(serial).get("running_jobs")
+
     def preflight(self, serial): raise NotImplementedError          # {version, pending_changes, running_jobs}
     def backup(self, serial): raise NotImplementedError             # {sha256, bytes, parsed_ok}
     def download(self, serial, version): raise NotImplementedError
@@ -164,17 +169,69 @@ def _standing(dev, journal, index):
     return f"not upgraded (still on {dev['current_version']})"
 
 
-def _wait_for_quiet(backend, serial, settings, what):
-    """A config sync queues a commit on the member it pushes to, and the install is refused while that is still in the queue
-    ("pending jobs in the commit task queue"). Wait for the queue to empty, up to the sync timeout, rather than fail a firewall that is merely busy."""
-    deadline = time.monotonic() + settings.sync_timeout_s
+# What a firewall says when it is busy with something that will finish by itself (a commit, an auto-commit, a queued job).
+BUSY = re.compile(r"commit (is )?in progress|try again later|commit task queue|pending jobs|job .{0,30}in progress", re.I)
+
+
+def _jobs_now(backend, serial):
+    """How many jobs the firewall has not finished, by the cheapest look the backend has (a stub with only ``state`` works too)."""
+    look = getattr(backend, "running_jobs", None)
+    return look(serial) if look else backend.state(serial).get("running_jobs")
+
+
+def _settle(journal, backend, serial, key, settings, seconds, what):
+    """Wait ``seconds``, then until the firewall has no unfinished job, before the next step touches it.
+
+    From the 2026-11-03 lab run: the firewall starts a full auto-commit of its own at moments the tool causes but cannot see coming (18-24 s after
+    each of four suspends; a second one 4-52 s after a rebooted member reconnects to Panorama), and one lasts 63-143 s. A "no jobs" look in the
+    gap before it starts proves nothing, so the window is waited out first and only a quiet list after it counts. If nothing starts, the
+    wait is just the window. ``seconds`` 0 turns the window off (the list must still be clear). A simulation does not wait."""
+    if seconds <= 0 or not getattr(backend, "real_time", True):
+        return {}
+    start, noted, step = time.monotonic(), False, min(settings.poll_interval_s, 5)
     while True:
-        jobs = backend.state(serial).get("running_jobs")
+        jobs, elapsed = _jobs_now(backend, serial), time.monotonic() - start
+        if jobs and not noted:
+            noted = True
+            journal.record(serial, key, "note", {"message": f"{jobs} job(s) running {what} (a commit the firewall started itself): waiting for it to finish"})
+        if elapsed >= seconds and jobs == 0:
+            return {"settled_s": round(elapsed), "job_seen": noted}
+        if elapsed >= seconds + settings.busy_wait_s:
+            raise StepFailed(f"{serial} still has {jobs!r} unfinished job(s) {round(elapsed)}s {what}, so the next step was not started")
+        time.sleep(step)
+
+
+def _wait_for_quiet(backend, serial, settings, what, timeout_s=None):
+    """A config sync, an HA state change or a boot queues a commit on the firewall, and the install is refused while that is still in the
+    queue ("pending jobs in the commit task queue"). Wait for ``show jobs all`` to show nothing unfinished, rather than fail a firewall
+    that is merely busy. The wait is ``busy_wait_s`` unless a caller (the config sync) asks for ``sync_timeout_s``."""
+    limit = settings.busy_wait_s if timeout_s is None else timeout_s
+    deadline = time.monotonic() + limit
+    while True:
+        jobs = _jobs_now(backend, serial)
         if jobs == 0:
             return
         if time.monotonic() >= deadline:
-            raise StepFailed(f"{serial} still has {jobs!r} job(s) in its queue after {settings.sync_timeout_s}s, so {what} was not started")
+            raise StepFailed(f"{serial} still has {jobs!r} job(s) in its queue after {limit}s, so {what} was not started")
         time.sleep(settings.poll_interval_s)
+
+
+def _retry_while_busy(journal, serial, key, settings, command):
+    """Run a command the firewall may refuse because it is busy. The jobs list showed nothing a moment ago, but a commit can be queued
+    between that look and the command (an HA change queues one), so a refusal that says "commit in progress" / "try again later" is
+    not a failure: wait ``poll_interval_s`` and ask again, up to ``busy_wait_s``. A refusal changed nothing, so asking again is safe.
+    Any other refusal is raised at once."""
+    deadline, tries = time.monotonic() + settings.busy_wait_s, 0
+    while True:
+        try:
+            return command()
+        except BackendError as exc:
+            if not BUSY.search(str(exc)) or time.monotonic() >= deadline:
+                raise
+            tries += 1
+            journal.record(serial, key, "note", {"message": f"the firewall is busy ({str(exc).rsplit(': ', 1)[-1].strip()}); asking again "
+                                                            f"in {settings.poll_interval_s}s (attempt {tries + 1})"})
+            time.sleep(settings.poll_interval_s)
 
 
 def _step(journal, serial, key, fn):
@@ -249,7 +306,7 @@ def _do(action, index, dev, backend, journal, settings):
         after = backend.state(passive)
         if after["ha_config_sync"] is not True:
             raise StepFailed(f"after the sync, HA1 config sync reads {after['ha_config_sync']!r}, not synchronized")
-        _wait_for_quiet(backend, passive, settings, "anything further")
+        _wait_for_quiet(backend, passive, settings, "anything further", settings.sync_timeout_s)
         return {"synced_from": active, "to": passive}
     elif action == "wait for the passive firewall's upgrade to finish":
         # The unit runs the passive member first and never starts this one unless it finished. This is the checkpoint that proves it:
@@ -266,21 +323,27 @@ def _do(action, index, dev, backend, journal, settings):
         backend.suspend(serial)
         after = backend.state(dev["peer_serial"])["session_count"]
         if before == 0:      # the plan said so and the operator acknowledged "no_session_baseline": nothing to compare with
-            return {"sessions_before": 0, "sessions_after": after, "skipped": "no session baseline (acknowledged)"}
-        if not _band_ok(before or 0, after or 0, settings.failover_band):
+            detail = {"sessions_before": 0, "sessions_after": after, "skipped": "no session baseline (acknowledged)"}
+        elif not _band_ok(before or 0, after or 0, settings.failover_band):
             backend.functional(serial)
             raise StepFailed(f"after failover the new active node has {after} sessions vs {before} before, "
                              f"outside {int(settings.failover_band * 100)}%; reverted")
-        return {"sessions_before": before, "sessions_after": after}
+        else:
+            detail = {"sessions_before": before, "sessions_after": after}
+        # the suspended member now queues its own commit; the install must not meet it half-started
+        return {**detail, **_settle(journal, backend, serial, action, settings, settings.settle_after_failover_s, "after the fail-over")}
     elif action == "hold suspended":
         if backend.state(serial)["ha_state"] != "suspended":
             backend.suspend(serial)
     elif action.startswith("install "):
         _wait_for_quiet(backend, serial, settings, "the install")
-        backend.install(serial, action.split(" ", 1)[1])
+        _retry_while_busy(journal, serial, action, settings, lambda: backend.install(serial, action.split(" ", 1)[1]))
     elif action == "reboot":
-        return {"version": backend.reboot_and_wait(serial, settings.reboot_timeout_s)}
+        version = backend.reboot_and_wait(serial, settings.reboot_timeout_s)
+        # a rebooted member reconnects to Panorama and then runs a second auto-commit of its own; wait that out before calling it back
+        return {"version": version, **_settle(journal, backend, serial, action, settings, settings.settle_after_reboot_s, "after the reboot")}
     elif action == "verify":
+        _wait_for_quiet(backend, serial, settings, "the verification")      # the auto-commit after a boot may still be running
         want, got = _expected_version(steps, index), backend.state(serial)
         if got["version"] != want:
             raise StepFailed(f"device reports {got['version']}, expected {want}")

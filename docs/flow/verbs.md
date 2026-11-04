@@ -261,9 +261,11 @@ flowchart TD
     n_panupgrade_executor__do["executor._do"]
     n_panupgrade_executor__backup_verified["executor._backup_verified"]
     n_panupgrade_executor__baseline["executor._baseline<br/><i>The pair's session baseline: the count on the node that was active bef</i>"]
-    n_panupgrade_executor__wait_for_quiet["executor._wait_for_quiet<br/><i>A config sync queues a commit on the member it pushes to, and the inst</i>"]
+    n_panupgrade_executor__wait_for_quiet["executor._wait_for_quiet<br/><i>A config sync, an HA state change or a boot queues a commit on the fir</i>"]
     n_panupgrade_executor__target_version["executor._target_version<br/><i>The version a device ends on: the last install in its steps</i>"]
     n_panupgrade_executor__band_ok["executor._band_ok"]
+    n_panupgrade_executor__settle["executor._settle<br/><i>Wait ``seconds``, then until the firewall has no unfinished job, befor</i>"]
+    n_panupgrade_executor__retry_while_busy["executor._retry_while_busy<br/><i>Run a command the firewall may refuse because it is busy. The jobs lis</i>"]
     n_panupgrade_executor__expected_version["executor._expected_version"]
     n_panupgrade_executor__do_download["download<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
     n_panupgrade_executor__do_backup["backup<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
@@ -350,6 +352,8 @@ flowchart TD
     n_panupgrade_executor__do --> n_panupgrade_executor__wait_for_quiet
     n_panupgrade_executor__do --> n_panupgrade_executor__target_version
     n_panupgrade_executor__do --> n_panupgrade_executor__band_ok
+    n_panupgrade_executor__do --> n_panupgrade_executor__settle
+    n_panupgrade_executor__do --> n_panupgrade_executor__retry_while_busy
     n_panupgrade_executor__do --> n_panupgrade_executor__expected_version
     n_panupgrade_executor__do -.-> n_panupgrade_executor__do_download
     n_panupgrade_executor__do -.-> n_panupgrade_executor__do_backup

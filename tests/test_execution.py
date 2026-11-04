@@ -59,7 +59,8 @@ class Stub:
 def settled(**over):
     """Default settings with the waiting made instant (the real ones validate to at least a second; the dataclass does not mind)."""
     s = settings.load()
-    s.poll_interval_s, s.sync_timeout_s = 0, 1
+    s.poll_interval_s, s.sync_timeout_s, s.busy_wait_s = 0, 1, 1
+    s.settle_after_failover_s = s.settle_after_reboot_s = 0
     for name, value in over.items():
         setattr(s, name, value)
     return s
@@ -110,7 +111,7 @@ class TheCommitQueue(unittest.TestCase):
         journal.last_state = lambda serial, key: "ok"
         steps = [{"action": "backup", "traffic": "none", "note": ""}, {"action": "install 20.2.9", "traffic": "none", "note": ""}]
         with self.assertRaisesRegex(executor.StepFailed, "still has 3 job"):
-            executor._do("install 20.2.9", 1, {"serial": "A2", "peer_serial": "A1", "steps": steps}, backend, journal, settled(sync_timeout_s=0))
+            executor._do("install 20.2.9", 1, {"serial": "A2", "peer_serial": "A1", "steps": steps}, backend, journal, settled(busy_wait_s=0))
         self.assertEqual(backend.installed, [])
 
     def test_the_sync_step_waits_for_the_queue_before_it_reports_done(self):
@@ -123,6 +124,132 @@ class TheCommitQueue(unittest.TestCase):
         dev = {"serial": "A2", "peer_serial": "A1", "ha_state": "passive", "steps": [{"action": "sync to peer", "traffic": "none", "note": ""}]}
         detail = executor._do("sync to peer", 0, dev, backend, Journal.__new__(Journal), settled())
         self.assertEqual((backend.synced, detail["to"]), ("A1", "A2"))
+
+
+class ABusyFirewallIsWaitedForNotFailed(unittest.TestCase):
+    """2026-11-03, the 11.1.16-h4 run: two active members were refused the install ("A commit is in progress. Please try again later.")
+    seconds after the fail-over, although the jobs list had just shown nothing unfinished. And a firewall that had just rebooted failed the
+    verification for one job (its auto-commit). Both are waited out."""
+
+    steps = [{"action": "backup", "traffic": "none", "note": ""}, {"action": "install 20.2.9", "traffic": "none", "note": ""}]
+
+    def run_install(self, refusals, **opts):
+        class Refusing(Stub):
+            def install(self, serial, version):
+                if refusals:
+                    raise executor.BackendError(refusals.pop(0))
+                super().install(serial, version)
+        backend = Refusing({"A2": {"running_jobs": 0}})
+        journal = Journal.__new__(Journal)
+        journal.events, journal.last_state = [], (lambda serial, key: "ok")
+        journal.record = lambda serial, key, state, detail=None: journal.events.append((serial, key, state, detail))
+        dev = {"serial": "A2", "peer_serial": "A1", "steps": self.steps}
+        return backend, journal, lambda: executor._do("install 20.2.9", 1, dev, backend, journal, settled(**opts))
+
+    def test_an_install_refused_because_a_commit_is_in_progress_is_asked_again(self):
+        busy = "A2: device refused the command: A commit is in progress. Please try again later."
+        backend, journal, go = self.run_install([busy, busy])
+        go()
+        self.assertEqual(backend.installed, [("A2", "20.2.9")])
+        notes = [e for e in journal.events if e[2] == "note"]
+        self.assertEqual(len(notes), 2)                                    # each wait is in the journal, so the log shows it
+        self.assertIn("busy", notes[0][3]["message"])
+
+    def test_a_firewall_that_stays_busy_fails_after_busy_wait_s_with_the_firewalls_own_words(self):
+        busy = ["A2: device refused the command: A commit is in progress. Please try again later."] * 100000
+        backend, journal, go = self.run_install(busy, busy_wait_s=0)
+        with self.assertRaisesRegex(executor.BackendError, "commit is in progress"):
+            go()
+        self.assertEqual(backend.installed, [])
+
+    def test_any_other_refusal_is_not_retried(self):
+        backend, journal, go = self.run_install(["A2: device refused the command: Invalid version"])
+        with self.assertRaisesRegex(executor.BackendError, "Invalid version"):
+            go()
+        self.assertEqual([e for e in journal.events if e[2] == "note"], [])
+
+    def test_the_verification_waits_for_the_jobs_of_a_firewall_that_has_just_rebooted(self):
+        states = {"A2": [{"version": "20.2.9", "running_jobs": 1}, {"version": "20.2.9", "running_jobs": 0}]}
+        dev = {"serial": "A2", "peer_serial": "A1", "steps": self.steps + [{"action": "reboot", "traffic": "none", "note": ""}]}
+        detail = executor._do("verify", 3, dev, Stub(states), Journal.__new__(Journal), settled())
+        self.assertEqual(detail["version"], "20.2.9")
+
+
+class TheFirewallsOwnCommitIsWaitedOut(unittest.TestCase):
+    """2026-11-03 lab logs: a suspended active member queued a full auto-commit 18-24 s later (65-113 s long); a rebooted member ran a second one 4-52 s
+    after reconnecting to Panorama. The next step waits the window out, then for an empty job list."""
+
+    class Clock:
+        def __init__(self):
+            self.t = 0.0
+
+        def time(self):
+            return self.t
+
+        def sleep(self, seconds):
+            self.t += max(seconds, 1)
+
+    def run_settle(self, jobs_by_second, seconds=60, busy=900):
+        clock, journal = self.Clock(), Journal.__new__(Journal)
+        journal.events = []
+        journal.record = lambda serial, key, state, detail=None: journal.events.append((state, detail))
+
+        class Fw:
+            def running_jobs(self_, serial):
+                return jobs_by_second(clock.t)
+        real = (executor.time.monotonic, executor.time.sleep)
+        executor.time.monotonic, executor.time.sleep = clock.time, clock.sleep
+        try:
+            result = executor._settle(journal, Fw(), "A2", "fail over", settled(busy_wait_s=busy, poll_interval_s=5), seconds, "after the fail-over")
+        finally:
+            executor.time.monotonic, executor.time.sleep = real
+        return clock.t, result, journal.events
+
+    def test_nothing_starts_so_the_wait_is_just_the_window(self):
+        waited, result, events = self.run_settle(lambda t: 0)
+        self.assertTrue(60 <= waited < 70, waited)
+        self.assertFalse(result["job_seen"])
+        self.assertEqual(events, [])
+
+    def test_a_commit_that_starts_inside_the_window_and_outlasts_it_is_waited_for(self):
+        waited, result, events = self.run_settle(lambda t: 1 if 20 <= t < 113 else 0)         # queued at +20 s, 93 s long
+        self.assertTrue(113 <= waited < 125, waited)
+        self.assertTrue(result["job_seen"])
+        self.assertEqual(len(events), 1)                                                        # said once, in the log
+
+    def test_an_empty_list_before_the_window_ends_is_not_enough(self):
+        waited, _, _ = self.run_settle(lambda t: 1 if 45 <= t < 70 else 0)                      # nothing at 0-40 s, then a commit
+        self.assertGreaterEqual(waited, 70)
+
+    def test_a_commit_that_never_ends_fails_the_step_after_the_window_plus_busy_wait_s(self):
+        with self.assertRaisesRegex(executor.StepFailed, "unfinished job"):
+            self.run_settle(lambda t: 2, seconds=10, busy=30)
+
+    def test_a_window_of_zero_and_a_simulation_do_not_wait(self):
+        self.assertEqual(executor._settle(None, object(), "A2", "k", settled(), 0, "x"), {})
+        sim = type("Sim", (), {"real_time": False})()
+        self.assertEqual(executor._settle(None, sim, "A2", "k", settled(), 60, "x"), {})
+
+    def test_the_fail_over_and_the_reboot_use_their_own_window(self):
+        calls = []
+        real = executor._settle
+        executor._settle = lambda journal, backend, serial, key, st, seconds, what: calls.append((key, seconds)) or {}
+        try:
+            class Be(Stub):
+                def suspend(self, serial): pass
+                def functional(self, serial): pass
+                def reboot_and_wait(self, serial, timeout): return "20.2.9"
+            be = Be({"A2": {"ha_state": "active", "session_count": 100}, "A1": {"session_count": 100}})
+            dev = {"serial": "A2", "peer_serial": "A1", "steps": [{"action": "fail over"}]}
+            st = settled(settle_after_failover_s=60, settle_after_reboot_s=120)
+            executor._do("fail over", 0, dev, be, Journal.__new__(Journal), st)
+            journal = Journal.__new__(Journal)
+            journal.last_state = lambda serial, key: "ok"                     # the backup guard: a verified backup is in the journal
+            dev["steps"] = [{"action": "backup"}, {"action": "install 20.2.9"}, {"action": "reboot"}]
+            executor._do("reboot", 2, dev, be, journal, st)
+        finally:
+            executor._settle = real
+        self.assertEqual(calls, [("fail over", 60), ("reboot", 120)])
 
 
 class TheFollowUpRun(Base):

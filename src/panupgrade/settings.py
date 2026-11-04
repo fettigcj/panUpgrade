@@ -37,6 +37,9 @@ class Settings:
     # Production actives should always be syncing to the passive; the sync forces the passive to match what is running.
     sync_to_peer: str = "Both"
     sync_timeout_s: int = 600
+    settle_after_failover_s: int = 60   # after suspending the active member: wait this long for the commit it queues itself, then until it is done (0 = no window)
+    settle_after_reboot_s: int = 120    # after a reboot: the same, for the second auto-commit that follows the reconnect to Panorama
+    busy_wait_s: int = 900             # how long to keep waiting, and asking again, when a firewall is busy with a commit or another job
     # A pair whose passive member's config is NOT synchronized. The risk is exactly one moment: the ACTIVE member suspends and the
     # upgraded passive takes over running its own, different configuration. block (the default): refuse to plan such a pair at all,
     # so nobody runs into it unread. caution: that moment is flagged on the active member with a plain-words message, to be accepted
@@ -151,9 +154,10 @@ def from_dict(data):
     for name in ("failover_band", "post_upgrade_band"):
         if not 0 < getattr(settings, name) <= 1:
             raise SettingsError(f"{name} must be between 0 and 1")
-    if settings.content_settle_s < 0:
-        raise SettingsError("content_settle_s must not be negative")
-    for name in ("spread_limit", "max_failures", "max_parallel", "sync_timeout_s", "poll_interval_s"):
+    for name in ("content_settle_s", "settle_after_failover_s", "settle_after_reboot_s"):
+        if getattr(settings, name) < 0:
+            raise SettingsError(f"{name} must not be negative")
+    for name in ("spread_limit", "max_failures", "max_parallel", "sync_timeout_s", "busy_wait_s", "poll_interval_s"):
         if getattr(settings, name) < 1:
             raise SettingsError(f"{name} must be at least 1")
     return settings

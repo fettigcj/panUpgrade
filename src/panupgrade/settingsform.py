@@ -23,7 +23,7 @@ BUTTON_LABELS = ["Save", "Save & Exit", "Quit without saving"]
 SAVE_ONLY, SAVE_EXIT, QUIT = 0, 1, 2
 
 SECTIONS = [
-    ("HA behaviour", ["failover_band", "post_upgrade_band", "restore_roles", "sync_to_peer", "sync_timeout_s", "ha_config_unsynced", "blocked_peer",
+    ("HA behaviour", ["failover_band", "post_upgrade_band", "restore_roles", "sync_to_peer", "sync_timeout_s", "busy_wait_s", "settle_after_failover_s", "settle_after_reboot_s", "ha_config_unsynced", "blocked_peer",
                       "sync_content", "content_settle_s"]),
     ("Panorama range", ["spread_limit", "panorama_compare"]),
     ("Failure handling", ["max_failures", "max_parallel", "api_rate_per_s", "pending_changes"]),
@@ -47,6 +47,14 @@ INFO = {
                               "itself, just before the passive member is touched, for each pair that still needs it.",
                       "UpgradeOnly": "force the sync only during the upgrade itself. `prepare` leaves the pair alone."}),
     "sync_timeout_s": ("How long to wait for a configuration sync to finish, in seconds.", {}),
+    "settle_after_failover_s": ("After the active member is suspended, wait this many seconds for the commit the firewall queues for itself, then until "
+                                "its job list is empty, before the install. In the lab it started 18-24 s after the suspend and ran 65-113 s. "
+                                "0 skips the window (the list must still be empty).", {}),
+    "settle_after_reboot_s": ("After a reboot, wait this many seconds for the second auto-commit that follows the firewall reconnecting to Panorama "
+                              "(4-52 s after it reconnects, 63-143 s long in the lab), then until its job list is empty. 0 skips the window.", {}),
+    "busy_wait_s": ("How long to keep waiting when a firewall is busy, in seconds. Before an install and before checking a firewall that has "
+                    "just rebooted, the tool waits for `show jobs all` to show nothing unfinished; if the firewall still refuses with "
+                    "\"a commit is in progress\" it asks again every poll interval. Past this time the step fails.", {}),
     "ha_config_unsynced": ("Whether un-synchronized config should block upgrades or raise warnings.\n\n"
                            "If the passive node is upgraded while out-of-sync the active node may no longer be able to synchronize its "
                            "config to the higher-versioned peer. When the active node is upgraded and that peer becomes active whatever "
@@ -107,8 +115,9 @@ INFO = {
 LIMITS = {
     "failover_band": "a number above 0 and up to 1", "post_upgrade_band": "a number above 0 and up to 1",
     "api_rate_per_s": "a number above 0", "spread_limit": "a whole number, 1 or more", "max_failures": "a whole number, 1 or more",
-    "max_parallel": "a whole number, 1 or more", "sync_timeout_s": "whole seconds, 1 or more",
+    "max_parallel": "a whole number, 1 or more", "sync_timeout_s": "whole seconds, 1 or more", "busy_wait_s": "whole seconds, 1 or more",
     "poll_interval_s": "whole seconds, 1 or more", "content_settle_s": "whole seconds, 0 or more",
+    "settle_after_failover_s": "whole seconds, 0 or more", "settle_after_reboot_s": "whole seconds, 0 or more",
 }
 HELP = {
     ROWS: "Up / Down / Tab: move   Left / Right: change a choice   type: edit a number   Ctrl-R or Delete: back to the default   "

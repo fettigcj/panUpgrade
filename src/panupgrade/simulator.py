@@ -25,6 +25,7 @@ class Node:
 
 
 class SimBackend(Backend):
+    real_time = False        # nothing here takes the time a firewall takes, so the settle windows are skipped
     def __init__(self, fleet_data, fail=None, takeover_ratio=1.0, wrong_version=None):
         """fail: {(serial, operation): message} - raised once when that operation runs.
         takeover_ratio: the new active node holds this share of the old active node's sessions.

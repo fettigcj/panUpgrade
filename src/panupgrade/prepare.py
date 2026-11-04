@@ -82,6 +82,18 @@ def content_diffs(a, b):
     return {k: (a.get(k), b.get(k)) for k in FAMILY if _norm(a.get(k)) != _norm(b.get(k))}
 
 
+def _highest_first(tasks):
+    """Deletions with the higher releases first, so a base image goes only after the releases built on it. A version that cannot be read
+    goes last."""
+    readable, other = [], []
+    for task in tasks:
+        try:
+            readable.append((Version.parse(task["version"]), task))
+        except VersionError:
+            other.append(task)
+    return [task for _, task in sorted(readable, key=lambda pair: pair[0], reverse=True)] + other
+
+
 def build(source, settings, selection, target=None, rules=None):
     rules = rules if rules is not None else paths.load_rules()
     refs = {r.serial: r for r in source.list_devices()}
@@ -146,11 +158,16 @@ def build(source, settings, selection, target=None, rules=None):
                     keep = paths.keep_images(rules, version, steps, want, facts.base_images)
                 except VersionError:
                     keep = None                                 # cannot say what is needed, so nothing is deleted
-                for image in sorted(have):
+                readable_images = []
+                for image in have:
                     try:
-                        readable = str(Version.parse(image))
+                        readable_images.append((Version.parse(image), image))
                     except VersionError:
-                        continue                                # what cannot be read is never deleted
+                        pass                                    # what cannot be read is never deleted
+                # Highest first: PAN-OS refuses to delete a base image while a later release built on it is still on the box
+                # (seen 2026-11-04: deleting 10.2.0 failed with 10.2.10-h42 still present, and 10.2.10-h42 then went without trouble).
+                for found, image in sorted(readable_images, key=lambda pair: pair[0], reverse=True):
+                    readable = str(found)
                     if keep is not None and readable not in keep:
                         deletions.append({"serial": ref.serial, "hostname": ref.hostname, "version": image,
                                           "keeps": sorted(keep, key=Version.parse)})
@@ -456,7 +473,7 @@ def run(plan, approval, backend, journal, settings=None, stop=None):
             do_unit(unit)
         for task in group["content_tasks"]:
             do_content_task(task)
-        for task in group["deletions"]:                 # room first, then the images the target needs
+        for task in _highest_first(group["deletions"]):     # room first (highest release first, so no base goes before what rests on it)
             do_delete(task)
         for task in group["downloads"]:
             do_download(task)

@@ -207,11 +207,11 @@ class DeletingUnneededImages(unittest.TestCase):
 
     def test_it_keeps_the_running_image_its_base_and_the_target_and_names_the_rest(self):
         plan, _ = self.build(delete_unneeded_images="true")
-        self.assertEqual([d["version"] for d in plan["deletions"]], ["19.1.0", "19.1.7", "20.2.1"])
+        self.assertEqual([d["version"] for d in plan["deletions"]], ["20.2.1", "19.1.7", "19.1.0"])      # highest first: a base image goes after what rests on it
         self.assertEqual(plan["deletions"][0]["keeps"], ["20.2.0", "20.2.3", TARGET])
         self.assertEqual(plan["serials"], ["S1"])
         line = prepare.describe(plan)[0]
-        self.assertIn("DELETE the PAN-OS images it does not need: 19.1.0, 19.1.7, 20.2.1", line)
+        self.assertIn("DELETE the PAN-OS images it does not need: 20.2.1, 19.1.7, 19.1.0", line)
         self.assertIn("keeps 20.2.0, 20.2.3, " + TARGET, line)
 
     def test_the_deletions_are_part_of_what_is_approved(self):
@@ -238,6 +238,14 @@ class DeletingUnneededImages(unittest.TestCase):
         self.assertEqual(sim.nodes["S1"].downloaded, {"20.2.0", "20.2.3", TARGET})
         order = [c[1] for c in sim.calls if c[1] in ("delete image", "download")]
         self.assertEqual(order, ["delete image"] * 3 + ["download"])
+
+    def test_images_are_deleted_highest_release_first_even_from_an_older_plan_file(self):
+        plan, s = self.build(delete_unneeded_images="true")
+        plan["deletions"].sort(key=lambda d: d["version"])           # a plan made before the order was fixed: lowest first
+        sim = SimBackend(self.data())
+        prepare.run(plan, Approval(plan["hash"], plan["serials"]), sim, Journal.create(self.j, plan["hash"]), s)
+        asked = [c[2] for c in sim.calls if c[1] == "delete image"]
+        self.assertEqual(asked, ["20.2.1", "19.1.7", "19.1.0"])
 
     def test_the_image_that_is_running_is_never_deleted_even_if_asked(self):
         sim = SimBackend(self.data())

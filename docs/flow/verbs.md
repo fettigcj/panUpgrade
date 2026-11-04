@@ -456,6 +456,8 @@ flowchart TD
     n_panupgrade_prepare_run["prepare.run"]
     n_panupgrade_prepare_content_diffs["prepare.content_diffs<br/><i>{key: (a_value, b_value)} for each content type whose installed versio</i>"]
     n_panupgrade_prepare__norm["prepare._norm"]
+    n_panupgrade_prepare__highest_first["prepare._highest_first<br/><i>Deletions with the higher releases first, so a base image goes only af</i>"]
+    n_panupgrade_versions_Version_parse["versions.Version.parse"]
     n_panupgrade_prepare__fold["prepare._fold"]
     n_panupgrade_prepare_run_backup["backup<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
     n_panupgrade_prepare_run_content_versions["content_versions<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
@@ -469,7 +471,6 @@ flowchart TD
     n_panupgrade_cli__build["cli._build"]
     n_panupgrade_paths_load_rules["paths.load_rules"]
     n_panupgrade_planner_build_plan["planner.build_plan"]
-    n_panupgrade_versions_Version_parse["versions.Version.parse"]
     n_panupgrade_planner_Selection_matches["planner.Selection.matches"]
     n_panupgrade_sources_read_facts["sources.read_facts<br/><i>Read the facts of several firewalls, up to ``workers`` at a time. Retu</i>"]
     n_panupgrade_planner__device["planner._device"]
@@ -516,6 +517,8 @@ flowchart TD
     n_panupgrade_prepare_run --> n_panupgrade_prepare_content_diffs
     n_panupgrade_prepare_content_diffs --> n_panupgrade_prepare__norm
     n_panupgrade_prepare_run --> n_panupgrade_prepare_diff_text
+    n_panupgrade_prepare_run --> n_panupgrade_prepare__highest_first
+    n_panupgrade_prepare__highest_first --> n_panupgrade_versions_Version_parse
     n_panupgrade_prepare_run --> n_panupgrade_prepare__fold
     n_panupgrade_prepare_run -.-> n_panupgrade_prepare_run_backup
     n_panupgrade_prepare_run -.-> n_panupgrade_prepare_run_content_versions

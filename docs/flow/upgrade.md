@@ -687,7 +687,7 @@ Found by reading every decision in the code that looks at the config-sync or ses
 | module | function (line) | the condition, as written | verbs |
 |---|---|---|---|
 | checks | `ha_peer` (checks.py:159) | `problems == ['HA1 config sync'] and f.ha_session_sync and (f.ha_links_ok is not False)` | plan, upgrade, prepare |
-| prepare | `build` (prepare.py:163) | `facts.ha_config_sync is False` | prepare |
+| prepare | `build` (prepare.py:180) | `facts.ha_config_sync is False` | prepare |
 | executor | `_do` (executor.py:307) | `after['ha_config_sync'] is not True` | upgrade |
 | executor | `_do` (executor.py:327) | `not _band_ok(before or 0, after or 0, settings.failover_band)` | upgrade |
 | executor | `_do` (executor.py:360) | `got['ha_session_sync'] is not True` | upgrade |

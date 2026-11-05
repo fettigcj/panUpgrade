@@ -14,8 +14,8 @@ from .versions import Version, VersionError
 
 TEXT, LIST = "text", "list"
 FILTER, AVAILABLE, INCLUDED, SAVE, BUTTONS = "filter", "available", "included", "save", "buttons"
-BUTTON_LABELS = ["Save", "Save & Exit", "Quit without saving"]
-SAVE_ONLY, SAVE_EXIT, QUIT = 0, 1, 2
+BUTTON_LABELS = ["Save", "Save & Exit", "Deselect all", "Quit without saving"]
+SAVE_ONLY, SAVE_EXIT, DESELECT_ALL, QUIT = 0, 1, 2, 3
 INPUT, MODE = "input", "mode"
 NOTHING = "everything Panorama manages"
 
@@ -28,7 +28,8 @@ class Column:
 
 COLUMNS = [
     Column("hostname", [("pattern", "name_glob", TEXT, "--name", "e.g. site1-*   (* matches anything, ? one character; the whole name must match)"),
-                        ("contains", "name_contains", TEXT, "--name-contains", "any part of the name, e.g. gate")],
+                        ("contains", "name_contains", TEXT, "--name-contains", "any part of the name, e.g. gate"),
+                        ("regex", "name_regex", TEXT, "--name-regex", "a regular expression, found anywhere in the name; ^ starts and $ ends it, . is any one character, e.g. ^site1-[ab]1$")],
            28, lambda r: r.hostname),
     Column("serial", [("contains", "serials", LIST, "--serial", "part of a serial number; separate several with commas")], 16, lambda r: r.serial),
     Column("model", [("contains", "models", LIST, "--model", "part of a model name, e.g. VM or 850; add * yourself to anchor it, e.g. PA-8*")], 10, lambda r: r.model),
@@ -47,7 +48,7 @@ HELP = {
     AVAILABLE: "Space / Enter: add to Included   A: add all listed   Up / Down / PgUp / PgDn: move   Tab: next section",
     INCLUDED: "Space / Enter / D: take out   C: clear the list   Up / Down / PgUp / PgDn: move   Tab: next section",
     SAVE: "Type the file name the list is saved to (empty: no file).   Enter: go to the buttons",
-    BUTTONS: "Left / Right: choose a button   Enter or Space: press it   Up: back to the file name",
+    BUTTONS: "Left / Right: choose a button   Enter or Space: press it   Up: back to the file name   (Deselect all empties the Included list)",
 }
 ALWAYS = "Shortcuts: Ctrl-D = Save & Exit   Esc = Quit without saving (asks first if there are unsaved changes)"
 
@@ -118,6 +119,9 @@ class Form:
                     Version.parse(text)
                 except VersionError as exc:
                     found[attr] = str(exc)
+        text = self.values["name_regex"].strip()
+        if text and Selection.regex_problem(text):
+            found["name_regex"] = Selection.regex_problem(text)
         return found
 
     def filter_selection(self):
@@ -233,6 +237,11 @@ class Form:
                 self._save(need_name=True)
             elif self.button == SAVE_EXIT:
                 return self._save_and_exit()
+            elif self.button == DESELECT_ALL:
+                self.message = (f"Took all {len(self.included)} firewall{'s' if len(self.included) != 1 else ''} out of the Included list."
+                                if self.included else "The Included list is already empty.")
+                self.included = []
+                self._clamp()
             else:
                 return "cancel"
         return None

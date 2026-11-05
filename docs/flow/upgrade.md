@@ -6,7 +6,7 @@ How it fits together: `plan` gives every firewall a list of steps (section 1). `
 
 ## 1. Which steps a firewall is given
 
-`planner._steps` ([planner.py:302]). The same function, run for a model firewall of each kind with default settings (`TARGET` is a version, `CURRENT` the one it runs now):
+`planner._steps` ([planner.py:319]). The same function, run for a model firewall of each kind with default settings (`TARGET` is a version, `CURRENT` the one it runs now):
 
 - **standalone**: `download TARGET` → `backup` → `install TARGET` → `reboot` → `verify`
 - **HA passive (its active peer is in the run)**: `download TARGET` → `backup` → `install TARGET` → `reboot` → `verify` → `verify HA`

@@ -323,7 +323,9 @@ def _serials(args):
 
 
 def _selection(args):
-    return Selection(serials=_serials(args), name_glob=args.name or "", name_contains=args.name_contains or "",
+    if args.name_regex and Selection.regex_problem(args.name_regex):
+        raise SystemExit(f"--name-regex {args.name_regex!r}: {Selection.regex_problem(args.name_regex)}")
+    return Selection(serials=_serials(args), name_glob=args.name or "", name_contains=args.name_contains or "", name_regex=args.name_regex or "",
                      models=args.model or [], device_groups=args.device_group or [], tags=args.tag or [],
                      version_is=args.version_is or "", version_older_than=args.version_older_than or "",
                      version_newer_than=args.version_newer_than or "", ha_states=args.ha_state or [],
@@ -385,7 +387,7 @@ def _plan(args):
     return 0
 
 
-_FILTERS = ("serial", "serials_file", "name", "name_contains", "model", "device_group", "tag",
+_FILTERS = ("serial", "serials_file", "name", "name_contains", "name_regex", "model", "device_group", "tag",
             "version_is", "version_older_than", "version_newer_than", "ha_state")
 
 
@@ -1287,6 +1289,8 @@ def _selection_args(p):
     pick.add_argument("--all", action="store_true", help=f"every firewall Panorama manages, even if ./{DEFAULT_LIST} exists")
     pick.add_argument("--name", help="host name glob, e.g. 'site1-*'")
     pick.add_argument("--name-contains", help="host name contains this text")
+    pick.add_argument("--name-regex", help="host name matches this regular expression, searched anywhere in the name (^ and $ anchor it), "
+                                            "ignoring case, e.g. '^site1-[ab]1$'")
     pick.add_argument("--version-is", help="running version matches this glob, e.g. '10.2.1' or '10.2.*'")
     pick.add_argument("--version-older-than", help="running version is older than this")
     pick.add_argument("--version-newer-than", help="running version is newer than this")

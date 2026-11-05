@@ -14,6 +14,7 @@ reasons behind it:
 """
 
 import fnmatch
+import re
 import hashlib
 import json
 from dataclasses import dataclass, field
@@ -40,6 +41,7 @@ class Selection:
     serials: list = field(default_factory=list)
     name_glob: str = ""
     name_contains: str = ""
+    name_regex: str = ""           # a regular expression searched for anywhere in the host name (^ and $ anchor it), ignoring case
     models: list = field(default_factory=list)
     device_groups: list = field(default_factory=list)
     tags: list = field(default_factory=list)
@@ -56,6 +58,12 @@ class Selection:
             return False
         if self.name_contains and self.name_contains.lower() not in ref.hostname.lower():
             return False
+        if self.name_regex:
+            try:
+                if not re.search(self.name_regex, ref.hostname, re.IGNORECASE):
+                    return False
+            except re.error:
+                return False        # an expression that does not compile matches nothing (the form and the command line say why)
         if self.models and not _glob_any(self.models, ref.model):
             return False
         if self.device_groups and not _glob_any(self.device_groups, ref.device_group):
@@ -77,9 +85,18 @@ class Selection:
                 return False        # an unreadable version never matches a version criterion
         return True
 
+    @staticmethod
+    def regex_problem(text):
+        """Why a regular expression cannot be used, in words, or "" when it is fine."""
+        try:
+            re.compile(text)
+        except re.error as exc:
+            return f"not a valid regular expression: {exc}"
+        return ""
+
     def describe(self):
         parts = []
-        for label, value in (("serial in", self.serials), ("hostname like", self.name_glob), ("hostname contains", self.name_contains),
+        for label, value in (("serial in", self.serials), ("hostname like", self.name_glob), ("hostname contains", self.name_contains), ("hostname matches regex", self.name_regex),
                              ("model in", self.models), ("device group in", self.device_groups), ("tag in", self.tags),
                              ("HA state in", self.ha_states), ("version is", self.version_is),
                              ("version older than", self.version_older_than), ("version newer than", self.version_newer_than)):

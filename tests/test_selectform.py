@@ -112,6 +112,38 @@ class Filters(unittest.TestCase):
         self.assertEqual((self.form.zone, self.form.frow), ("filter", "input"))
 
 
+class TheHostnameRegexMode(unittest.TestCase):
+    def setUp(self):
+        self.form = selectform.Form(REFS)
+        keys(self.form, "up", "right", "right", "down")        # mode row, pattern -> contains -> regex, back to the input
+        self.assertEqual(selectform.COLUMNS[0].modes[self.form.mode[0]][1], "name_regex")
+
+    def hosts(self, text):
+        keys(self.form, "ctrl-u", *typing(text))
+        return [r.hostname for r in self.form.matching()]
+
+    def test_the_caret_anchors_the_start_and_the_dot_is_any_one_character(self):
+        self.assertEqual(self.hosts("^site1"), ["site1-fw1", "site1-fw2"])
+        self.assertEqual(self.hosts("fw1$"), ["site1-fw1", "site2-fw1"])
+        self.assertEqual(self.hosts("^site.-fw1$"), ["site1-fw1", "site2-fw1"])
+        self.assertEqual(self.hosts("^GATE"), ["gate01"])                  # ignores case
+
+    def test_it_is_found_anywhere_unlike_the_glob_which_must_match_the_whole_name(self):
+        self.assertEqual(self.hosts("fw"), ["site1-fw1", "site1-fw2", "site2-fw1"])
+
+    def test_a_broken_expression_is_flagged_and_does_not_hide_every_firewall(self):
+        found = self.hosts("site1-(fw")
+        self.assertIn("name_regex", self.form.errors())
+        self.assertEqual(len(found), 4)                                    # ignored while it does not compile, like a bad version
+        self.assertIn("regular expression", screen(self.form))
+
+    def test_the_glob_and_contains_modes_are_unchanged(self):
+        form = selectform.Form(REFS)
+        keys(form, *typing("site1-?w1"))
+        self.assertEqual([r.hostname for r in form.matching()], ["site1-fw1"])
+        self.assertEqual(Selection(name_regex="^site1").describe(), "hostname matches regex ^site1")
+
+
 class Lists(unittest.TestCase):
     def setUp(self):
         self.form = selectform.Form(REFS)
@@ -308,9 +340,26 @@ class Buttons(unittest.TestCase):
         self.assertEqual(len(self.saved), 1)
 
     def test_quit_without_saving_leaves_at_once_and_writes_nothing(self):
-        keys(self.form, "right")
+        keys(self.form, "right", "right")
         self.assertEqual(self.form.press("enter"), "cancel")
         self.assertEqual(self.saved, [])
+
+    def test_deselect_all_empties_the_included_list_and_says_so(self):
+        form = selectform.Form(REFS, out="list.txt", saver=lambda f: "ok")
+        keys(form, "down", "a")
+        self.assertEqual(len(form.included), 4)
+        form.zone, form.button = "buttons", selectform.DESELECT_ALL
+        self.assertIsNone(form.press("enter"))
+        self.assertEqual(form.included, [])
+        self.assertIn("Took all 4 firewalls out", form.message)
+        self.assertEqual(len(form.available()), 4)         # they are all back in Available
+        self.assertIn("Deselect all", screen(form))
+        form.press("enter")
+        self.assertIn("already empty", form.message)
+
+    def test_the_buttons_in_order_are_save_save_and_exit_deselect_all_quit(self):
+        self.assertEqual(selectform.BUTTON_LABELS, ["Save", "Save & Exit", "Deselect all", "Quit without saving"])
+        self.assertEqual((selectform.SAVE_ONLY, selectform.SAVE_EXIT, selectform.DESELECT_ALL, selectform.QUIT), (0, 1, 2, 3))
 
     def test_ctrl_d_is_save_and_exit_from_anywhere(self):
         form = selectform.Form(REFS, out="list.txt", saver=lambda f: "ok")
@@ -503,3 +552,13 @@ class SelectVerb(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheCommandLineRegex(unittest.TestCase):
+    def test_a_regex_that_does_not_compile_is_refused_with_the_reason(self):
+        import argparse
+        with self.assertRaises(SystemExit) as caught:
+            cli._selection(argparse.Namespace(name_regex="site1-(fw", name=None, name_contains=None, model=None, device_group=None, tag=None,
+                                              version_is=None, version_older_than=None, version_newer_than=None, ha_state=None,
+                                              serial=None, serials_file=None, all=True))
+        self.assertIn("not a valid regular expression", str(caught.exception))

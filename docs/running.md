@@ -105,7 +105,7 @@ Or give the filters as flags, which is what scripts do:
 panupgrade select --panorama <panorama-address> --version-is 10.2.1 --name-contains <text> --out upgradeList.txt
 ```
 
-Criteria: `--name-contains`, `--name` (glob), `--version-is` (glob), `--version-older-than`, `--version-newer-than`, `--ha-state`, `--model`, `--device-group`, `--tag`, `--serial`. The saved `upgradeList.txt` is picked up by every command below; use `--serials-file` to name a different list.
+Criteria: `--name-contains`, `--name` (glob: `*` and `?`, the whole name must match), `--name-regex` (a regular expression found anywhere in the name; `^` and `$` anchor it, `.` is any one character, case ignored), `--version-is` (glob), `--version-older-than`, `--version-newer-than`, `--ha-state`, `--model`, `--device-group`, `--tag`, `--serial`. The saved `upgradeList.txt` is picked up by every command below; use `--serials-file` to name a different list.
 
 ### 2. Plan (changes nothing)
 

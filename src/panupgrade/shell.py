@@ -1166,6 +1166,17 @@ class UnitView:
             return self.fleet_summary()
         return [self.event_line(unit, when, rec) for when, rec in self.unit_events(unit)] or [("dim", "(nothing has happened here yet)")]
 
+    log_width = 10 ** 6          # columns the log has to fit in; set when the screen is drawn
+
+    def shown_log(self, unit):
+        """The log as drawn: a line longer than the pane is wrapped onto the next row (indented), never cut off, so an error is read in full."""
+        import textwrap
+        out = []
+        for style, text in self.unit_log(unit):
+            rows = textwrap.wrap(text, self.log_width, subsequent_indent=" " * 6, break_on_hyphens=False, drop_whitespace=True) if len(text) > self.log_width else [text]
+            out += [(style, row) for row in rows or [""]]
+        return out
+
     def unit_events(self, unit):
         if unit is FLEET:
             return []
@@ -1245,8 +1256,9 @@ class UnitView:
                         [("", "     "), (mark[0] if state != "waiting" else "dim", words)]]
         unit = units[at]
         state, words = self.unit_state(unit)
-        log = self.unit_log(unit)
         left = 40
+        self.log_width = max((width - left - 4) if width >= 100 else (width - 3), 20)       # after the "| " and the one-space margin
+        log = self.shown_log(unit)
         space = max(room - 3, 2)
         self.visible = space
         end = max(len(log) - space, 0)
@@ -1321,7 +1333,7 @@ class UnitView:
     visible = 12
 
     def _scroll_log(self, key, unit):
-        total = len(self.unit_log(unit)) if unit else 0
+        total = len(self.shown_log(unit)) if unit else 0
         end = max(total - self.visible, 0)
         at = end if self.log_offset is None else min(self.log_offset, end)
         at = {"up": at - 1, "down": at + 1, "pgup": at - self.visible, "pgdn": at + self.visible, "home": 0, "end": end}[key]

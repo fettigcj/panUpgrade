@@ -1952,6 +1952,21 @@ class TheRunFirewallByFirewall(ShellCase):
         self.assertNotIn("fw-two", right)
         gate.set(); wait(ui)
 
+    def test_a_long_error_is_wrapped_in_the_log_not_cut_off(self):
+        words = " ".join(f"word{n}" for n in range(1, 41)) + " theveryend"
+        def script(bundle, gate, begun):
+            bundle.step("A2", "1:install 10.2.3", "started")
+            bundle.step("A2", "1:install 10.2.3", "failed", error=words)
+            begun.set()
+        ui, bundle, gate = self.run_with(script)
+        for columns in (130, 100):
+            text = self.text(ui, columns, 30)
+            right = " ".join(line.split("| ", 1)[1].strip() for line in text.splitlines() if "| " in line and "Background jobs" not in line)
+            self.assertIn("theveryend", right)                          # the whole message is on the screen
+            self.assertIn("word20", right)
+            self.assertLessEqual(max(len(line) for line in text.splitlines()), columns)
+        gate.set(); wait(ui)
+
     def test_the_view_follows_the_unit_that_is_running_until_you_choose_one(self):
         def script(bundle, gate, begun):
             for serial in ("A2", "A1"):

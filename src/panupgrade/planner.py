@@ -265,7 +265,7 @@ def _apply_pair_rules(devices, ctxs, by_serial, target):
                 said = ("upgrading only this member would leave the pair on two releases with its active peer unable to follow")
             _add(dev, CheckResult("peer_blocked", FAIL,
                                   f"held: its HA peer ({peer_ref.hostname}) is {problem}; {said}. Fix the peer and plan again, or set "
-                                  f"blocked_peer to caution to go ahead anyway"))
+                                  f"blocked_peer to warn to go ahead anyway"))
             continue
         if is_active:
             _add(dev, CheckResult(

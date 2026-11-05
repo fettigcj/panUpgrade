@@ -42,14 +42,14 @@ class Settings:
     busy_wait_s: int = 900             # how long to keep waiting, and asking again, when a firewall is busy with a commit or another job
     # A pair whose passive member's config is NOT synchronized. The risk is exactly one moment: the ACTIVE member suspends and the
     # upgraded passive takes over running its own, different configuration. block (the default): refuse to plan such a pair at all,
-    # so nobody runs into it unread. caution: that moment is flagged on the active member with a plain-words message, to be accepted
+    # so nobody runs into it unread. warn: that moment is flagged on the active member with a plain-words message, to be accepted
     # when the batch is prepared; the passive's own upgrade is unaffected. Only used when sync_to_peer = Disable: with Both or
     # UpgradeOnly the tool syncs the pair itself instead.
     ha_config_unsynced: str = "block"
     # A pair whose HA peer is BLOCKED by a check (or could not be read at all). The active member's upgrade hands traffic to the peer
     # for the whole reboot, and either member's upgrade leaves the pair on two releases, so the tool does not go ahead with half of a
     # pair whose other half it has just found a problem with. block (the default): the member that could be upgraded is held too, with
-    # the peer's reason. caution: it is planned anyway and only flagged. A peer that is merely not selected, or already on the target,
+    # the peer's reason. warn: it is planned anyway and only flagged. A peer that is merely not selected, or already on the target,
     # is not a problem and is only flagged either way.
     blocked_peer: str = "block"
     # Dynamic content (the cloud-delivered security services: applications/threats, antivirus, WildFire). HA peers should run
@@ -88,11 +88,11 @@ class Settings:
             out.append(f"pending_changes={self.pending_changes}: uncommitted candidate config will not stop an upgrade.")
         if self.failover_band > 0.5 or self.post_upgrade_band > 0.75:
             out.append("Session-count bands are very wide; a real traffic loss could pass unnoticed.")
-        if self.ha_config_unsynced == "caution":
-            out.append("ha_config_unsynced=caution: a pair whose passive config is not synchronized is planned anyway; when the active member "
+        if self.ha_config_unsynced == "warn":
+            out.append("ha_config_unsynced=warn: a pair whose passive config is not synchronized is planned anyway; when the active member "
                        "suspends, the passive takes over running its own, different configuration.")
-        if self.blocked_peer == "caution":
-            out.append("blocked_peer=caution: a member whose HA peer is blocked by a check is planned anyway; the active member hands traffic to "
+        if self.blocked_peer == "warn":
+            out.append("blocked_peer=warn: a member whose HA peer is blocked by a check is planned anyway; the active member hands traffic to "
                        "that peer while it reboots.")
         if self.allow_downgrade:
             out.append("allow_downgrade=true: firewalls running a newer release than the target are installed down to it (across feature "
@@ -110,8 +110,8 @@ _CHOICES = {
     "panorama_compare": ("minor", "major"),
     "sync_to_peer": ("Disable", "Both", "UpgradeOnly"),
     "sync_content": ("never", "prepare"),
-    "ha_config_unsynced": ("block", "caution"),
-    "blocked_peer": ("block", "caution"),
+    "ha_config_unsynced": ("block", "warn"),
+    "blocked_peer": ("block", "warn"),
 }
 
 
@@ -149,6 +149,8 @@ def from_dict(data):
     for name, choices in _CHOICES.items():
         by_lower = {c.lower(): c for c in choices}
         value = getattr(settings, name)
+        if value.lower() == "caution" and "warn" in by_lower:
+            value = "warn"                                             # the old name of warn, still read from older settings files
         if value.lower() not in by_lower:
             raise SettingsError(f"{name} must be one of {', '.join(choices)}")
         setattr(settings, name, by_lower[value.lower()])               # 'both' and 'Both' are the same choice

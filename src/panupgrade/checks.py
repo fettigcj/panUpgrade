@@ -162,7 +162,7 @@ def ha_peer(ctx):
                                "the passive member's configuration is not synchronized with the active member; the upgrade run "
                                "will force a sync (active to passive) before touching the passive member",
                                ack="force_config_sync")
-        if ctx.settings.ha_config_unsynced == "caution":
+        if ctx.settings.ha_config_unsynced == "warn":
             marker = {"config_unsynced": True}
             if f.ha_state == "active":
                 return CheckResult(
@@ -176,7 +176,7 @@ def ha_peer(ctx):
                                "config not synchronized with the active member. That does not affect this passive member's own upgrade (it carries no "
                                "traffic); the risk is at the later failover and is flagged on the active member.", evidence=marker)
         return CheckResult("ha_peer", FAIL, "not healthy: HA1 config sync is not synchronized and sync_to_peer is Disable. Sync it yourself, "
-                                            "set sync_to_peer to Both so the tool forces the sync, or set ha_config_unsynced=caution to "
+                                            "set sync_to_peer to Both so the tool forces the sync, or set ha_config_unsynced=warn to "
                                             "proceed anyway")
     if problems:
         return CheckResult("ha_peer", FAIL, "not healthy: " + ", ".join(problems))

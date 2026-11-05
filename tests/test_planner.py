@@ -243,7 +243,7 @@ class BlockedPeer(unittest.TestCase):
         self.assertIn("two releases", next(r["reason"] for r in dev(p, "A2")["results"] if r["check"] == "peer_blocked"))
 
     def test_the_setting_can_let_it_through_as_a_caution(self):
-        p = self.blocked_passive(blocked_peer="caution")
+        p = self.blocked_passive(blocked_peer="warn")
         self.assertEqual(dev(p, "A1")["verdict"], "caution")
         self.assertIn("active_before_passive", [c["code"] for c in p["cautions"]])
         self.assertEqual(p["order"], [["A1"]])
@@ -305,7 +305,7 @@ class HaCautions(unittest.TestCase):
         d = pair("A1", "A2")
         d[1]["facts"]["pending_changes"] = True
         self.assertEqual(dev(plan(fleet(d)), "A1")["verdict"], "blocked")
-        self.assertEqual(dev(plan(fleet(d), blocked_peer="caution"), "A1")["verdict"], "caution")
+        self.assertEqual(dev(plan(fleet(d), blocked_peer="warn"), "A1")["verdict"], "caution")
 
     def test_unhealthy_ha_sync_blocks(self):
         d = pair("A1", "A2")

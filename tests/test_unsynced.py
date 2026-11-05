@@ -45,7 +45,7 @@ class UnsyncedPairs(unittest.TestCase):
         self.assertEqual((dev(p, "A1")["verdict"], dev(p, "A2")["verdict"]), ("blocked", "blocked"))
 
     def test_choosing_caution_prints_a_loosening_warning(self):
-        self.assertTrue(any("ha_config_unsynced=caution" in w for w in settings.load(None, ["ha_config_unsynced=caution"]).loosening_warnings()))
+        self.assertTrue(any("ha_config_unsynced=warn" in w for w in settings.load(None, ["ha_config_unsynced=warn"]).loosening_warnings()))
         self.assertFalse(any("ha_config_unsynced" in w for w in settings.load(None, []).loosening_warnings()))
 
     def test_when_accepted_the_flag_sits_on_the_active_member_and_the_passive_is_not_held_up(self):
@@ -64,7 +64,7 @@ class UnsyncedPairs(unittest.TestCase):
     def test_block_refuses_to_plan_such_a_pair_and_names_the_way_out(self):
         p, _ = plan_for(self.data(), ha_config_unsynced="block")
         self.assertEqual((dev(p, "A1")["verdict"], dev(p, "A2")["verdict"]), ("blocked", "blocked"))
-        self.assertIn("ha_config_unsynced=caution", " ".join(r["reason"] for r in dev(p, "A2")["results"]))
+        self.assertIn("ha_config_unsynced=warn", " ".join(r["reason"] for r in dev(p, "A2")["results"]))
 
     def test_upgrading_only_the_passive_involves_no_failover_and_so_no_flag(self):
         p, _ = plan_for(self.data(), sel=Selection(serials=["A2"]))

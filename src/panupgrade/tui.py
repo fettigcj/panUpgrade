@@ -20,7 +20,7 @@ def plain(lines):
     return "\n".join("".join(text for _style, text in line) for line in lines)
 
 
-CODES = {"bold": "\x1b[1m", "dim": "\x1b[2m", "focus": "\x1b[7m", "error": "\x1b[31m", "warn": "\x1b[33m", "ok": "\x1b[32m", "focus-error": "\x1b[7;31m", "": ""}
+CODES = {"bold": "\x1b[1m", "dim": "\x1b[2m", "focus": "\x1b[7m", "error": "\x1b[31m", "warn": "\x1b[33m", "ok": "\x1b[32m", "changed": "\x1b[94m", "focus-error": "\x1b[7;31m", "focus-warn": "\x1b[7;33m", "": ""}
 
 
 def draw(form, out, width, height, title=""):

@@ -1095,7 +1095,7 @@ def _settings(args):
     if not use_form:
         print(json.dumps(asdict(current), indent=2))
         for warning in current.loosening_warnings():
-            print(f"caution: {warning}", file=sys.stderr)
+            print(f"warn: {warning}", file=sys.stderr)
         return 0
     from . import tui
     form = _settings_form(args)

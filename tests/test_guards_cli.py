@@ -110,7 +110,7 @@ class Cli(unittest.TestCase):
         code, out, err = run(["settings", "--set", "pending_changes=ignore"])
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out)["max_failures"], 5)
-        self.assertIn("caution", err)
+        self.assertIn("warn:", err)
 
 
 if __name__ == "__main__":

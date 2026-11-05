@@ -9,7 +9,7 @@ upgrade_suspended  = true      # a member that is suspended carries no traffic: 
 restore_roles      = "leave"   # once both members are done: leave | restore (fail back to the original active)
 sync_to_peer       = "Both"    # force the passive member to match the active one: Disable (never) | Both (in `prepare` AND again during the upgrade) | UpgradeOnly (only during the upgrade)
 sync_timeout_s     = 600
-ha_config_unsynced = "block"   # only used when sync_to_peer = Disable. A pair whose passive config is not synchronized: block (refuse to plan it; default) | caution (flag the failover moment on the active member, accepted when you prepare the batch)
+ha_config_unsynced = "block"   # only used when sync_to_peer = Disable. A pair whose passive config is not synchronized: block (refuse to plan it; default) | warn (flag the failover moment on the active member, accepted when you prepare the batch)
 sync_content       = "prepare" # HA members must run the same dynamic content and PAN-OS must agree; prepare installs the latest on both (listed in the one approval prompt) | never. A mismatch GATES the config sync.
 
 # ---- Panorama range (advice only; never blocks an upgrade) ---------------------------------------------------
@@ -23,7 +23,7 @@ pending_changes    = "block"   # uncommitted candidate config on a firewall: blo
 
 # ---- Downgrades ----------------------------------------------------------------------------------------------
 delete_unneeded_images         = false   # prepare deletes PAN-OS images this upgrade does not need (keeps running, base images, path, target)
-blocked_peer                   = "block"   # block | caution: a member whose HA peer is blocked by a check is held too (block) or only flagged
+blocked_peer                   = "block"   # block | warn: a member whose HA peer is blocked by a check is held too (block) or only flagged
 allow_downgrade                = false   # install a release older than the one running (across feature releases too, by the skip rule)
 
 # ---- Images, disk, time --------------------------------------------------------------------------------------

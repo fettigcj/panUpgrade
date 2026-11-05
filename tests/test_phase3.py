@@ -55,7 +55,7 @@ class SyncToPeerPlanning(unittest.TestCase):
             self.assertIn("sync to peer", [s["action"] for s in dev(p, "A2")["steps"]])
 
     def test_disable_with_caution_plans_the_pair_and_flags_the_failover_moment(self):
-        p, _ = plan_for(self.data(), sync_to_peer="Disable", ha_config_unsynced="caution")
+        p, _ = plan_for(self.data(), sync_to_peer="Disable", ha_config_unsynced="warn")
         self.assertIn("failover_to_unsynced_passive", [c["code"] for c in p["cautions"]])
         self.assertNotIn("sync to peer", [s["action"] for s in dev(p, "A2")["steps"]])
 
@@ -633,7 +633,7 @@ class OneApprovalCoversContent(unittest.TestCase):
         self.assertEqual(code, 1)
 
     def test_a_failed_preparation_does_not_veto_the_kit_when_the_unsynced_pair_was_accepted(self):
-        code, out, _ = self.run_prepare(["APPROVE"], "--target", TARGET, "--set", "sync_content=never", "--set", "ha_config_unsynced=caution")
+        code, out, _ = self.run_prepare(["APPROVE"], "--target", TARGET, "--set", "sync_content=never", "--set", "ha_config_unsynced=warn")
         self.assertIn("These preparation steps failed:", out)
         self.assertIn("may not include firewalls that failed to prepare", out)
         self.assertIn("the upgrade kit is ready", out)

@@ -175,7 +175,7 @@ class Editing(unittest.TestCase):
         import re
         for width in (70, 100, 160):
             for name in settingsform.shown_names():
-                form = fresh(pending_changes="ignore", allow_downgrade="true", ha_config_unsynced="caution")
+                form = fresh(pending_changes="ignore", allow_downgrade="true", ha_config_unsynced="warn")
                 goto(form, name)
                 text = " ".join(explanation(form, width, 60).split())
                 description, meanings = settingsform.INFO[name]
@@ -206,7 +206,7 @@ class Editing(unittest.TestCase):
 
     def test_an_explanation_taller_than_the_window_scrolls_with_page_up_and_down(self):
         for width, height in ((150, 18), (100, 26)):                                       # beside the list, and stacked below it
-            form = fresh(pending_changes="ignore", allow_downgrade="true", ha_config_unsynced="caution")
+            form = fresh(pending_changes="ignore", allow_downgrade="true", ha_config_unsynced="warn")
             goto(form, "sync_to_peer")
             first = explanation(form, width, height)
             self.assertIn("PgUp / PgDn scroll this: lines 1-", first)
@@ -216,14 +216,14 @@ class Editing(unittest.TestCase):
                 form.press("pgdn")
                 seen += " " + " ".join(explanation(form, width, height).split())
             self.assertIn("UpgradeOnly: force the sync only during the upgrade itself", seen, (width, height))
-            self.assertIn("Caution: ha_config_unsynced=caution", seen, (width, height))
+            self.assertIn("Warn: ha_config_unsynced=warn", seen, (width, height))
             for _ in range(20):
                 form.press("pgup")
             self.assertIn("PgUp / PgDn scroll this: lines 1-", explanation(form, width, height))
             self.assertLessEqual(len(form.render(width, height)), height)
 
     def test_the_scroll_starts_again_at_the_top_for_another_setting_and_the_buttons_stay_visible(self):
-        form = fresh(pending_changes="ignore", allow_downgrade="true", ha_config_unsynced="caution")
+        form = fresh(pending_changes="ignore", allow_downgrade="true", ha_config_unsynced="warn")
         goto(form, "sync_to_peer")
         keys(form, "pgdn", "pgdn")
         self.assertGreater(form.pane_offset, 0)
@@ -259,7 +259,7 @@ class Editing(unittest.TestCase):
     def test_no_line_of_the_side_by_side_layout_is_wider_than_the_window(self):
         for width in (110, 130, 200):
             self.assertTrue(fresh().side_by_side(width))
-            for line in fresh(pending_changes="ignore", allow_downgrade="true", ha_config_unsynced="caution").render(width, 40):
+            for line in fresh(pending_changes="ignore", allow_downgrade="true", ha_config_unsynced="warn").render(width, 40):
                 self.assertLess(len("".join(t for _s, t in line)), width)
 
     def test_ha_config_unsynced_reads_as_the_owner_wrote_it_with_its_paragraphs(self):
@@ -281,7 +281,7 @@ class Editing(unittest.TestCase):
     def test_risky_settings_show_a_caution_wherever_the_cursor_is(self):
         form = fresh(pending_changes="ignore")
         goto(form, "spread_limit")
-        self.assertIn("Caution: pending_changes=ignore", screen(form))
+        self.assertIn("Warn: pending_changes=ignore", screen(form))
 
     def test_a_short_window_scrolls_to_keep_the_current_setting_in_view(self):
         form = fresh()
@@ -293,6 +293,42 @@ class Editing(unittest.TestCase):
         for width in (60, 90, 140):
             for line in fresh(allow_downgrade="true").render(width, 40):
                 self.assertLess(len("".join(t for _s, t in line)), width)
+
+
+class Colours(unittest.TestCase):
+    """block is red, warn is gold, and a setting changed from its default is blue: the colour says what the word means."""
+
+    def styled(self, form, name, width=120):
+        for line in form.render(width, 40, "t"):
+            if any(text.strip(" >*").startswith(name) for _s, text in line[:1]):
+                return line
+        self.fail(f"{name} is not on the screen")
+
+    def test_a_changed_setting_is_blue_and_an_unchanged_one_is_not(self):
+        form = fresh(max_failures=7)
+        form.zone, form.focus = "rows", form.names.index("spread_limit")
+        self.assertEqual(self.styled(form, "max_failures")[0][0], "changed")
+        self.assertEqual(self.styled(form, "max_parallel")[0][0], "")
+
+    def test_block_is_red_and_warn_is_gold_wherever_they_are_chosen(self):
+        form = fresh(pending_changes="warn", blocked_peer="warn")
+        form.zone, form.focus = "rows", form.names.index("spread_limit")
+        boxes = {name: self.styled(form, name)[1] for name in ("pending_changes", "blocked_peer", "ha_config_unsynced")}
+        self.assertEqual(boxes["pending_changes"][0], "warn")
+        self.assertEqual(boxes["blocked_peer"][0], "warn")
+        self.assertEqual(boxes["ha_config_unsynced"][0], "error")             # block, the default: red although unchanged
+
+    def test_the_choice_names_in_the_explanation_carry_their_colour(self):
+        form = fresh()
+        goto(form, "blocked_peer")
+        styles = {text.strip(): style for line in form.render(160, 40, "t") for style, text in line if text.strip() in ("block:", "> block:", "warn:", "> warn:")}
+        self.assertEqual(styles.get("> block:"), "error")
+        self.assertEqual(styles.get("warn:"), "warn")
+
+    def test_the_old_name_caution_is_still_read_as_warn(self):
+        self.assertEqual(settings.load(None, ["blocked_peer=caution"]).blocked_peer, "warn")
+        self.assertEqual(settings.load(None, ["ha_config_unsynced=Caution"]).ha_config_unsynced, "warn")
+        self.assertNotIn("caution", settings._CHOICES["blocked_peer"])
 
 
 class Buttons(unittest.TestCase):

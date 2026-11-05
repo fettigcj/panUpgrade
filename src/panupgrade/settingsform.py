@@ -66,12 +66,12 @@ INFO = {
                            "differences could cause catastrophic network changes.\n\n"
                            "Only used when sync_to_peer is Disable; with Both or UpgradeOnly the tool syncs the pair itself.",
                            {"block": "refuse to plan such a pair at all, so nobody runs into it unread",
-                            "caution": "plan it anyway, flag that moment on the active member, and accept it when the batch is prepared"}),
+                            "warn": "plan it anyway, flag that moment on the active member, and accept it when the batch is prepared"}),
     "blocked_peer": ("What to do with an HA member that could be upgraded when the other member of its pair is blocked by a check (or "
                      "could not be read). The active member's upgrade hands the traffic to its peer for the whole reboot, and either "
                      "upgrade leaves the pair on two releases. A peer that is only not selected, or already on the target, is not affected.",
                      {"block": "the default. Hold this member too, saying why, so half a pair is never upgraded against a problem",
-                      "caution": "plan it anyway and flag it, to be accepted when the batch is prepared"}),
+                      "warn": "plan it anyway and flag it, to be accepted when the batch is prepared"}),
     "sync_content": ("Dynamic content (applications and threats, antivirus, WildFire). HA members should run the same versions, "
                      "and a mismatch holds up the configuration sync.",
                      {"never": "leave content as it is",
@@ -131,6 +131,7 @@ HELP = {
 ALWAYS = "Shortcuts: Ctrl-D = Save & Exit   Esc = Quit without saving (asks first if there are unsaved changes)"
 NAME_WIDTH, VALUE_WIDTH = 30, 14
 LEFT_WIDTH = 4 + NAME_WIDTH + 2 + VALUE_WIDTH + 2 + 10      # the list on the left; the explanation goes to its right when there is room
+VERB_STYLE = {"block": "error", "warn": "warn"}               # the colour of a choice that blocks (red) or only warns (gold), wherever it is shown
 SIDE_MIN = 44                                               # the least width the explanation needs beside the list
 
 
@@ -414,9 +415,12 @@ class Form:
         box = f"< {text} >" if cycles else f"[{text}{'_' if here else ''}]"
         if len(box) > VALUE_WIDTH:
             box = box[:VALUE_WIDTH - 3] + ("..>" if cycles else "..]")        # the whole value is printed in full under the list
-        marker = "*" if self.changed(name) else " "
-        style = "focus" if here else ("error" if wrong else "")
-        return [(style, f" {'>' if here else ' '}{marker} {name.ljust(NAME_WIDTH)}  {box.ljust(VALUE_WIDTH)}  "),
+        changed = self.changed(name)
+        marker = "*" if changed else " "
+        style = "focus" if here else ("error" if wrong else "changed" if changed else "")
+        verb = VERB_STYLE.get(text) if cycles else None                        # block is red and warn is gold wherever they are chosen
+        box_style = ("focus-" + verb if here else verb) if verb else style
+        return [(style, f" {'>' if here else ' '}{marker} {name.ljust(NAME_WIDTH)}  "), (box_style, box.ljust(VALUE_WIDTH)), (style, "  "),
                 (style or "dim", _fmt(getattr(self.defaults, name)))]
 
     @staticmethod
@@ -461,14 +465,19 @@ class Form:
             for choice in (choices or list(meanings)):
                 if choice in meanings:
                     here = choice == text
-                    out += self._wrapped("bold" if here else "", meanings[choice], width, "       ", f"   {'>' if here else ' '} {choice}: ")
+                    lead = f"   {'>' if here else ' '} {choice}: "
+                    lines = self._wrapped("bold" if here else "", meanings[choice], width, "       ", lead)
+                    if choice in VERB_STYLE:                                       # the verb itself carries its colour
+                        style = lines[0][0][0]
+                        lines[0] = [(VERB_STYLE[choice], lead.rstrip()), (style, lines[0][0][1][len(lead.rstrip()):])]
+                    out += lines
         if kind is str and not choices and len(text) > VALUE_WIDTH - 2:
             out += self._wrapped("", text, width, "     ", "   Value: ")
         warnings = current.loosening_warnings() if current is not None else []
         if warnings:
             out.append([])
         for warning in warnings:
-            out += self._wrapped("warn", warning, width, "     ", "   Caution: ")
+            out += self._wrapped("warn", warning, width, "     ", "   Warn: ")
         return out
 
     @staticmethod

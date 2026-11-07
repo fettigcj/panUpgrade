@@ -283,3 +283,67 @@ class LiveBackend(Backend):
         self._send(HA_STATE["functional"], serial)
         self._wait_until(serial, lambda: self.state(serial)["ha_state"] in ("active", "passive", "initial", "active-primary", "active-secondary"),
                          300, "the member leaving the suspended state")
+
+    # ---- the asymmetry window (windows.py). UNVERIFIED on a real firewall: the reply shapes below and a Panorama-proxied config edit and commit.
+
+    def tcp_asymmetry(self, serial):
+        """{"reject_non_syn": bool in force, "reject_non_syn_config": "yes" | "no" | None, "asymmetric_path": "drop" | "bypass" | None}.
+        None is "not set" (the factory default). Refuses (BackendError) to guess: what cannot be read cannot be restored."""
+        try:
+            info = self.read.op_xml("<show><session><info/></session></show>", target=serial)
+            config = self.read.op_xml("<show><config><running/></config></show>", target=serial)
+        except SourceError as exc:
+            raise BackendError(f"{serial}: cannot read the TCP settings: {exc}") from None
+        flag = next((e for e in info.iter() if e.tag.lower() == "tcp-reject-non-syn"), None)
+        word = ((flag.text or "").strip().lower() if flag is not None else "")
+        if word not in ("true", "false", "yes", "no"):
+            raise BackendError(f"{serial}: cannot read tcp-reject-non-syn from `show session info` (got {word!r}); nothing was changed")
+        setting = "result/config/devices/entry/deviceconfig/setting/"
+        values = {}
+        for key, path, allowed in (("asymmetric_path", "tcp/asymmetric-path", ("bypass", "drop")),
+                                   ("reject_non_syn_config", "session/tcp-reject-non-syn", ("yes", "no"))):
+            node = config.find(setting + path)
+            value = (node.text or "").strip().lower() if node is not None else None
+            if value not in (None, *allowed):
+                raise BackendError(f"{serial}: {path} reads {value!r}, which this tool does not know how to put back; nothing was changed")
+            values[key] = value
+        return {"reject_non_syn": word in ("true", "yes"), **values}
+
+    def set_tcp_asymmetry(self, serial, reject_non_syn, reject_non_syn_config, asymmetric_path):
+        """Both configuration nodes (None deletes the node: back to "not set"), one commit on the firewall, and only then the in-force flag,
+        because an operational `set session tcp-reject-non-syn` does not survive a commit."""
+        try:
+            for knob, value in (("tcp-reject-non-syn", reject_non_syn_config), ("asymmetric-path", asymmetric_path)):
+                self.write.write_config(knob, "delete" if value is None else "set", value, serial)
+            job = self._job_id(self.write.commit_local(serial))
+        except SourceError as exc:
+            raise BackendError(str(exc)) from None
+        self._wait_job(serial, job, self.settings.install_timeout_s, "the commit of the TCP setting change")
+        self._send(f"<set><session><tcp-reject-non-syn>{'yes' if reject_non_syn else 'no'}</tcp-reject-non-syn></session></set>", serial)
+
+    def lb_profile(self, serial, profile, protocols):
+        """An interface management profile as the firewall has it now: {"exists": bool, "values": {protocol: "yes" | "no" | None}}. UNVERIFIED reply shape."""
+        try:
+            config = self.read.op_xml("<show><config><running/></config></show>", target=serial)
+        except SourceError as exc:
+            raise BackendError(f"{serial}: cannot read the interface management profile: {exc}") from None
+        found = next((e for e in config.iterfind("result/config/devices/entry/network/profiles/interface-management-profile/entry")
+                      if e.get("name") == profile), None)
+        values = {}
+        for protocol in protocols:
+            node = found.find(protocol) if found is not None else None
+            value = (node.text or "").strip().lower() if node is not None else None
+            if value not in (None, "yes", "no"):
+                raise BackendError(f"{serial}: {protocol} in the profile {profile!r} reads {value!r}, which this tool does not know how to put back; nothing was changed")
+            values[protocol] = value
+        return {"exists": found is not None, "values": values}
+
+    def set_lb_profile(self, serial, profile, changes):
+        """Edit the named profile (one commit on the firewall). None removes the protocol's node: back to "not set"."""
+        try:
+            for protocol, value in changes.items():
+                self.write.write_profile(profile, protocol, "delete" if value is None else "set", value, serial)
+            job = self._job_id(self.write.commit_local(serial))
+        except SourceError as exc:
+            raise BackendError(str(exc)) from None
+        self._wait_job(serial, job, self.settings.install_timeout_s, "the commit of the interface management profile change")

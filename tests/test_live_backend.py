@@ -291,5 +291,121 @@ class OnlyAllowListedCommandsCanBeSent(unittest.TestCase):
                 r.op_xml(bad, "S1")
 
 
+class TheAsymmetryWindowOnARealFirewall(unittest.TestCase):
+    """Reply shapes are UNVERIFIED against a firewall; these pin what the code does with the shapes it expects, and that it refuses to guess."""
+    SESSION = "<show><session><info/></session></show>"
+    CONFIG = "<show><config><running/></config></show>"
+
+    def read_script(self, flag="True", path=None, config=None):
+        node = f"<asymmetric-path>{path}</asymmetric-path>" if path else ""
+        session = f"<session><tcp-reject-non-syn>{config}</tcp-reject-non-syn></session>" if config else ""
+        return {("xml", self.SESSION, "S1"): [ok(f"<tcp-reject-non-syn>{flag}</tcp-reject-non-syn>")],
+                ("xml", self.CONFIG, "S1"): [R(f"<response status='success'><result><config><devices><entry><deviceconfig><setting><tcp>{node}</tcp>{session}</setting></deviceconfig></entry></devices></config></result></response>")]}
+
+    def test_it_reads_both_values_and_none_means_not_configured(self):
+        self.assertEqual(backend(Scripted(self.read_script("True"))).tcp_asymmetry("S1"), {"reject_non_syn": True, "reject_non_syn_config": None, "asymmetric_path": None})
+        self.assertEqual(backend(Scripted(self.read_script("False", "bypass", "no"))).tcp_asymmetry("S1"),
+                         {"reject_non_syn": False, "reject_non_syn_config": "no", "asymmetric_path": "bypass"})
+
+    def test_it_refuses_to_guess_what_it_cannot_read(self):
+        script = self.read_script()
+        script[("xml", self.SESSION, "S1")] = [ok("<something-else>x</something-else>")]
+        with self.assertRaises(BackendError):
+            backend(Scripted(script)).tcp_asymmetry("S1")
+        with self.assertRaises(BackendError):
+            backend(Scripted(self.read_script("True", "global"))).tcp_asymmetry("S1")
+
+    def test_setting_edits_and_commits_on_the_firewall_and_only_then_changes_the_runtime_flag(self):
+        order = []
+
+        class Write(Scripted):
+            def write_config(self, knob, action, value, target):
+                order.append(("config", knob, action, value))
+                return ok()
+
+            def commit_local(self, target):
+                order.append(("commit",))
+                return ok("<job>77</job>")
+
+            def write_xml(self, xml, target):
+                order.append(("op", xml))
+                return R("<response status='success'/>")
+        w = Write({("xml", "<show><jobs><id>77</id></jobs></show>", "S1"): [JOB("FIN")]})
+        backend(w, w).set_tcp_asymmetry("S1", False, "no", "bypass")
+        self.assertEqual(order, [("config", "tcp-reject-non-syn", "set", "no"), ("config", "asymmetric-path", "set", "bypass"), ("commit",), ("op", "<set><session><tcp-reject-non-syn>no</tcp-reject-non-syn></session></set>")])
+        order.clear()
+        backend(w, w).set_tcp_asymmetry("S1", True, None, None)
+        self.assertEqual(order[:2], [("config", "tcp-reject-non-syn", "delete", None), ("config", "asymmetric-path", "delete", None)])
+
+    def test_only_the_asymmetric_path_may_be_edited_and_only_those_ways(self):
+        from panupgrade_live.panorama import WRITE_ALLOWED, _config_params
+        w = WriteApi("192.0.2.1", key="not-a-key")
+        for knob, action, value in (("asymmetric-path", "set", "allow"), ("asymmetric-path", "set", None), ("asymmetric-path", "delete", "bypass"),
+                                    ("asymmetric-path", "edit", "bypass"), ("asymmetric-path", "set", "bypass; drop"), ("tcp-reject-non-syn", "set", "bypass"),
+                                    ("tcp-reject-non-syn", "set", "maybe"), ("hostname", "set", "x")):
+            with self.assertRaises(PermissionError, msg=(knob, action, value)):
+                w.write_config(knob, action, value, "S1")
+        with self.assertRaises(PermissionError):
+            w.write_config("asymmetric-path", "set", "bypass", None)
+        with self.assertRaises(PermissionError):
+            w.commit_local(None)
+        self.assertIn("asymmetric-path", _config_params("asymmetric-path", "set", "bypass")["element"])
+        self.assertTrue(_config_params("asymmetric-path", "delete", None)["xpath"].endswith("/tcp/asymmetric-path"))
+        self.assertEqual(_config_params("tcp-reject-non-syn", "set", "no")["element"], "<tcp-reject-non-syn>no</tcp-reject-non-syn>")
+        self.assertTrue(_config_params("tcp-reject-non-syn", "delete", None)["xpath"].endswith("/setting/session/tcp-reject-non-syn"))
+        allowed = lambda xml: any(p.fullmatch(xml) for p in WRITE_ALLOWED)
+        self.assertTrue(allowed("<set><session><tcp-reject-non-syn>no</tcp-reject-non-syn></session></set>"))
+        for bad in ("<set><session><tcp-reject-non-syn>maybe</tcp-reject-non-syn></session></set>", "<set><session><other>no</other></session></set>"):
+            self.assertFalse(allowed(bad), bad)
+
+
+class TheLoadBalancerDrainOnARealFirewall(unittest.TestCase):
+    CONFIG = "<show><config><running/></config></show>"
+
+    def config(self, body):
+        return R(f"<response status='success'><result><config><devices><entry><network><profiles><interface-management-profile>{body}"
+                 f"</interface-management-profile></profiles></network></entry></devices></config></result></response>")
+
+    def test_it_reads_the_named_profile_and_not_the_others(self):
+        w = Scripted({("xml", self.CONFIG, "S1"): [self.config("<entry name='Other'><ssh>yes</ssh></entry><entry name='LB'><ssh>yes</ssh><http>no</http></entry>")]})
+        self.assertEqual(backend(w).lb_profile("S1", "LB", ["ssh", "http", "https"]), {"exists": True, "values": {"ssh": "yes", "http": "no", "https": None}})
+        w = Scripted({("xml", self.CONFIG, "S1"): [self.config("<entry name='Other'/>")]})
+        self.assertEqual(backend(w).lb_profile("S1", "LB", ["ssh"]), {"exists": False, "values": {"ssh": None}})
+
+    def test_it_refuses_a_value_it_cannot_put_back(self):
+        w = Scripted({("xml", self.CONFIG, "S1"): [self.config("<entry name='LB'><ssh>maybe</ssh></entry>")]})
+        with self.assertRaises(BackendError):
+            backend(w).lb_profile("S1", "LB", ["ssh"])
+
+    def test_the_edits_come_before_one_commit(self):
+        order = []
+
+        class Write(Scripted):
+            def write_profile(self, profile, protocol, action, value, target):
+                order.append((profile, protocol, action, value))
+                return ok()
+
+            def commit_local(self, target):
+                order.append(("commit",))
+                return ok("<job>9</job>")
+        w = Write({("xml", "<show><jobs><id>9</id></jobs></show>", "S1"): [JOB("FIN")]})
+        backend(w, w).set_lb_profile("S1", "LB", {"ssh": "no", "http": None})
+        self.assertEqual(order, [("LB", "ssh", "set", "no"), ("LB", "http", "delete", None), ("commit",)])
+
+    def test_only_one_protocol_of_a_named_profile_can_be_edited(self):
+        from panupgrade_live.panorama import _profile_params
+        w = WriteApi("192.0.2.1", key="not-a-key")
+        for args in (("LB", "telnet", "set", "no"), ("LB", "ssh", "set", "maybe"), ("LB", "ssh", "delete", "no"), ("LB]/x[", "ssh", "set", "no"),
+                     ("", "ssh", "set", "no"), ("LB", "ssh", "edit", "no")):
+            with self.assertRaises(PermissionError, msg=args):
+                w.write_profile(*args, "S1")
+        with self.assertRaises(PermissionError):
+            w.write_profile("LB", "ssh", "set", "no", None)
+        got = _profile_params("LB-Probe", "ssh", "set", "no")
+        self.assertIn("interface-management-profile/entry[@name='LB-Probe']", got["xpath"])
+        self.assertEqual(got["element"], "<ssh>no</ssh>")
+        self.assertTrue(_profile_params("LB-Probe", "ssh", "delete", None)["xpath"].endswith("entry[@name='LB-Probe']/ssh"))
+
+
 if __name__ == "__main__":
     unittest.main()

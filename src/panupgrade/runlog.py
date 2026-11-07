@@ -67,9 +67,15 @@ def build(run, plan, hosts, events, label, journal_path, result=None):
         verdict = f"{done} of {len(outcome)} firewalls finished all their steps, {result['failures']} failed."
         if result.get("stopped"):
             verdict += " Stopped early: the failure limit was reached, so nothing further was started."
+        if result.get("lb_unrestored"):
+            verdict += (f" ALERT: {len(result['lb_unrestored'])} firewall(s) may still be drained from their load balancer (profile not confirmed back): "
+                        + ", ".join(e["serial"] for e in result["lb_unrestored"]) + ".")
+        if result.get("asymmetry_unrestored"):
+            verdict += (f" ALERT: {len(result['asymmetry_unrestored'])} firewall(s) are still set to accept asymmetric traffic (tcp-reject-non-syn / "
+                        f"asymmetric-path were changed for the window and not put back): " + ", ".join(e["serial"] for e in result["asymmetry_unrestored"]) + ".")
     return {"run": run, "heading": HEADINGS[run], "target": plan.get("target") or NO_TARGET, "label": label, "plan_hash": plan["hash"][:12],
             "journal": str(journal_path), "generated": datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z"),
-            "verdict": verdict, "failed": result is None or bool(result["failures"]),
+            "verdict": verdict, "failed": result is None or bool(result["failures"]) or bool(result.get("asymmetry_unrestored")) or bool(result.get("lb_unrestored")),
             "outcome": [{"host": hosts.get(s, s), "serial": s, "state": st, "detail": d} for s, (st, d) in outcome.items()],
             "all": everything, "tabs": tabs}
 

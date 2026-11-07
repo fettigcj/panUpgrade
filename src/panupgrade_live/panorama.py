@@ -195,9 +195,11 @@ class PanoramaApi:
         return self._post(xml, target, xml)
 
     def _post(self, xml, target, label):
+        return self._post_params({"type": "op", "cmd": xml}, target, label)
+
+    def _post_params(self, params, target, label):
         command = label
         progress.say(f"asking {'firewall ' + target if target else 'Panorama'}: {' '.join(re.sub(r'<[^>]*>', ' ', label).split())}")
-        params = {"type": "op", "cmd": xml}
         if target:
             params["target"] = target
         if self._limiter:
@@ -233,7 +235,26 @@ WRITE_ALLOWED = [
     re.compile(r"<request><(content|anti-virus|wildfire)><upgrade><install><version>latest</version></install></upgrade></\1></request>"),
     re.compile(r"<request><high-availability><state><(?:suspend|functional)/></state></high-availability></request>"),
     re.compile(r"<request><high-availability><sync-to-remote><running-config/></sync-to-remote></high-availability></request>"),
+    # the asymmetry window (see windows.py): the runtime half; the configuration half is write_config() below
+    re.compile(r"<set><session><tcp-reject-non-syn>(?:yes|no)</tcp-reject-non-syn></session></set>"),
 ]
+
+# The ONLY configuration edits a write-capable connection may make: the asymmetric-path value under the firewall's own device settings,
+# set to bypass or drop or removed, and a commit. Spelled out, with the one xpath each; nothing else can be named.
+_SETTING = "/config/devices/entry[@name='localhost.localdomain']/deviceconfig/setting"
+_KNOBS = {"asymmetric-path": (_SETTING + "/tcp", ("bypass", "drop")),             # set deviceconfig setting tcp asymmetric-path
+          "tcp-reject-non-syn": (_SETTING + "/session", ("yes", "no"))}            # set deviceconfig setting session tcp-reject-non-syn (xpath not confirmed from vendor docs)
+
+
+def _config_params(knob, action, value):
+    """The request for one allowed configuration edit. UNVERIFIED against a real Panorama: that ``type=config`` accepts ``target`` for a managed firewall."""
+    if knob in _KNOBS:
+        parent, allowed = _KNOBS[knob]
+        if action == "set" and value in allowed:
+            return {"type": "config", "action": "set", "xpath": parent, "element": f"<{knob}>{value}</{knob}>"}
+        if action == "delete" and value is None:
+            return {"type": "config", "action": "delete", "xpath": f"{parent}/{knob}"}
+    raise PermissionError(f"refusing a configuration edit that is not on the allow-list: {knob} {action} {value!r}")
 
 
 class WriteApi(PanoramaApi):
@@ -245,6 +266,39 @@ class WriteApi(PanoramaApi):
         if not any(p.fullmatch(xml) for p in WRITE_ALLOWED):
             raise PermissionError(f"refusing a command that is not on the write allow-list: {xml[:80]!r}")
         return self._post(xml, target, xml)
+
+    def write_config(self, knob, action, value, target):
+        """Set one of the two allowed device settings (asymmetric-path, tcp-reject-non-syn) or remove it (``action`` "delete", value None). The candidate configuration only; commit_local follows."""
+        if not target:
+            raise PermissionError("a write command must name the firewall it is for; none is ever sent to Panorama itself")
+        return self._post_params(_config_params(knob, action, value), target, f"config {action} {knob} {value or ''}".strip())
+
+    def write_profile(self, profile, protocol, action, value, target):
+        """Set one protocol of an interface management profile to yes / no, or remove it. The candidate configuration only; commit_local follows."""
+        if not target:
+            raise PermissionError("a write command must name the firewall it is for; none is ever sent to Panorama itself")
+        return self._post_params(_profile_params(profile, protocol, action, value), target, f"config {action} {profile} {protocol} {value or ''}".strip())
+
+    def commit_local(self, target):
+        """Commit the firewall's candidate configuration on the firewall itself. The caller has checked that nothing else is uncommitted there."""
+        if not target:
+            raise PermissionError("a write command must name the firewall it is for; none is ever sent to Panorama itself")
+        return self._post_params({"type": "commit", "cmd": "<commit></commit>"}, target, "commit on the firewall")
+
+
+_PROFILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,30}")
+_PROFILE_PROTOCOLS = ("ssh", "http", "https", "ping")
+
+
+def _profile_params(profile, protocol, action, value):
+    """One allowed edit of an interface management profile (the load balancer drain): one of four protocols set yes / no, or removed."""
+    if _PROFILE_NAME.fullmatch(profile or "") and protocol in _PROFILE_PROTOCOLS:
+        entry = f"{_SETTING.replace('/deviceconfig/setting', '')}/network/profiles/interface-management-profile/entry[@name='{profile}']"
+        if action == "set" and value in ("yes", "no"):
+            return {"type": "config", "action": "set", "xpath": entry, "element": f"<{protocol}>{value}</{protocol}>"}
+        if action == "delete" and value is None:
+            return {"type": "config", "action": "delete", "xpath": f"{entry}/{protocol}"}
+    raise PermissionError(f"refusing a profile edit that is not on the allow-list: {profile!r} {protocol} {action} {value!r}")
 
 
 def write_api(address, creds_file=None, account=None, verify_tls=None, recorder=None, limiter=None, key=None):

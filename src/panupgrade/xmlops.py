@@ -290,6 +290,10 @@ class OpSource(Source):
         self._pano, self._refs, self._op_for = panorama_version, list(refs), op_for
         self._pano_clock = panorama_clock
 
+    def op_on(self, serial, command):
+        """One read-only operational command on one firewall (through Panorama): the parsed reply. For tools that look at a single firewall."""
+        return self._op_for(serial)(command)
+
     def panorama_version(self):
         return self._pano
 

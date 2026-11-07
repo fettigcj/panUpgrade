@@ -23,8 +23,10 @@ BUTTON_LABELS = ["Save", "Save & Exit", "Quit without saving"]
 SAVE_ONLY, SAVE_EXIT, QUIT = 0, 1, 2
 
 SECTIONS = [
-    ("HA behaviour", ["failover_band", "post_upgrade_band", "restore_roles", "upgrade_suspended", "sync_to_peer", "sync_timeout_s", "busy_wait_s", "settle_after_failover_s", "settle_after_reboot_s", "ha_config_unsynced", "blocked_peer",
-                      "sync_content", "content_settle_s"]),
+    ("HA behaviour", []),
+    ("  Active/Passive pairs", ["failover_band", "post_upgrade_band", "restore_roles", "upgrade_suspended", "pair_tolerate_asymmetry", "sync_to_peer", "sync_timeout_s",
+                               "busy_wait_s", "settle_after_failover_s", "settle_after_reboot_s", "ha_config_unsynced", "blocked_peer", "sync_content", "content_settle_s"]),
+    ("  Stand-alone groups", ["group_reboot_tolerance", "group_tolerate_asymmetry", "lb_drain_profile", "lb_drain_probe_protocol", "lb_drain_wait_s"]),
     ("Panorama range", ["spread_limit", "panorama_compare"]),
     ("Failure handling", ["max_failures", "max_parallel", "api_rate_per_s", "pending_changes"]),
     ("Downgrades", ["allow_downgrade"]),
@@ -36,6 +38,38 @@ INFO = {
     "failover_band": ("After the active member fails over, the new active member's session count must be within this fraction of what "
                       "it was before. 0.30 means plus or minus 30%.", {}),
     "post_upgrade_band": ("After the upgrade, the active member's session count must be within this fraction of the pair's baseline.", {}),
+    "pair_tolerate_asymmetry": ("Allow Asymmetric Return During Upgrade Window, for HA pairs. When the active member is suspended or reboots, the half-open TCP "
+                                "handshakes it held are not synchronized to its peer; the peer then sees the rest of those flows as asymmetric and drops them. "
+                                "On: before the first member of a pair is touched, the tool records each member's current values, sets `set session "
+                                "tcp-reject-non-syn no` plus the persistent `deviceconfig setting session tcp-reject-non-syn no` and `deviceconfig setting tcp "
+                                "asymmetric-path bypass` (committed on the firewall, so the pair must have no other uncommitted changes), and puts all three back, "
+                                "deleting a setting that was not set when the pair is finished, successful or not. Every change and restore is "
+                                "journaled; a firewall that could not be restored is reported loudly. Optional for pairs, since HA2 keeps ordinary sessions.",
+                                {"true": "open the window for each pair that is upgraded",
+                                 "false": "the default. Leave the firewalls' TCP settings alone"}),
+    "group_tolerate_asymmetry": ("Allow Asymmetric Return During Upgrade Window, for stand-alone groups. A group has no HA2 link, so every existing session of "
+                                 "the member that reboots lands on a surviving member as asymmetric traffic. On: before the first member of a group is "
+                                 "touched, ALL its members are set to accept it (same two settings, recorded first and restored when the whole group is "
+                                 "finished). Nearly mandatory for groups.",
+                                 {"true": "the default. Open the window for each group that is upgraded",
+                                  "false": "leave the TCP settings alone; sessions that move to another member will be dropped"}),
+    "group_reboot_tolerance": ("A stand-alone group is a set of firewalls upgraded together that are not HA pairs (cloud load-balanced firewalls, for example); "
+                               "groups are named in the firewall list (Choose firewalls, G on an Included firewall). This is how many members of one group may "
+                               "be rebooting at the same time. 1 means one at a time. A group of seven with 5 upgrades five at once, then the other two. "
+                               "A member that fails while it is out of service holds its slot, and the rest of its group is not started.", {}),
+    "lb_drain_profile": ("The interface management profile a load balancer's probe relies on (an Azure load balancer probes a dataplane interface with SSH or "
+                         "HTTP, which this profile must permit). Empty: never drain. Set: before a group member reboots, the protocols in lb_drain_probe_protocol are "
+                         "taken out of THIS profile (a commit on the firewall, so the firewall must have no other uncommitted changes), the balancer sees "
+                         "the probe fail and drains the member gracefully, and the profile is put back after the member is upgraded, or after it failed. "
+                         "The profile must already exist on the firewall, and every interface that uses it is affected.", {}),
+    "lb_drain_probe_protocol": ("What the load balancer probes the firewall with. Those protocols are taken out of the drain profile, so the probe "
+                                "fails and the balancer drains the member. Most balancers probe with SSH or HTTP; a balancer that depends only on "
+                                "ping is rare. A + means the profile permits both and both are taken out.",
+                                {"ssh": "the default. Take SSH out of the profile", "http": "take HTTP out", "https": "take HTTPS out",
+                                 "ssh+http": "take SSH and HTTP out", "ssh+https": "take SSH and HTTPS out", "http+https": "take HTTP and HTTPS out",
+                                 "ssh+http+https": "take all three out", "ping": "take ping (ICMP) out"}),
+    "lb_drain_wait_s": ("After the profile is changed, how long to wait for the load balancer to notice the failed probe and drain the member "
+                        "before it reboots, in seconds. Set it above (probe interval x failures to mark it out) plus the drain time.", {}),
     "restore_roles": ("What to do with the HA roles once both members are upgraded.",
                       {"leave": "leave the roles as the upgrade left them",
                        "restore": "fail back, so the member that was active at the start is active again"}),
@@ -120,7 +154,7 @@ LIMITS = {
     "failover_band": "a number above 0 and up to 1", "post_upgrade_band": "a number above 0 and up to 1",
     "api_rate_per_s": "a number above 0", "spread_limit": "a whole number, 1 or more", "max_failures": "a whole number, 1 or more",
     "max_parallel": "a whole number, 1 or more", "sync_timeout_s": "whole seconds, 1 or more", "busy_wait_s": "whole seconds, 1 or more",
-    "poll_interval_s": "whole seconds, 1 or more", "content_settle_s": "whole seconds, 0 or more",
+    "poll_interval_s": "whole seconds, 1 or more", "lb_drain_wait_s": "whole seconds, 0 or more", "group_reboot_tolerance": "a whole number, 1 or more", "content_settle_s": "whole seconds, 0 or more",
     "settle_after_failover_s": "whole seconds, 0 or more", "settle_after_reboot_s": "whole seconds, 0 or more",
 }
 HELP = {

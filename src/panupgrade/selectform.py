@@ -46,7 +46,7 @@ MIN_WIDTH = 8
 HELP = {
     FILTER: "Tab: next filter   Up / Down: mode row, input row, tables   Left / Right: change mode or pick a known value",
     AVAILABLE: "Space / Enter: add to Included   A: add all listed   Up / Down / PgUp / PgDn: move   Tab: next section",
-    INCLUDED: "Space / Enter / D: take out   C: clear the list   Up / Down / PgUp / PgDn: move   Tab: next section",
+    INCLUDED: "Space / Enter / D: take out   G: stand-alone group   C: clear the list   Up / Down / PgUp / PgDn: move   Tab: next section",
     SAVE: "Type the file name the list is saved to (empty: no file).   Enter: go to the buttons",
     BUTTONS: "Left / Right: choose a button   Enter or Space: press it   Up: back to the file name   (Deselect all empties the Included list)",
 }
@@ -99,6 +99,10 @@ class Form:
         wanted = set(initial.serials)                         # a list of serials given up front is the Included list itself
         self.included = [r.serial for r in self.refs if r.serial in wanted]
         self.start = list(self.included)                       # what is on disk, as far as the form knows
+        self._groups = {s: g for s, g in getattr(initial, "groups", {}).items() if s in self.included}   # serial -> stand-alone group name
+        self.start_groups = dict(self._groups)
+        self.editing = None                                    # the group name being typed for the firewall under the cursor, or None
+        self.last_group = ""
         self.saver = saver                                     # saver(form) writes the list and returns a message
         self.button = SAVE_EXIT
         self.out = out or ""
@@ -108,6 +112,11 @@ class Form:
         self.page = 10
         self.message = notice
         self.armed = False
+
+    @property
+    def groups(self):
+        """{serial: group name} for the firewalls that are Included (a firewall taken out loses its group)."""
+        return {s: g for s, g in self._groups.items() if s in self.included and g}
 
     # ---- what the filters mean
     def errors(self):
@@ -174,6 +183,9 @@ class Form:
         was_armed, self.armed, self.message = self.armed, False, ""
         if key == "ctrl-c":
             return "cancel"
+        if self.editing is not None:
+            self._group_key(key)
+            return None
         if key == "esc":
             if self.dirty() and not was_armed:
                 self.armed = True
@@ -196,7 +208,32 @@ class Form:
 
     def dirty(self):
         """True when the Included list differs from the last time it was saved (or from how it started)."""
-        return self.included != self.start
+        return self.included != self.start or self.groups != {s: g for s, g in self.start_groups.items() if s in self.start}
+
+    def _group_key(self, key):
+        """Typing the group name for the Included firewall under the cursor: Enter keeps it (empty removes the group), Esc leaves it as it was."""
+        serial = self.included_refs()[self.cursor[INCLUDED]].serial
+        if key == "enter":
+            name = self.editing.strip().replace(",", " ").replace("#", " ")
+            if name:
+                self._groups[serial] = " ".join(name.split())
+                self.last_group = self._groups[serial]
+                self.message = f"Put {self._name(serial)} in the group {self.last_group}."
+            else:
+                self._groups.pop(serial, None)
+                self.message = f"{self._name(serial)} is not in a group."
+            self.editing = None
+        elif key == "esc":
+            self.editing = None
+        elif key == "backspace":
+            self.editing = self.editing[:-1]
+        elif key == "ctrl-u":
+            self.editing = ""
+        elif len(key) == 1 and key.isprintable():
+            self.editing += key
+
+    def _name(self, serial):
+        return next((r.hostname for r in self.refs if r.serial == serial), serial)
 
     def _problem(self):
         if self.errors():
@@ -219,7 +256,7 @@ class Form:
             except OSError as exc:
                 self.message = f"!Could not save: {exc.strerror or exc}"
                 return False
-        self.start = list(self.included)
+        self.start, self.start_groups = list(self.included), dict(self.groups)
         return True
 
     def _save_and_exit(self):
@@ -345,6 +382,8 @@ class Form:
         elif zone == AVAILABLE and rows and key in ("a", "A"):
             self.included += [r.serial for r in rows]
             self.message = f"Added {len(rows)} firewall{'s' if len(rows) != 1 else ''}."
+        elif zone == INCLUDED and rows and key in ("g", "G"):
+            self.editing = self._groups.get(rows[self.cursor[zone]].serial) or self.last_group
         elif zone == INCLUDED and rows and key in ("c", "C"):
             self.message = f"Cleared {len(rows)} firewall{'s' if len(rows) != 1 else ''} from the list."
             self.included = []
@@ -369,7 +408,9 @@ class Form:
             data = max([len(column.cell(r)) for r in self.refs] or [0])
             labels = max(len(label) + 4 for label, *_rest in column.modes)
             wide.append(max(MIN_WIDTH + 2, min(column.cap, max(data, len(column.title), labels))))
-        room = total - 5 - 2 * (len(wide) - 1)
+        named = [g for g in self.groups.values()]
+        tag = min(max(len(g) for g in named) + 12, 30) if named else 0       # '  [group: name]' is drawn after the columns of an Included row
+        room = total - 5 - 2 * (len(wide) - 1) - tag
         while sum(wide) > room and max(wide) > MIN_WIDTH + 2:      # trim the widest column a little at a time
             wide[wide.index(max(wide))] -= 1
         return wide
@@ -382,6 +423,9 @@ class Form:
         lines = [[("bold", f" {title}".rstrip() or " panupgrade select")],
                  [("dim", " " + HELP[self.zone])], [("dim", " " + ALWAYS)]]
         status = self.message
+        if self.editing is not None:
+            status = (f"Group for {self._name(incl[self.cursor[INCLUDED]].serial)}: [{self.editing}_]   Enter keeps it, Esc leaves it, empty removes the group. "
+                      f"Firewalls with the same name are upgraded together.")
         if not status and self.zone == FILTER and self.frow == INPUT:
             label, attr, kind, _flag, example = COLUMNS[self.fcol].modes[self.mode[self.fcol]]
             known = self.choices.get(attr) or []
@@ -442,7 +486,10 @@ class Form:
             for n, r in enumerate(rows[off:off + shown], off):
                 pieces = [("", column.cell(r)) for column in COLUMNS]
                 on = n == cursor and here
-                lines.append(cells(pieces, (">" if on else " ") + (" " if r.connected else "!"), "focus" if on else ""))
+                line = cells(pieces, (">" if on else " ") + (" " if r.connected else "!"), "focus" if on else "")
+                if zone == INCLUDED and self._groups.get(r.serial):
+                    line.append(("focus" if on else "changed", f"[group: {self._groups[r.serial]}]"))
+                lines.append(line)
 
         matches = self.matching()
         table(AVAILABLE, avail, top, "AVAILABLE", f"{len(matches)} of {len(self.refs)} firewalls match the filters" +

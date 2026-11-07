@@ -5,6 +5,12 @@
 # ---- HA behaviour --------------------------------------------------------------------------------------------
 failover_band      = 0.30      # after failing the active member over, the new active node's sessions must be within +/-30% of before
 post_upgrade_band  = 0.50      # after the upgrade, the active node's sessions must be within +/-50% of the pair's baseline
+pair_tolerate_asymmetry = false   # Allow Asymmetric Return During Upgrade Window for HA pairs: record, then set tcp-reject-non-syn no + asymmetric-path bypass (committed on the firewall) for the window, and put both back afterwards
+group_tolerate_asymmetry = true   # the same for stand-alone groups (nearly mandatory: a group has no HA2 link)
+group_reboot_tolerance = 1        # how many members of one stand-alone group may be out of service at the same time
+lb_drain_profile = ""             # the interface management profile a load balancer's probe relies on; set: take the probe's protocol out of it before a group member reboots (empty = never drain)
+lb_drain_probe_protocol = "ssh"   # what the balancer probes with: ssh | http | https | ssh+http | ssh+https | http+https | ssh+http+https | ping
+lb_drain_wait_s = 60              # how long to wait for the balancer to drain the member after the profile changed
 upgrade_suspended  = true      # a member that is suspended carries no traffic: upgrade it like a passive member (false = block it until it is functional)
 restore_roles      = "leave"   # once both members are done: leave | restore (fail back to the original active)
 sync_to_peer       = "Both"    # force the passive member to match the active one: Disable (never) | Both (in `prepare` AND again during the upgrade) | UpgradeOnly (only during the upgrade)

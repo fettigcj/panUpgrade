@@ -550,6 +550,54 @@ class SelectVerb(unittest.TestCase):
         self.assertIn("Cancelled", text)
 
 
+class StandAloneGroups(unittest.TestCase):
+    def form(self, groups=None):
+        form = selectform.Form(REFS, Selection(serials=["S1", "S2", "S3"], groups=groups or {}))
+        form.zone = selectform.INCLUDED
+        return form
+
+    def test_g_names_a_group_for_the_firewall_under_the_cursor_and_it_shows(self):
+        form = self.form()
+        keys(form, "g", *typing("edge"), "enter")
+        self.assertEqual(form.groups, {"S1": "edge"})
+        self.assertIn("[group: edge]", screen(form))
+        self.assertTrue(form.dirty())
+
+    def test_the_next_firewall_starts_with_the_name_just_used_and_an_empty_name_removes_the_group(self):
+        form = self.form()
+        keys(form, "g", *typing("edge"), "enter", "down", "g", "enter")
+        self.assertEqual(form.groups, {"S1": "edge", "S2": "edge"})
+        keys(form, "g", "ctrl-u", "enter")
+        self.assertEqual(form.groups, {"S1": "edge"})
+
+    def test_esc_while_typing_a_name_leaves_the_group_alone_and_does_not_quit(self):
+        form = self.form({"S1": "edge"})
+        keys(form, "g", *typing("xx"))
+        self.assertIsNone(form.press("esc"))
+        self.assertEqual(form.groups, {"S1": "edge"})
+        self.assertIsNone(form.editing)
+
+    def test_commas_and_hashes_cannot_break_the_list_file(self):
+        form = self.form()
+        keys(form, "g", *typing("a,b#c"), "enter")
+        self.assertEqual(form.groups, {"S1": "a b c"})
+
+    def test_a_firewall_taken_out_loses_its_group_and_unchanged_groups_are_not_unsaved_changes(self):
+        form = self.form({"S1": "edge"})
+        self.assertFalse(form.dirty())
+        keys(form, "d")
+        self.assertEqual(form.groups, {})
+
+    def test_the_saved_list_carries_the_groups(self):
+        saved = []
+        form = selectform.Form(REFS, Selection(serials=["S1", "S2"]), out="x.txt", saver=lambda f: saved.append(dict(f.groups)) or "saved")
+        form.zone = selectform.INCLUDED
+        keys(form, "g", *typing("edge"), "enter")
+        form._save(need_name=False)
+        self.assertEqual(saved, [{"S1": "edge"}])
+        self.assertFalse(form.dirty())
+
+
 if __name__ == "__main__":
     unittest.main()
 

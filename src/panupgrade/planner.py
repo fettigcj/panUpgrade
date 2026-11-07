@@ -50,6 +50,7 @@ class Selection:
     version_newer_than: str = ""
     ha_states: list = field(default_factory=list)   # active | passive | ...
     accept_standalone_outage: bool = False
+    groups: dict = field(default_factory=dict)      # serial -> stand-alone group name (from the firewall list file: 'SERIAL, group')
 
     def matches(self, ref):
         if self.serials and not _glob_any(self.serials, ref.serial):
@@ -144,6 +145,9 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
         verdict, kind = _verdict(results)
         devices[ref.serial] = _device(ref, verdict, results, skip_kind=kind, facts=facts)
 
+    for serial, name in selection.groups.items():
+        if serial in devices:
+            devices[serial]["group"] = name
     _apply_standalone(devices, ctxs, selection)
     _apply_pair_rules(devices, ctxs, by_serial, target)
 
@@ -155,7 +159,17 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
             dev["steps"], dev["rollback"] = _steps(dev, settings, devices)
     order = _order(devices, by_serial)
 
+    groups = _groups_planned(devices)
+    windows = _asymmetry_windows(devices, order, groups, settings)
     cautions = _cautions(devices, fleet)
+    if windows:
+        cautions.append({"scope": "fleet", "code": "asymmetry_window", "text": _window_words(windows)})
+    if groups and settings.lb_drain_profile:
+        cautions.append({"scope": "fleet", "code": "lb_drain", "text": (
+            f"Each member of these stand-alone groups ({', '.join(sorted(groups))}) is drained from its load balancer before it reboots: "
+            f"{settings.lb_drain_probe_protocol} is taken out of the interface management profile {settings.lb_drain_profile!r} (committed on the firewall, "
+            f"which affects every interface that uses the profile), the tool waits {settings.lb_drain_wait_s}s, and the profile is put back after the member "
+            f"is upgraded, or after it failed. A firewall whose profile could not be put back is reported at the end and needs a person.")})
     plan = {
         "tool": "panupgrade", "tool_version": __version__,
         "mode": "REPORT ONLY - nothing has been changed on any device",
@@ -167,6 +181,8 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
         "selection": selection.__dict__.copy(),
         "fleet_checks": [r.to_dict() for r in fleet],
         "devices": list(devices.values()),
+        "groups": groups,                            # stand-alone group name -> the serials planned in it (each reboots at most group_reboot_tolerance at a time)
+        "asymmetry": windows,                        # where the tool will change tcp-reject-non-syn and asymmetric-path, and put them back
         "order": order,                              # the units (an HA pair in series, passive first; or one standalone), in the order they are started
         "cautions": cautions,
         "advice": _advice(devices, pano_version, releases),
@@ -192,7 +208,7 @@ def _device(ref, verdict, results, skip_kind="", facts=None):
         "preemption": facts.preemption if facts else None,
         "verdict": verdict, "skip_kind": skip_kind,
         "results": [r.to_dict() for r in results],
-        "steps": [], "rollback": "",
+        "steps": [], "rollback": "", "group": "",
     }
 
 
@@ -224,9 +240,18 @@ def _verdict_from_dicts(dev):
 def _apply_standalone(devices, ctxs, selection):
     for serial, ctx in ctxs.items():
         dev = devices[serial]
-        if dev["verdict"] not in ("ready", "caution") or ctx.facts.ha_mode != "none":
+        if dev["verdict"] not in ("ready", "caution"):
             continue
-        if selection.accept_standalone_outage:
+        if dev["group"] and ctx.facts.ha_mode != "none":
+            _add(dev, CheckResult("standalone_group", FAIL, f"it is in the stand-alone group {dev['group']!r} but is an HA member "
+                                                           f"({ctx.facts.ha_mode}); groups are for firewalls that are not in an HA pair"))
+            continue
+        if ctx.facts.ha_mode != "none":
+            continue
+        if dev["group"]:
+            _add(dev, CheckResult("standalone_group", INFO, f"member of the stand-alone group {dev['group']!r}: the other members carry the traffic while "
+                                                           f"this one reboots (a group reboots {ctx.settings.group_reboot_tolerance} member(s) at a time)"))
+        elif selection.accept_standalone_outage:
             _add(dev, CheckResult("standalone_outage", INFO, "standalone: outage during the reboot accepted by the user"))
         else:
             dev["results"].append(CheckResult("standalone_outage", SKIP,
@@ -345,11 +370,17 @@ def _steps(dev, settings, devices=None):
     if hold:
         add("hold suspended", note="preemption is on: keep this member suspended until go-live")
     installs = [p for p in _path_steps(dev) if p["install"]]
-    for p in installs:
-        traffic = "outage" if role == "standalone" else "redundancy"
+    drains = bool(dev.get("group")) and bool(settings.lb_drain_profile)
+    for n, p in enumerate(installs):
+        traffic = "outage" if role == "standalone" and not dev.get("group") else "redundancy"
         add(f"install {p['version']}", note=f"timeout {settings.install_timeout_s}s")
+        if drains and n == 0:
+            add("drain", "redundancy", f"take {settings.lb_drain_probe_protocol} out of the interface management profile {settings.lb_drain_profile!r} (commit on the "
+                                       f"firewall) so the load balancer drains this member, then wait {settings.lb_drain_wait_s}s")
         add("reboot", traffic, f"timeout {settings.reboot_timeout_s}s")
         add("verify", note="version as expected, no jobs running")
+    if drains and installs:
+        add("undrain", note=f"put the interface management profile {settings.lb_drain_profile!r} back as it was, so the load balancer takes this member back")
     if hold or role == "active":
         add("go live", note="release the suspension so the member can rejoin the pair")
     if role != "standalone":
@@ -376,6 +407,34 @@ def _order(devices, by_serial):
         seen.update(members)
         units.append(members)
     return units
+
+
+def _groups_planned(devices):
+    found = {}
+    for serial, dev in devices.items():
+        if dev["group"] and dev["verdict"] in ("ready", "caution"):
+            found.setdefault(dev["group"], []).append(serial)
+    return found
+
+
+def _asymmetry_windows(devices, order, groups, settings):
+    """Each place the tool will let a pair or group accept traffic that looks asymmetric: recorded first, restored when the whole pair / group is done."""
+    windows = []
+    if settings.pair_tolerate_asymmetry:
+        for unit in order:
+            if devices[unit[0]]["ha_mode"] not in (None, "none") and not devices[unit[0]]["group"]:
+                windows.append({"kind": "pair", "name": " / ".join(devices[s]["hostname"] for s in unit), "serials": list(unit)})
+    if settings.group_tolerate_asymmetry:
+        windows += [{"kind": "group", "name": name, "serials": list(members)} for name, members in sorted(groups.items())]
+    return windows
+
+
+def _window_words(windows):
+    where = "; ".join(f"{w['kind']} {w['name']} ({len(w['serials'])} firewall{'s' if len(w['serials']) != 1 else ''})" for w in windows)
+    return ("Accepting asymmetric return traffic during the upgrade window changes the live configuration of these firewalls: " + where + ". Before the "
+            "first member is touched each firewall's tcp-reject-non-syn and asymmetric-path values are recorded, then tcp-reject-non-syn is set to no and "
+            "asymmetric-path to bypass (committed on the firewall); both are put back when the pair or group is finished, whether it succeeded or not. "
+            "A firewall that cannot be put back is reported at the end and needs a person.")
 
 
 def _cautions(devices, fleet):
@@ -472,7 +531,7 @@ def _digest_body(plan):
                      "acks": sorted(r["ack"] for r in d["results"] if r.get("ack")),
                      "steps": [(s["action"], s["traffic"]) for s in d["steps"]]}
                     for d in plan["devices"] if d["verdict"] in ("ready", "caution")],
-        "order": plan["order"],
+        "order": plan["order"], "groups": plan["groups"], "asymmetry": plan["asymmetry"],
         "fleet_acks": sorted(r["ack"] for r in plan["fleet_checks"] if r.get("ack")),
     }
     return body

@@ -18,6 +18,8 @@ class Node:
         self.sessions, self.preemption, self.pending, self.jobs = sessions, preemption, pending, jobs
         self.downloaded, self.staged = set(), None
         self.backed_up = False
+        self.profiles = {"LB-Probe": {"ssh": "yes", "ping": "yes"}}       # interface management profiles: name -> {protocol: "yes" | "no"} (absent = not set)
+        self.asym = {"reject_non_syn": True, "reject_non_syn_config": None, "asymmetric_path": None}   # on by default; neither is in the config
         self.config_synced = True
         self.content = {}
         self.compat = {}
@@ -111,6 +113,25 @@ class SimBackend(Backend):
         for node in (n, self.nodes.get(n.peer)):
             if node is not None:
                 node.config_synced = True
+
+    def lb_profile(self, serial, profile, protocols):
+        n = self._enter(serial, "read profile", profile)
+        return {"exists": profile in n.profiles, "values": {p: n.profiles.get(profile, {}).get(p) for p in protocols}}
+
+    def set_lb_profile(self, serial, profile, changes):
+        n = self._enter(serial, "set profile", profile, tuple(sorted(changes.items())))
+        for protocol, value in changes.items():
+            if value is None:
+                n.profiles[profile].pop(protocol, None)
+            else:
+                n.profiles[profile][protocol] = value
+
+    def tcp_asymmetry(self, serial):
+        return dict(self._enter(serial, "read asymmetry").asym)
+
+    def set_tcp_asymmetry(self, serial, reject_non_syn, reject_non_syn_config, asymmetric_path):
+        self._enter(serial, "set asymmetry", reject_non_syn, asymmetric_path, reject_non_syn_config).asym = {
+            "reject_non_syn": reject_non_syn, "reject_non_syn_config": reject_non_syn_config, "asymmetric_path": asymmetric_path}
 
     def suspend(self, serial):
         n = self._enter(serial, "suspend")

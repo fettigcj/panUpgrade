@@ -107,6 +107,45 @@ panupgrade select --panorama <panorama-address> --version-is 10.2.1 --name-conta
 
 Criteria: `--name-contains`, `--name` (glob: `*` and `?`, the whole name must match), `--name-regex` (a regular expression found anywhere in the name; `^` and `$` anchor it, `.` is any one character, case ignored), `--version-is` (glob), `--version-older-than`, `--version-newer-than`, `--ha-state`, `--model`, `--device-group`, `--tag`, `--serial`. The saved `upgradeList.txt` is picked up by every command below; use `--serials-file` to name a different list.
 
+#### Stand-alone groups
+
+Firewalls that must be upgraded together but are not HA pairs (cloud load-balanced firewalls, for example) form a **stand-alone group**. On the Included table press **G** on a firewall and type the group's name; the next firewall starts with the name you just used, so naming seven members is seven presses of G and Enter. An empty name removes the group. The group is saved in the same list file, as a comma field before the note:
+
+```
+0123456789, azure-east   # fw-a  12.1.10  -
+0123456790, azure-east   # fw-b  12.1.10  -
+0123456791               # fw-c  12.1.10  -     (no group)
+```
+
+A listed firewall with no comma is not in a group, as before. A firewall that is an HA member cannot be in a group (it is blocked with that reason). A grouped firewall is not held back as a "stand-alone outage": its reboot is planned as a loss of redundancy, because the rest of the group carries the traffic. **`group_reboot_tolerance`** (Alt-S, HA behaviour, Stand-alone groups; default 1) is how many members of one group may be rebooting at once: a firewall holds a slot from its reboot to the end of its verification, and the rest wait. A group of seven with a tolerance of 5 goes five, then two. If a member fails while it holds a slot it may still be down, so the slot is not given back and the rest of its group is **not started**.
+
+#### The asymmetry window
+
+When an active member is suspended or reboots, the half-open TCP handshakes it held are not on the member that takes over (and a stand-alone group has no HA2 link at all), so the survivor sees the rest of those flows as asymmetric and drops them. `pair_tolerate_asymmetry` (default false: HA2 keeps ordinary sessions) and `group_tolerate_asymmetry` (default true, and only used when a group is defined) turn on **Allow Asymmetric Return During Upgrade Window**:
+
+1. Before the first member of the pair (or group) is touched, each member's own values of three knobs are read and journaled: the `tcp-reject-non-syn` in force now (`show session info`), and the two persistent settings `deviceconfig setting session tcp-reject-non-syn` and `deviceconfig setting tcp asymmetric-path` (from the running configuration). "Not set" is a value: PAN-OS treats it as the factory default (reject non-SYN, drop asymmetric paths), so it is put back by deleting the node, not by writing a value.
+2. Each member gets both persistent settings (`tcp-reject-non-syn no`, `asymmetric-path bypass`: config edits and one **commit on the firewall**), and then `set session tcp-reject-non-syn no`, and is read back. The operational command alone is not enough: PAN-OS drops it at the next commit and at a reboot, so the persistent setting is what keeps a rebooted or auto-committing firewall tolerant. A firewall with other uncommitted configuration is refused first, because the commit would commit it too; any failure puts back the ones already changed and starts nothing.
+3. When the whole pair or group is finished, whether it went well or not (and also when the run is stopped), each member's recorded values are put back and read back. For a pair the window covers the members of the pair that are planned; for a group, every planned member, since each one is a survivor for the others.
+
+Every change and every restore is a journal step (`asymmetry open`, `asymmetry restore`, with the original values) and shows in the run log. **A firewall that could not be put back is reported as an ALERT** at the end of the run (on screen, in the run log, and in the exit code) with the exact commands to run by hand. The window is in the plan, so the approval must acknowledge its `asymmetry_window` caution. Only the `asymmetric-path` value and a commit are ever sent as configuration; the write allow-list names them.
+
+**Unverified on a real firewall:** that `show session info` returns `tcp-reject-non-syn` in the shape the code reads, that a Panorama-proxied `type=config` edit and `type=commit` with `target=` are accepted for a managed firewall, and that the in-force flag is what the code expects after the commit (it is set after the commit, and the readback must match or the window is refused). The xpath of the persistent `session/tcp-reject-non-syn` node is from the usual PAN-OS layout, not confirmed in vendor documentation. Try a one-firewall window on a lab firewall first. A Panorama push during the window can undo the config half.
+
+#### Probe a firewall's configuration first (`probe-config`)
+
+The asymmetry window and the load-balancer drain edit settings (`deviceconfig/setting/tcp`, `deviceconfig/setting/session`, an interface management profile) that a Panorama template very probably owns, so they are not in the firewall's local XML the way a local setting is, and a plain `delete` of such a node answers "no such node". `panupgrade probe-config --panorama ADDRESS --serial SERIAL` is **read-only** (`show config running`, `candidate`, `merged`, `pushed-template`, `diff` only; nothing is changed) and writes `probe-<serial>.txt` with the exact XML of those settings, the whole list of interface management profiles, and every interface that names one, as each view shows them (attributes such as the template a node came from are kept). A view the firewall or Panorama refuses is reported, not hidden. Run it on a lab firewall, then send the file: the override and exact-restore logic is to be built from those shapes. Until then the asymmetry window and the drain restore a value by writing it back, which for a template-owned value would leave a permanent local copy: **do not use them on template-owned settings yet.**
+
+#### Draining a group member from its load balancer
+
+Many stand-alone groups sit behind a load balancer (an Azure load balancer, for example) that probes a dataplane interface of each firewall with SSH or HTTP; the interface management profile on that interface has to permit it. Set `lb_drain_profile` (Alt-S, Stand-alone groups) to that profile's name and `lb_drain_probe_protocol` to what the balancer probes with (`ssh`, `http`, `ssh+http`, ...; `ping` exists for the rare balancer that probes with ICMP). Then each group member gets two more steps:
+
+1. **drain**, after its images are installed and just before its reboot: the probe's protocol is taken out of THAT profile (it is not reassigned to the interfaces; every interface that uses the profile is affected), committed on the firewall, and the tool waits `lb_drain_wait_s` (default 60) for the balancer to see the probe fail and drain the member gracefully. Only protocols the profile currently permits are touched; the original values are journaled first. A firewall with other uncommitted changes is refused (the commit would commit them), and so is a firewall that does not have the profile.
+2. **undrain**, after the member's last verification: the profile is put back as recorded (a protocol that was not set is deleted again, not written).
+
+The member holds its group slot (`group_reboot_tolerance`) from the drain to the undrain. **If a member fails after it was drained, its profile is put back anyway** (and again by a sweep at the end of the run, which also covers a stopped run), so the balancer sees it as it was before the run; the group's remaining members are still not started, as before. A member that could not be reached to put the profile back is an **ALERT** in the result, the run log and the exit code, with the values the profile should hold.
+
+Together with the asymmetry window this is the order for a group: window open on every member, then for each member (up to the tolerance at once) drain, reboot, verify, undrain; window closed after the last. A pair is never drained. The plan lists the drain, and approving it acknowledges the `lb_drain` caution. **Unverified on a real firewall:** that the profile read and edit and the commit work through Panorama with `target=`, and how long a real balancer needs (set `lb_drain_wait_s` above its probe interval times its failure count). Wherever Panorama pushes the profile from a template, a push can undo the local edit.
+
 ### 2. Plan (changes nothing)
 
 What would happen to each firewall, why some are blocked, and what needs your acknowledgement. The output lists blocked firewalls first and counts routine skipped checks instead of listing them (`--verbose` lists every check).

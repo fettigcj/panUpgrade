@@ -122,7 +122,10 @@ flowchart TD
     n_panupgrade_planner__steps["planner._steps"]
     n_panupgrade_planner__path_steps["planner._path_steps"]
     n_panupgrade_planner__order["planner._order<br/><i>Units in plan order: an HA pair is one unit (passive first), a standal</i>"]
+    n_panupgrade_planner__groups_planned["planner._groups_planned"]
+    n_panupgrade_planner__asymmetry_windows["planner._asymmetry_windows<br/><i>Each place the tool will let a pair or group accept traffic that looks</i>"]
     n_panupgrade_planner__cautions["planner._cautions"]
+    n_panupgrade_planner__window_words["planner._window_words"]
     n_panupgrade_settings_Settings_loosening_warnings["settings.Settings.loosening_warnings<br/><i>Plain-language cautions for settings that make a run riskier. Never an</i>"]
     n_panupgrade_planner__advice["planner._advice<br/><i>Notes that never need acknowledging and never hold an upgrade</i>"]
     n_panupgrade_checks_lagging_text["checks.lagging_text<br/><i>The advice for firewalls that run too far behind Panorama, said once f</i>"]
@@ -217,7 +220,10 @@ flowchart TD
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__steps
     n_panupgrade_planner__steps --> n_panupgrade_planner__path_steps
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__order
+    n_panupgrade_planner_build_plan --> n_panupgrade_planner__groups_planned
+    n_panupgrade_planner_build_plan --> n_panupgrade_planner__asymmetry_windows
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__cautions
+    n_panupgrade_planner_build_plan --> n_panupgrade_planner__window_words
     n_panupgrade_planner_build_plan --> n_panupgrade_settings_Settings_loosening_warnings
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__advice
     n_panupgrade_planner__advice --> n_panupgrade_checks__stale_note
@@ -253,28 +259,19 @@ flowchart TD
     n_panupgrade_cli__expected_steps["cli._expected_steps<br/><i>For each firewall the plan will change: every journal key a finished r</i>"]
     n_panupgrade_executor_run["executor.run<br/><i>Carry out the plan. Units (an HA pair, or a standalone firewall) run i</i>"]
     n_panupgrade_executor__failed_in_journal["executor._failed_in_journal"]
-    n_panupgrade_executor__run_device["executor._run_device"]
+    n_panupgrade_windows_Windows_begin["windows.Windows.begin<br/><i>'' when every window the unit needs is open, else why it could not be </i>"]
+    n_panupgrade_windows_Windows_end["windows.Windows.end"]
+    n_panupgrade_executor__run_device["executor._run_device<br/><i>Run one firewall's steps. A member of a stand-alone group takes a slot</i>"]
+    n_panupgrade_executor__run_steps["executor._run_steps"]
     n_panupgrade_executor__step["executor._step"]
     n_panupgrade_executor__preflight["executor._preflight"]
-    n_panupgrade_executor__preflight_preflight["preflight<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
     n_panupgrade_executor__key["executor._key"]
     n_panupgrade_executor__do["executor._do"]
-    n_panupgrade_executor__backup_verified["executor._backup_verified"]
-    n_panupgrade_executor__baseline["executor._baseline<br/><i>The pair's session baseline: the count on the node that was active bef</i>"]
-    n_panupgrade_executor__wait_for_quiet["executor._wait_for_quiet<br/><i>A config sync, an HA state change or a boot queues a commit on the fir</i>"]
-    n_panupgrade_executor__target_version["executor._target_version<br/><i>The version a device ends on: the last install in its steps</i>"]
-    n_panupgrade_executor__band_ok["executor._band_ok"]
-    n_panupgrade_executor__settle["executor._settle<br/><i>Wait ``seconds``, then until the firewall has no unfinished job, befor</i>"]
-    n_panupgrade_executor__retry_while_busy["executor._retry_while_busy<br/><i>Run a command the firewall may refuse because it is busy. The jobs lis</i>"]
-    n_panupgrade_executor__expected_version["executor._expected_version"]
-    n_panupgrade_executor__do_download["download<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
-    n_panupgrade_executor__do_backup["backup<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
-    n_panupgrade_executor__do_sync_to_peer["sync_to_peer<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
-    n_panupgrade_executor__do_suspend["suspend<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
-    n_panupgrade_executor__do_functional["functional<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
-    n_panupgrade_executor__do_install["install<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
-    n_panupgrade_executor__do_reboot_and_wait["reboot_and_wait<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
     n_panupgrade_executor__standing["executor._standing<br/><i>Where a firewall stands when the step at ``index`` did not finish: whi</i>"]
+    n_panupgrade_windows_Gate_leave["windows.Gate.leave"]
+    n_panupgrade_windows_restore_lb["windows.restore_lb<br/><i>Put the profile back as the journal recorded it. '' when there was not</i>"]
+    n_panupgrade_windows_Windows_close_all["windows.Windows.close_all"]
+    n_panupgrade_windows_lb_unrestored["windows.lb_unrestored<br/><i>Members whose drain was started and whose profile is not known to be b</i>"]
     n_panupgrade_cli__upgrade_execute_from_file["from_file<br/><i>one of: FakeFleet</i>"]
     n_panupgrade_cli__upgrade_review["cli._upgrade_review<br/><i>Read the fleet and build the upgrade plan. Changes nothing. With ``sho</i>"]
     n_panupgrade_cli__build["cli._build"]
@@ -320,7 +317,10 @@ flowchart TD
     n_panupgrade_planner__steps["planner._steps"]
     n_panupgrade_planner__path_steps["planner._path_steps"]
     n_panupgrade_planner__order["planner._order<br/><i>Units in plan order: an HA pair is one unit (passive first), a standal</i>"]
+    n_panupgrade_planner__groups_planned["planner._groups_planned"]
+    n_panupgrade_planner__asymmetry_windows["planner._asymmetry_windows<br/><i>Each place the tool will let a pair or group accept traffic that looks</i>"]
     n_panupgrade_planner__cautions["planner._cautions"]
+    n_panupgrade_planner__window_words["planner._window_words"]
     n_panupgrade_settings_Settings_loosening_warnings["settings.Settings.loosening_warnings<br/><i>Plain-language cautions for settings that make a run riskier. Never an</i>"]
     n_panupgrade_planner__advice["planner._advice<br/><i>Notes that never need acknowledging and never hold an upgrade</i>"]
     n_panupgrade_checks_lagging_text["checks.lagging_text<br/><i>The advice for firewalls that run too far behind Panorama, said once f</i>"]
@@ -340,31 +340,21 @@ flowchart TD
     n_panupgrade_cli__unfinished_run --> n_panupgrade_cli__expected_steps
     n_panupgrade_cli__upgrade_execute --> n_panupgrade_executor_run
     n_panupgrade_executor_run --> n_panupgrade_executor__failed_in_journal
+    n_panupgrade_executor_run --> n_panupgrade_windows_Windows_begin
+    n_panupgrade_executor_run --> n_panupgrade_windows_Windows_end
     n_panupgrade_executor_run --> n_panupgrade_executor__run_device
-    n_panupgrade_executor__run_device --> n_panupgrade_executor__failed_in_journal
-    n_panupgrade_executor__run_device --> n_panupgrade_executor__step
-    n_panupgrade_executor__run_device --> n_panupgrade_executor__preflight
-    n_panupgrade_executor__preflight -.-> n_panupgrade_executor__preflight_preflight
-    n_panupgrade_executor__run_device --> n_panupgrade_executor__key
-    n_panupgrade_executor__run_device --> n_panupgrade_executor__do
-    n_panupgrade_executor__do --> n_panupgrade_executor__backup_verified
-    n_panupgrade_executor__do --> n_panupgrade_executor__baseline
-    n_panupgrade_executor__do --> n_panupgrade_executor__wait_for_quiet
-    n_panupgrade_executor__do --> n_panupgrade_executor__target_version
-    n_panupgrade_executor__do --> n_panupgrade_executor__band_ok
-    n_panupgrade_executor__do --> n_panupgrade_executor__settle
-    n_panupgrade_executor__do --> n_panupgrade_executor__retry_while_busy
-    n_panupgrade_executor__do --> n_panupgrade_executor__expected_version
-    n_panupgrade_executor__do -.-> n_panupgrade_executor__do_download
-    n_panupgrade_executor__do -.-> n_panupgrade_executor__do_backup
-    n_panupgrade_executor__do -.-> n_panupgrade_executor__do_sync_to_peer
-    n_panupgrade_executor__do -.-> n_panupgrade_executor__do_suspend
-    n_panupgrade_executor__do -.-> n_panupgrade_executor__do_functional
-    n_panupgrade_executor__do -.-> n_panupgrade_executor__do_install
-    n_panupgrade_executor__do -.-> n_panupgrade_executor__do_reboot_and_wait
-    n_panupgrade_executor__run_device --> n_panupgrade_executor__standing
-    n_panupgrade_executor__standing --> n_panupgrade_executor__key
+    n_panupgrade_executor__run_device --> n_panupgrade_executor__run_steps
+    n_panupgrade_executor__run_steps --> n_panupgrade_executor__failed_in_journal
+    n_panupgrade_executor__run_steps --> n_panupgrade_executor__step
+    n_panupgrade_executor__run_steps --> n_panupgrade_executor__preflight
+    n_panupgrade_executor__run_steps --> n_panupgrade_executor__key
+    n_panupgrade_executor__run_steps --> n_panupgrade_executor__do
+    n_panupgrade_executor__run_steps --> n_panupgrade_executor__standing
+    n_panupgrade_executor__run_steps --> n_panupgrade_windows_Gate_leave
+    n_panupgrade_executor__run_device --> n_panupgrade_windows_restore_lb
+    n_panupgrade_executor_run --> n_panupgrade_windows_Windows_close_all
     n_panupgrade_executor_run --> n_panupgrade_executor__standing
+    n_panupgrade_executor_run --> n_panupgrade_windows_lb_unrestored
     n_panupgrade_cli__upgrade_execute -.-> n_panupgrade_cli__upgrade_execute_from_file
     n_panupgrade_cli__upgrade --> n_panupgrade_cli__upgrade_review
     n_panupgrade_cli__upgrade_review --> n_panupgrade_cli__build
@@ -416,7 +406,10 @@ flowchart TD
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__steps
     n_panupgrade_planner__steps --> n_panupgrade_planner__path_steps
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__order
+    n_panupgrade_planner_build_plan --> n_panupgrade_planner__groups_planned
+    n_panupgrade_planner_build_plan --> n_panupgrade_planner__asymmetry_windows
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__cautions
+    n_panupgrade_planner_build_plan --> n_panupgrade_planner__window_words
     n_panupgrade_planner_build_plan --> n_panupgrade_settings_Settings_loosening_warnings
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__advice
     n_panupgrade_planner__advice --> n_panupgrade_checks__stale_note
@@ -482,7 +475,10 @@ flowchart TD
     n_panupgrade_checks_fleet_checks["checks.fleet_checks<br/><i>planned_versions: versions the selected firewalls will have after the </i>"]
     n_panupgrade_planner__steps["planner._steps"]
     n_panupgrade_planner__order["planner._order<br/><i>Units in plan order: an HA pair is one unit (passive first), a standal</i>"]
+    n_panupgrade_planner__groups_planned["planner._groups_planned"]
+    n_panupgrade_planner__asymmetry_windows["planner._asymmetry_windows<br/><i>Each place the tool will let a pair or group accept traffic that looks</i>"]
     n_panupgrade_planner__cautions["planner._cautions"]
+    n_panupgrade_planner__window_words["planner._window_words"]
     n_panupgrade_settings_Settings_loosening_warnings["settings.Settings.loosening_warnings<br/><i>Plain-language cautions for settings that make a run riskier. Never an</i>"]
     n_panupgrade_planner__advice["planner._advice<br/><i>Notes that never need acknowledging and never hold an upgrade</i>"]
     n_panupgrade_planner__summary["planner._summary"]
@@ -545,7 +541,10 @@ flowchart TD
     n_panupgrade_planner_build_plan --> n_panupgrade_checks_fleet_checks
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__steps
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__order
+    n_panupgrade_planner_build_plan --> n_panupgrade_planner__groups_planned
+    n_panupgrade_planner_build_plan --> n_panupgrade_planner__asymmetry_windows
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__cautions
+    n_panupgrade_planner_build_plan --> n_panupgrade_planner__window_words
     n_panupgrade_planner_build_plan --> n_panupgrade_settings_Settings_loosening_warnings
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__advice
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__summary
@@ -628,6 +627,21 @@ flowchart TD
     n_panupgrade_cli__releases --> n_panupgrade_releases_save
     n_panupgrade_cli__releases --> n_panupgrade_releases_standing
     n_panupgrade_cli__releases -.-> n_panupgrade_cli__releases_download
+```
+
+## `panupgrade probe-config`
+
+read-only: show the exact XML of the settings the asymmetry window and the load-balancer drain edit, in every configuration view of ONE firewall (to see what a template-owned setting looks like); changes nothing.
+
+Handler: `_probe_config`
+
+```mermaid
+flowchart TD
+    n_panupgrade_cli__probe_config["cli._probe_config<br/><i>Read-only: the exact XML of the settings the asymmetry window and the </i>"]
+    n_panupgrade_probe_probe["probe.probe<br/><i>The report text. ``op(command)`` returns a parsed XML reply or raises;</i>"]
+    n_panupgrade_xmlops_OpSource_op_on["xmlops.OpSource.op_on<br/><i>One read-only operational command on one firewall (through Panorama): </i>"]
+    n_panupgrade_cli__probe_config --> n_panupgrade_probe_probe
+    n_panupgrade_cli__probe_config --> n_panupgrade_xmlops_OpSource_op_on
 ```
 
 ## `panupgrade settings`

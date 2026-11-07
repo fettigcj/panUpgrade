@@ -6,10 +6,15 @@
 Secrets never appear here: a key that looks like one (password, token, api key, ...) is rejected.
 """
 
+import re
 import tomllib
 from dataclasses import dataclass, fields
 
 _SECRET_WORDS = ("password", "passwd", "secret", "token", "apikey", "api_key")
+
+
+# What a load balancer probes a firewall with. Each name is the protocols of the interface management profile that the probe needs; "+" joins them.
+PROBE_CHOICES = ("ssh", "http", "https", "ssh+http", "ssh+https", "http+https", "ssh+http+https", "ping")
 
 
 class SettingsError(ValueError):
@@ -65,6 +70,24 @@ class Settings:
     # An HA member that is suspended when planned carries no traffic, so it is upgraded like a passive member (first in its pair). The tool never
     # suspends it again or re-enables it as a decision of its own. false: a suspended member is blocked (make it functional first).
     upgrade_suspended: bool = True
+    # Allow Asymmetric Return During Upgrade Window. When an active member is suspended or rebooted, the half-open TCP handshakes (and, with no HA2
+    # link, every session) it held are not on the member that takes over, so the survivor sees the rest of those flows as asymmetric and drops them.
+    # With this on, before the first member of the pair (or group) is touched the tool records each member's current values, sets
+    # `set session tcp-reject-non-syn no` (operational, lost at reboot) and `deviceconfig setting tcp asymmetric-path bypass` (config, committed on
+    # the firewall), and puts both back when the pair (or group) is finished, whether it succeeded or not. Every change and every restore is journaled
+    # and an unrestored firewall is reported loudly at the end. Pairs: optional (HA2 keeps ordinary sessions). Stand-alone groups: nearly mandatory.
+    pair_tolerate_asymmetry: bool = False
+    group_tolerate_asymmetry: bool = True
+    # Stand-alone groups (firewalls upgraded together that are not HA pairs, e.g. behind a cloud load balancer): how many members of one group may be
+    # rebooting / out of service at the same time. 1 = one at a time.
+    group_reboot_tolerance: int = 1
+    # Draining a stand-alone group member from a load balancer. The balancer (an Azure load balancer, say) probes a dataplane interface of each firewall
+    # with SSH or HTTP, which the interface management profile on that interface permits. lb_drain_profile names that profile (empty = never drain).
+    # Before a member reboots the tool takes the listed protocols out of THAT profile (a commit on the firewall), waits lb_drain_wait_s for the balancer
+    # to see the probe fail and drain the member gracefully, upgrades it, and puts the profile back, whether the upgrade worked or not.
+    lb_drain_profile: str = ""
+    lb_drain_probe_protocol: str = "ssh"      # what the balancer probes with: one of PROBE_CHOICES, e.g. ssh, http, ssh+http
+    lb_drain_wait_s: int = 60
     # HA roles after both members are upgraded: leave | restore
     restore_roles: str = "leave"
     # Who fetches images: firewall (default, downloads from the vendor) | panorama
@@ -94,6 +117,9 @@ class Settings:
         if self.blocked_peer == "warn":
             out.append("blocked_peer=warn: a member whose HA peer is blocked by a check is planned anyway; the active member hands traffic to "
                        "that peer while it reboots.")
+        if self.pair_tolerate_asymmetry:
+            out.append("pair_tolerate_asymmetry=true: during an HA pair's window both members are set to accept traffic that looks asymmetric "
+                       "(tcp-reject-non-syn off, asymmetric-path bypass, committed on the firewall) and put back afterwards.")
         if self.allow_downgrade:
             out.append("allow_downgrade=true: firewalls running a newer release than the target are installed down to it (across feature "
                        "releases too; the newer release's configuration may not load on the older one).")
@@ -112,6 +138,7 @@ _CHOICES = {
     "sync_content": ("never", "prepare"),
     "ha_config_unsynced": ("block", "warn"),
     "blocked_peer": ("block", "warn"),
+    "lb_drain_probe_protocol": PROBE_CHOICES,
 }
 
 
@@ -162,7 +189,12 @@ def from_dict(data):
     for name in ("content_settle_s", "settle_after_failover_s", "settle_after_reboot_s"):
         if getattr(settings, name) < 0:
             raise SettingsError(f"{name} must not be negative")
-    for name in ("spread_limit", "max_failures", "max_parallel", "sync_timeout_s", "busy_wait_s", "poll_interval_s"):
+    if settings.lb_drain_profile and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,30}", settings.lb_drain_profile):
+        raise SettingsError("lb_drain_profile must be the name of an interface management profile (letters, digits, space, . _ -, at most 31)")
+    for name in ("lb_drain_wait_s",):
+        if getattr(settings, name) < 0:
+            raise SettingsError(f"{name} must not be negative")
+    for name in ("group_reboot_tolerance", "spread_limit", "max_failures", "max_parallel", "sync_timeout_s", "busy_wait_s", "poll_interval_s"):
         if getattr(settings, name) < 1:
             raise SettingsError(f"{name} must be at least 1")
     return settings

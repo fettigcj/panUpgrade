@@ -56,6 +56,7 @@ flowchart LR
 | `shell` | no | no |
 | `auth` | no | no |
 | `releases` | no | no |
+| `probe-config` | no | no |
 | `settings` | no | no |
 
 ## What each check needs

@@ -19,6 +19,8 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from . import progress
+
 
 class BackendError(Exception):
     """A device operation failed. Always surfaced; never retried silently."""
@@ -55,6 +57,10 @@ class Backend:
     def sync_to_peer(self, serial): raise NotImplementedError       # run on the ACTIVE member; returns when the sync job ends
     def suspend(self, serial): raise NotImplementedError
     def functional(self, serial): raise NotImplementedError
+    def lb_profile(self, serial, profile, protocols): raise NotImplementedError    # {"exists": bool, "values": {protocol: "yes" | "no" | None (not set)}} of an interface management profile
+    def set_lb_profile(self, serial, profile, changes): raise NotImplementedError   # {protocol: "yes" | "no" | None (delete the node)}; one commit on the firewall
+    def tcp_asymmetry(self, serial): raise NotImplementedError      # {"reject_non_syn": bool (in force now), "reject_non_syn_config": "yes" | "no" | None (not set), "asymmetric_path": "drop" | "bypass" | None (not set)}
+    def set_tcp_asymmetry(self, serial, reject_non_syn, reject_non_syn_config, asymmetric_path): raise NotImplementedError   # the two configuration values (None deletes the node), one commit on the firewall, then the in-force flag
 
 
 def _band_ok(before, after, band):
@@ -69,15 +75,27 @@ def run(plan, approval, backend, journal, settings, stop=None):
         problems.append("the journal belongs to a different plan")
     if problems:
         raise ExecutionRefused(problems)
+    from .windows import Gate, Windows, lb_unrestored
     devices = {d["serial"]: d for d in plan["devices"]}
     stop = stop or threading.Event()
+    gate = Gate(settings.group_reboot_tolerance)
+    windows = Windows(plan, approval.serials, backend, journal, say=progress.say, settings=settings)
     lock = threading.Lock()
     state = {"failures": sum(1 for s in devices if _failed_in_journal(journal, s))}
 
     def do_unit(unit):
+        refusal = windows.begin([s for s in unit if s in approval.serials])
+        if refusal:
+            return {serial: ("held", refusal) for serial in unit}
+        try:
+            return run_unit(unit)
+        finally:
+            windows.end([s for s in unit if s in approval.serials])
+
+    def run_unit(unit):
         blocker, local = None, {}
         for serial in unit:
-            started = bool(journal.steps_of(serial))
+            started = any(not e["step"].startswith("asymmetry") for e in journal.steps_of(serial))
             with lock:
                 over = state["failures"] >= settings.max_failures
                 failures = state["failures"]
@@ -91,7 +109,7 @@ def run(plan, approval, backend, journal, settings, stop=None):
                 local[serial] = ("not_started", f"stopped after {failures} failed device(s)")
             else:
                 was_failed = _failed_in_journal(journal, serial)
-                result = _run_device(devices[serial], backend, journal, settings, stop)
+                result = _run_device(devices[serial], backend, journal, settings, stop, gate)
                 local[serial] = result
                 with lock:
                     if result[0] == "failed" and not was_failed:
@@ -112,21 +130,40 @@ def run(plan, approval, backend, journal, settings, stop=None):
         for future in futures:
             future.cancel()
         pool.shutdown(wait=True)
+        windows.close_all()         # whatever happened, a window that was opened is closed again
         raise
     pool.shutdown()
+    windows.close_all()
     upgraded = [serial for serial, dev in devices.items() if dev["steps"] and _standing(dev, journal, len(dev["steps"])).startswith("already on")]
-    return {"outcome": outcome, "failures": state["failures"], "stopped": state["failures"] >= settings.max_failures, "upgraded": upgraded}
+    return {"outcome": outcome, "failures": state["failures"], "stopped": state["failures"] >= settings.max_failures, "upgraded": upgraded,
+            "asymmetry_unrestored": windows.unrestored, "lb_unrestored": lb_unrestored(journal, [s for unit in units for s in unit])}
 
 
 def _failed_in_journal(journal, serial):
-    return any(e["state"] == "failed" for e in journal.steps_of(serial))
+    return any(e["state"] == "failed" and not e["step"].startswith("asymmetry") for e in journal.steps_of(serial))
 
 
 def _key(index, action):
     return f"{index}:{action}"
 
 
-def _run_device(dev, backend, journal, settings, stop=None):
+def _run_device(dev, backend, journal, settings, stop=None, gate=None):
+    """Run one firewall's steps. A member of a stand-alone group takes a slot of its group from its reboot to the end of its verification;
+    leaving this function while still holding the slot (a failure, a stop) closes the group, because that firewall may still be down."""
+    group = dev.get("group") if gate is not None else ""
+    held, result = [], None
+    try:
+        result = _run_steps(dev, backend, journal, settings, stop, gate, group, held)
+        return result
+    finally:
+        if result is None or result[0] in ("failed", "stopped", "held"):      # undo what was edited for the load balancer, as far as it can be undone
+            from .windows import restore_lb
+            restore_lb(dev["serial"], backend, journal, settings)
+        if held:
+            gate.close(group, dev["hostname"])
+
+
+def _run_steps(dev, backend, journal, settings, stop, gate, group, held):
     serial = dev["serial"]
     if _failed_in_journal(journal, serial):
         return "failed", "failed earlier in this journal; not retried automatically"
@@ -146,9 +183,17 @@ def _run_device(dev, backend, journal, settings, stop=None):
             return "stopped", f"stopped by you before {st['action']}"
         if last == "started":
             return "needs_attention", f"{st['action']} was started and not finished; check the device before resuming"
+        if group and st["action"] in ("drain", "reboot", "verify") and not held:
+            why = gate.enter(group, stop)
+            if why:
+                return "held", why
+            held.append(group)
         err = _step(journal, serial, key, lambda: _do(st["action"], index, dev, backend, journal, settings))
         if err:
             return "failed", f"{_standing(dev, journal, index)}; {st['action']} failed: {err}"
+        if held and (st["action"] == "undrain" or (st["action"] == "verify" and not any(x["action"] == "undrain" for x in dev["steps"]))):
+            held.clear()
+            gate.leave(group)
     return "done", ""
 
 
@@ -338,6 +383,12 @@ def _do(action, index, dev, backend, journal, settings):
     elif action.startswith("install "):
         _wait_for_quiet(backend, serial, settings, "the install")
         _retry_while_busy(journal, serial, action, settings, lambda: backend.install(serial, action.split(" ", 1)[1]))
+    elif action == "drain":
+        from .windows import drain
+        return drain(serial, backend, journal, settings)
+    elif action == "undrain":
+        from .windows import undrain
+        return undrain(serial, backend, journal, settings)
     elif action == "reboot":
         version = backend.reboot_and_wait(serial, settings.reboot_timeout_s)
         # a rebooted member reconnects to Panorama and then runs a second auto-commit of its own; wait that out before calling it back

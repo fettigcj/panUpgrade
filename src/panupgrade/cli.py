@@ -287,14 +287,25 @@ def _source(args):
     raise SystemExit("sources: fake:<file> or panorama:<address> (read-only)")
 
 
-def _read_list(path):
-    """The serial numbers in a list file: one per line, '#' starts a note."""
-    serials = []
+def _read_entries(path):
+    """[(serial, group)] from a list file. A line is 'SERIAL', or 'SERIAL, group name' for a firewall in a stand-alone group; '#' starts a note."""
+    found = []
     for line in Path(path).expanduser().read_text(encoding="utf-8").splitlines():
         line = line.split("#", 1)[0].strip()      # 'SERIAL   # a note' is fine
         if line:
-            serials.append(line.split()[0])
-    return serials
+            serial, _comma, group = line.partition(",")
+            found.append((serial.split()[0] if serial.split() else "", group.strip()))
+    return [(serial, group) for serial, group in found if serial]
+
+
+def _read_list(path):
+    """The serial numbers in a list file."""
+    return [serial for serial, _group in _read_entries(path)]
+
+
+def _read_groups(path):
+    """{serial: group name} for the firewalls the list file puts in a stand-alone group."""
+    return {serial: group for serial, group in _read_entries(path) if group}
 
 
 def _default_list(args):
@@ -322,6 +333,12 @@ def _serials(args):
     return serials
 
 
+def _groups(args):
+    """Stand-alone groups named in the list file the command uses (the saved list, or --serials-file)."""
+    path = _default_list(args) or args.serials_file
+    return _read_groups(path) if path and Path(path).expanduser().is_file() else {}
+
+
 def _selection(args):
     if args.name_regex and Selection.regex_problem(args.name_regex):
         raise SystemExit(f"--name-regex {args.name_regex!r}: {Selection.regex_problem(args.name_regex)}")
@@ -329,7 +346,7 @@ def _selection(args):
                      models=args.model or [], device_groups=args.device_group or [], tags=args.tag or [],
                      version_is=args.version_is or "", version_older_than=args.version_older_than or "",
                      version_newer_than=args.version_newer_than or "", ha_states=args.ha_state or [],
-                     accept_standalone_outage=getattr(args, "accept_standalone_outage", False))
+                     accept_standalone_outage=getattr(args, "accept_standalone_outage", False), groups=_groups(args))
 
 
 def _style(args):
@@ -423,11 +440,13 @@ def _repeat_hint(args, flags):
     return "To get this same list without the form: " + _command_line(args, flags + ([("--out", args.out)] if args.out else []))
 
 
-def _write_list(path, chosen, criteria):
+def _write_list(path, chosen, criteria, groups=None):
     path = Path(path).expanduser()
     lines = [f"# panupgrade device list - criteria: {criteria}",
-             "# One serial per line; text after # is ignored. Delete a line to drop a device; the file is the list that is used."]
-    lines += [f"{r.serial}   # {r.hostname}  {r.sw_version}  {r.ha_state or '-'}" for r in chosen]
+             "# One serial per line; text after # is ignored. Delete a line to drop a device; the file is the list that is used.",
+             "# 'SERIAL, group name' puts a firewall in a stand-alone group (firewalls upgraded together that are not HA pairs)."]
+    groups = groups or {}
+    lines += [f"{r.serial}{', ' + groups[r.serial] if groups.get(r.serial) else ''}   # {r.hostname}  {r.sw_version}  {r.ha_state or '-'}" for r in chosen]
     Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -444,11 +463,12 @@ def _select_form(args, refs):
     notice = ""
     if not selection.serials and Path(saved).expanduser().is_file():           # come back to the list you made last time
         selection.serials = _read_list(saved)
+        selection.groups = _read_groups(saved)
         notice = f"Started with the {len(selection.serials)} firewalls already in {saved}."
 
     def save_list(form):
         path = form.out.strip()
-        _write_list(path, form.included_refs(), form.describe())
+        _write_list(path, form.included_refs(), form.describe(), form.groups)
         return f"Saved {len(form.included)} firewall{'s' if len(form.included) != 1 else ''} to {path}."
     return selectform.Form(refs, selection, saved, notice, save_list)
 
@@ -463,6 +483,7 @@ def _select(args):
         print(f"error: {exc}", file=sys.stderr)
         return 2
     selection = _selection(args)
+    groups = selection.groups
     if use_form:
         from . import selectform
         form = _select_form(args, refs)
@@ -470,6 +491,7 @@ def _select(args):
             print("Cancelled; nothing was selected.")
             return 1
         chosen, criteria, args.out = form.included_refs(), form.describe(), form.out.strip() or None
+        groups = form.groups
         print(style.line("info", _repeat_hint(args, form.flags())))
     else:
         chosen, criteria = [r for r in refs if selection.matches(r)], selection.describe()
@@ -487,7 +509,7 @@ def _select(args):
     else:
         print(style.line("info", f"To keep this list, add --out {_default_list_text(args)}; plan, prepare and upgrade then use it automatically {where}."))
     if args.out:
-        _write_list(args.out, chosen, criteria)
+        _write_list(args.out, chosen, criteria, groups)
         print(f"Wrote {args.out}")
     return 0
 
@@ -839,7 +861,7 @@ def _upgrade_execute(args, style, bundle, approve=None):
         close_view()
         _write_run_log(args, style, "upgrade", plan, names, journal, journal_path, label, result)
     sys.stdout.write(console.render_outcomes(result, names, style))
-    return 0 if result["failures"] == 0 else 1
+    return 0 if result["failures"] == 0 and not result.get("asymmetry_unrestored") and not result.get("lb_unrestored") else 1
 
 
 class PrepareBundle(RunEvents):
@@ -1079,6 +1101,30 @@ def _settings_form(args):
         settingsform.write_file(target, chosen)
         return f"Saved {form.changed_count()} changed setting{'s' if form.changed_count() != 1 else ''} to {target}."
     return settingsform.Form(current, target, save, notice, baseline=on_disk)
+
+
+def _probe_config(args):
+    """Read-only: the exact XML of the settings the asymmetry window and the load-balancer drain edit, in every configuration view of one firewall."""
+    from . import probe as probe_mod
+    style = _style(args)
+    if not args.serial or len(args.serial) != 1:
+        print("error: name exactly one firewall: --serial SERIAL", file=sys.stderr)
+        return 2
+    serial = args.serial[0]
+    try:
+        live = _source(args)
+        if not hasattr(live, "op_on"):
+            print("error: this reads a real firewall through Panorama; give --panorama (or a profile), not a fake fleet", file=sys.stderr)
+            return 2
+        text = probe_mod.probe(lambda command: live.op_on(serial, command))
+        path = Path(args.out).expanduser() if args.out else _ws(args, f"probe-{serial}.txt")
+        path.write_text(text, encoding="utf-8")
+    except (SourceError, OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(style.line("info", f"Wrote {_tilde(path)}: for each configuration view, the XML of the TCP and session settings, the interface management "
+                             f"profiles and the interfaces that name one. Only `show` commands were sent; nothing was changed."))
+    return 0
 
 
 def _settings(args):
@@ -1439,6 +1485,12 @@ def build_parser():
     rl.add_argument("--color", choices=["auto", "always", "never"], default="auto", help=argparse.SUPPRESS)
     rl.add_argument("--ascii", action="store_true", help=argparse.SUPPRESS)
     rl.set_defaults(func=_releases)
+
+    pc = sub.add_parser("probe-config", help="read-only: show the exact XML of the settings the asymmetry window and the load-balancer drain edit, in every "
+                                              "configuration view of ONE firewall (to see what a template-owned setting looks like); changes nothing")
+    _selection_args(pc)
+    pc.add_argument("--out", help="write the report here (default probe-<serial>.txt in the profile's workspace or the current folder)")
+    pc.set_defaults(func=_probe_config)
 
     st = sub.add_parser("settings", help="change the settings on a form (or print them when there is no terminal); changes nothing else")
     st.add_argument("--settings", help=f"the settings file to edit (default {DEFAULT_SETTINGS} in the profile's workspace or the current folder)")

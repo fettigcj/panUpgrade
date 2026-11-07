@@ -124,7 +124,7 @@ def ha_state(ctx):
     if f.ha_mode is None:
         return _no_data("ha_state", "HA mode")
     if f.ha_mode == "none":
-        return CheckResult("ha_state", INFO, "standalone: the upgrade reboot is an outage")
+        return CheckResult("ha_state", INFO, "standalone (not an HA pair): its reboot takes it out of service, an outage unless it is in a stand-alone group")
     if f.ha_mode not in ("active-passive", "active-active"):
         return CheckResult("ha_state", FAIL, f"unrecognised HA mode {f.ha_mode!r}")
     if f.ha_state is None:

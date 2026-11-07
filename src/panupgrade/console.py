@@ -148,6 +148,9 @@ def render_plan(plan, style, verbose=False):
         names = {d["serial"]: d["hostname"] for d in plan["devices"]}
         for i, unit in enumerate(plan["order"], 1):
             out.append(f"  {i}. " + " > ".join(names[x] for x in unit))
+        if plan.get("groups"):
+            out += ["", style.bold(f"Stand-alone groups: at most {plan['settings']['group_reboot_tolerance']} member(s) of a group are out of service at the same time")]
+            out += [f"  {name}: " + ", ".join(names[x] for x in members) for name, members in sorted(plan["groups"].items())]
     return "\n".join(out) + "\n"
 
 
@@ -166,7 +169,7 @@ def describe_event(record, names):
         return kind, step
     if state == "ok":
         kind = "sync" if step.startswith("sync") else "ok"
-        extra = ", ".join(f"{k}={v}" for k, v in detail.items() if k in ("version", "sessions_before", "sessions_after", "ha_state", "synced_from", "skipped", "config_sync", "peer_version"))
+        extra = ", ".join(f"{k}={v}" for k, v in detail.items() if k in ("version", "sessions_before", "sessions_after", "ha_state", "synced_from", "skipped", "config_sync", "peer_version", "original", "now"))
         return kind, (f"{step}  {extra}" if extra else step)
     if state == "failed":
         return "fail", f"{step}: {detail.get('error', '')}"
@@ -210,7 +213,41 @@ def render_outcomes(result, names, style, finished="finished all their steps"):
     if result["stopped"]:
         verdict += ". Stopped early: the failure limit was reached, so nothing further was started"
     lines += ["", style.line("stop" if result["stopped"] else ("fail" if result["failures"] else "ok"), verdict)]
+    lines += unrestored_lines(result.get("asymmetry_unrestored"), names, style)
+    lines += lb_unrestored_lines(result.get("lb_unrestored"), names, style)
     return "\n".join(lines) + "\n"
+
+
+def lb_unrestored_lines(unrestored, names, style):
+    """The alert for members whose load-balancer drain (a protocol taken out of an interface management profile) could not be undone."""
+    if not unrestored:
+        return []
+    lines = ["", style.line("fail", f"ALERT: {len(unrestored)} firewall(s) may still be drained from their load balancer: the interface management profile "
+                                    f"was changed to drain them and was not confirmed back. Check the firewall and put the profile back by hand:")]
+    for entry in unrestored:
+        back = ", ".join(f"{p} {entry['original'][p] or '(not set)'}" for p in entry["changed"]) or "nothing was changed"
+        lines.append(style.line("fail", f"{names.get(entry['serial'], entry['serial'])} ({entry['serial']}): profile {entry['profile']!r} should have {back}. "
+                                        f"The tool's error: {entry['error']}"))
+    return lines
+
+
+def unrestored_lines(unrestored, names, style):
+    """The alert for firewalls whose tcp-reject-non-syn / asymmetric-path were changed for an upgrade window and could not be put back."""
+    if not unrestored:
+        return []
+    lines = ["", style.line("fail", f"ALERT: {len(unrestored)} firewall(s) are STILL set to accept asymmetric traffic. The tool changed tcp-reject-non-syn "
+                                    f"and asymmetric-path for the upgrade window and could not put them back. Put them back by hand:")]
+    for entry in unrestored:
+        original = entry["original"]
+        path = original["asymmetric_path"]
+        def config(name, section, value):
+            return (f"`set deviceconfig setting {section} {name} {value}`" if value else f"delete deviceconfig setting {section} {name} (it was not set)")
+        fixes = (f"`set session tcp-reject-non-syn {'yes' if original['reject_non_syn'] else 'no'}`, "
+                 + config("tcp-reject-non-syn", "session", original.get("reject_non_syn_config")) + ", and "
+                 + config("asymmetric-path", "tcp", original.get("asymmetric_path")))
+        lines.append(style.line("fail", f"{names.get(entry['serial'], entry['serial'])} ({entry['serial']}), {entry['window']}: {fixes}, then commit. "
+                                        f"The tool's error: {entry['error']}"))
+    return lines
 
 
 def render_table(headers, rows, style):

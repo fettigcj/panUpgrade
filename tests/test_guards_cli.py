@@ -83,7 +83,8 @@ class Cli(unittest.TestCase):
     fixture = str(ROOT / "fixtures" / "sample-fleet.json")
 
     def test_plan_prints_text(self):
-        code, out, _ = run(["plan", "--source", "fake:" + self.fixture, "--target", TARGET])
+        with tempfile.TemporaryDirectory() as reports:
+            code, out, _ = run(["plan", "--source", "fake:" + self.fixture, "--target", TARGET, "--report-dir", reports])
         self.assertEqual(code, 0)
         self.assertIn("REPORT ONLY", out)
         self.assertIn("SIMC0001", out)

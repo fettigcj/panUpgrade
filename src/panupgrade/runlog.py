@@ -12,15 +12,15 @@ from html import escape
 
 from . import console
 
-KINDS = {"preparation": "PreparationLog", "upgrade": "UpgradeLog"}
+KINDS = {"preparation": "PreparationReport", "upgrade": "UpgradeReport"}
 NO_TARGET = "NoTarget"            # a preparation (config sync, content) can be run without a PAN-OS target
-HEADINGS = {"preparation": "Preparation log", "upgrade": "Upgrade log"}
+HEADINGS = {"preparation": "Preparation report", "upgrade": "Upgrade report"}
 _CHIP = {"ok": "pass", "sync": "info", "start": "info", "wait": "skip", "info": "skip", "fail": "fail"}
 _STATE_CHIP = {"done": "pass", "failed": "fail", "needs_attention": "warn", "stopped": "warn", "held": "warn", "in doubt": "warn"}
 
 
 def file_name(kind, target, stamp, extension):
-    """PanUpgrade_PreparationLog_10.2.10-h42_20261103-101500.html"""
+    """PanUpgrade_PreparationReport_10.2.10-h42_20261103-101500.html"""
     return f"PanUpgrade_{kind}_{target}_{stamp}.{extension}"
 
 

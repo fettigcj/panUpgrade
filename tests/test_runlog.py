@@ -26,8 +26,8 @@ class RunLog(unittest.TestCase):
         return runlog.build("preparation", plan, HOSTS, events, "LIVE", "/x/prepare.jsonl", result)
 
     def test_files_are_named_for_what_they_hold(self):
-        self.assertEqual(runlog.file_name("PreparationLog", "10.2.10-h42", "20261103-100000", "html"),
-                         "PanUpgrade_PreparationLog_10.2.10-h42_20261103-100000.html")
+        self.assertEqual(runlog.file_name("PreparationReport", "10.2.10-h42", "20261103-100000", "html"),
+                         "PanUpgrade_PreparationReport_10.2.10-h42_20261103-100000.html")
 
     def test_there_is_an_all_activity_tab_and_one_tab_per_hostname_in_name_order(self):
         page = runlog.to_html(self.build())

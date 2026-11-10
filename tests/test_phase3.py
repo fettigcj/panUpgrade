@@ -842,10 +842,14 @@ class SelectCommandAndDryRun(unittest.TestCase):
         self.assertIn("2 of 4 devices match", out)
         self.assertEqual(sorted(cli._serials(type("A", (), {"serial": None, "serials_file": str(listing)}))), ["A1", "A2"])
         code, out, _ = self.run_cli("plan", "--source", f"fake:{self.fleet_file}", "--target", TARGET, "--serials-file", str(listing),
-                                    "--color", "never")
+                                    "--color", "never", "--report-dir", str(self.dir / "reports"))
         self.assertEqual(code, 0)
         self.assertIn("b1 (b1) sim-a 20.2.9 -> 20.2.9 / excluded", out.lower())
         self.assertIn("a1 (a1) sim-a 20.2.3 -> 20.2.9", out.lower())
+        written = list((self.dir / "reports").glob("PanUpgrade_Plan_*"))       # the plan leaves its own record: HTML, text and Excel
+        self.assertEqual(sorted(p.suffix for p in written), [".html", ".txt", ".xlsx"])
+        for plan_file in written:
+            self.assertRegex(plan_file.stem, rf"^PanUpgrade_Plan_{re.escape(TARGET)}_\d{{8}}-\d{{6}}$")
 
     def test_a_live_source_with_unreadable_credentials_stops_cleanly_before_any_network_use(self):
         code, _, err = self.run_cli("upgrade", "--panorama", "192.0.2.1", "--creds-file", str(self.dir / "none.txt"),
@@ -892,7 +896,8 @@ class SelectCommandAndDryRun(unittest.TestCase):
                                     str(next((self.dir / "kit").glob("*.serials.txt"))), "--approval", str(approval),
                                     "--journal", str(self.dir / "up.jsonl"), "--color", "never")
         self.assertEqual(code, 0, out)
-        log = next(self.dir.glob("PanUpgrade_UpgradeLog_*.html")).read_text(encoding="utf-8")      # beside the journal: no profile in use
+        self.assertEqual(sorted(p.suffix for p in self.dir.glob("PanUpgrade_UpgradeReport_*")), [".html", ".txt", ".xlsx"])
+        log = next(self.dir.glob("PanUpgrade_UpgradeReport_*.html")).read_text(encoding="utf-8")      # beside the journal: no profile in use
         self.assertIn('data-panel="fw2"', log)
         self.assertIn("2 of 2 firewalls finished all their steps", log)
 
@@ -900,11 +905,11 @@ class SelectCommandAndDryRun(unittest.TestCase):
         code, out, _ = self._prepare_with_typed_answers(["APPROVE"])          # a second answer would raise: it is never asked for
         self.assertEqual(code, 0, out)
         kit_dir = self.dir / "kit"
-        self.assertEqual(sorted(p.suffix for p in kit_dir.glob("PanUpgrade_ProposedPlan_*")), [".html", ".txt", ".xlsx"])
-        for plan_file in kit_dir.glob("PanUpgrade_ProposedPlan_*"):     # a target with dots in it must not eat the time stamp: one set per run
-            self.assertRegex(plan_file.stem, rf"^PanUpgrade_ProposedPlan_{re.escape(TARGET)}_\d{{8}}-\d{{6}}$")
-        self.assertEqual(sorted(p.suffix for p in kit_dir.glob("PanUpgrade_PreparationLog_*")), [".html", ".txt"])
-        page = next(kit_dir.glob("PanUpgrade_PreparationLog_*.html")).read_text(encoding="utf-8")
+        self.assertEqual(list(kit_dir.glob("PanUpgrade_Plan_*")), [])           # the plan is written by `plan`, not by prepare
+        self.assertEqual(sorted(p.suffix for p in kit_dir.glob("PanUpgrade_PreparationReport_*")), [".html", ".txt", ".xlsx"])
+        for report_file in kit_dir.glob("PanUpgrade_PreparationReport_*"):     # a target with dots in it must not eat the time stamp: one set per run
+            self.assertRegex(report_file.stem, rf"^PanUpgrade_PreparationReport_{re.escape(TARGET)}_\d{{8}}-\d{{6}}$")
+        page = next(kit_dir.glob("PanUpgrade_PreparationReport_*.html")).read_text(encoding="utf-8")
         self.assertIn('data-panel="all"', page)                         # the All activity tab ...
         self.assertIn('data-panel="fw1"', page)                         # ... and one tab per firewall
         self.assertIn("A1", page)

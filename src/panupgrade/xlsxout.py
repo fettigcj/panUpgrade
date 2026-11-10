@@ -51,7 +51,19 @@ def _sheet(header, rows):
 
 
 def write_workbook(path, plan):
-    sheets = [("Firewalls", LEGACY_HEADERS, legacy_rows(plan)), ("Checks", *check_rows(plan))]
+    write_sheets(path, [("Firewalls", LEGACY_HEADERS, legacy_rows(plan)), ("Checks", *check_rows(plan))])
+
+
+def write_runlog(path, data):
+    """The workbook of a run's log (``runlog.build`` data): the result per firewall, and every event in order."""
+    write_sheets(path, [
+        ("Result", ["hostname", "serial", "state", "detail"], [[o["host"], o["serial"], o["state"], o["detail"]] for o in data["outcome"]]),
+        ("All activity", ["time", "hostname", "kind", "event"], [list(row) for row in data["all"]]),
+    ])
+
+
+def write_sheets(path, sheets):
+    """``sheets`` is a list of (name, header, rows)."""
     count = len(sheets)
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml",

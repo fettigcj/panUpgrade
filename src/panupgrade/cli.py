@@ -398,6 +398,17 @@ def _plan(args):
     else:
         verbose = getattr(args, "verbose", False)
         sys.stdout.write(console.render_plan(plan, style, verbose) if style.color else report.to_text(plan, verbose))
+        try:                    # the first of the three records of a cycle: plan, preparation report, upgrade report
+            folder = Path(getattr(args, "report_dir", None) or _ws(args, "prepared"))
+            folder.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            name = lambda extension: folder / runlog.file_name("Plan", args.target, stamp, extension)
+            name("html").write_text(report.to_html(plan), encoding="utf-8")
+            name("txt").write_text(report.to_text(plan), encoding="utf-8")
+            xlsxout.write_workbook(name("xlsx"), plan)
+            print(style.line("info", f"plan: {name('html')} (also .txt and .xlsx)"))
+        except OSError as exc:
+            print(style.line("warn", f"could not write the plan files: {exc}"), file=sys.stderr)
     if args.xlsx:
         xlsxout.write_workbook(args.xlsx, plan)
         print(f"Wrote {args.xlsx}")
@@ -659,7 +670,8 @@ def _write_run_log(args, style, run, plan, hosts, journal, journal_path, label, 
         html_file = folder / runlog.file_name(kind, data["target"], stamp, "html")
         html_file.write_text(runlog.to_html(data), encoding="utf-8")
         (folder / runlog.file_name(kind, data["target"], stamp, "txt")).write_text(runlog.to_text(data), encoding="utf-8")
-        print(style.line("info", f"{data['heading'].lower()}: {html_file} (also .txt)"))
+        xlsxout.write_runlog(folder / runlog.file_name(kind, data["target"], stamp, "xlsx"), data)
+        print(style.line("info", f"{data['heading'].lower()}: {html_file} (also .txt and .xlsx)"))
     except OSError as exc:
         print(style.line("warn", f"could not write the {run} log: {exc}"))
 
@@ -1048,11 +1060,7 @@ def _issue_kit(args, style, label):
     args.kit_dir = args.kit_dir or str(_ws(args, "prepared"))
     kit_dir = Path(args.kit_dir)
     kit_dir.mkdir(parents=True, exist_ok=True)
-    name = lambda extension: kit_dir / runlog.file_name("ProposedPlan", args.target, stamp, extension)       # (the target has dots: never with_suffix)
-    name("html").write_text(report.to_html(plan), encoding="utf-8")
-    name("txt").write_text(report.to_text(plan), encoding="utf-8")
-    xlsxout.write_workbook(name("xlsx"), plan)
-    print(style.line("info", f"proposed plan for sign-off: {name('html')} (also .txt and .xlsx)"))
+    # (The plan itself is written by `plan`; prepare writes its own report and the kit.)
     if not ready:
         print(style.line("stop", "nothing is ready to upgrade, so there is nothing to approve"))
         return 1
@@ -1435,6 +1443,7 @@ def build_parser():
     plan = sub.add_parser("plan", help="show what would happen to each device; changes nothing")
     _plan_args(plan)
     plan.add_argument("--out", help="directory for plan.json, plan.txt, plan.html, approval.template.json")
+    plan.add_argument("--report-dir", help="where the plan is written as HTML, text and Excel (default: the profile's prepared folder, else ./prepared)")
     plan.add_argument("--xlsx", help="also write the readiness workbook (Excel: one row per firewall plus a sheet of every check)")
     plan.add_argument("--verbose", action="store_true", help="list every check, including the routine skipped ones that are normally just counted")
     plan.set_defaults(func=_plan)

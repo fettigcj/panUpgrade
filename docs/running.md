@@ -176,13 +176,18 @@ panupgrade prepare --panorama <panorama-address> --target 10.2.2 --settings sett
 
 When it finishes, `prepare` writes the **upgrade kit** into `prepared\` (change with `--kit-dir`):
 
-- the proposed plan for sign-off: `PanUpgrade_ProposedPlan_<target>_<time>` as HTML, text and Excel
 - the firewall list and the approval
 - a ready-to-run script, `run-upgrade-<target>-<time>.bat` on Windows or `.sh` elsewhere
 
-There is no second prompt. Take the proposed plan to whoever must agree, then come back to the script.
+There is no second prompt. Take the plan (written by `plan`, below) to whoever must agree, then come back to the script.
 
-Each `prepare` and each `upgrade` also leaves a log of what it did, as `PanUpgrade_PreparationLog_<target>_<time>` and `PanUpgrade_UpgradeLog_<target>_<time>` (HTML and text). The HTML has an **All activity** tab and one tab per firewall hostname. They are written when the run ends, including a run that failed or was stopped, into the same `prepared\` folder (beside the journal when no profile is in use). The journal in `runs\` stays the machine record.
+A full cycle leaves three records, each as HTML, text and Excel, in the `prepared\` folder (change the plan's with `--report-dir`):
+
+1. **Plan** - `PanUpgrade_Plan_<target>_<time>`, written by `plan`: what would happen to each firewall, and why.
+2. **Preparation report** - `PanUpgrade_PreparationReport_<target>_<time>`, written by `prepare`: what it did.
+3. **Upgrade report** - `PanUpgrade_UpgradeReport_<target>_<time>`, written by `upgrade`: what it did.
+
+The two reports have an **All activity** tab and one tab per firewall hostname (the Excel files: a Result sheet and an All activity sheet). They are written when the run ends, including a run that failed or was stopped (beside the journal when no profile is in use). The journal in `runs\` stays the machine record.
 
 ### 4. Upgrade
 

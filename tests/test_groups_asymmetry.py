@@ -361,6 +361,25 @@ class TheLoadBalancerDrain(unittest.TestCase):
         self.assertEqual(seen["S1"], {"ssh": "no", "http": "no", "ping": "yes"})
         self.assertEqual(sim.nodes["S1"].profiles["LB-Probe"], {"ssh": "yes", "http": "yes", "ping": "yes"})
 
+    def test_a_profile_only_a_template_holds_gets_a_local_copy_for_the_drain_and_the_copy_is_deleted_afterwards(self):
+        seen = {}
+
+        class Templated(SimBackend):
+            def __init__(self, data, fail=None):
+                super().__init__(data, fail=fail)
+                for node in self.nodes.values():
+                    node.template_profiles["LB-Probe"] = node.profiles.pop("LB-Probe")
+
+            def reboot_and_wait(self, serial, timeout_s):
+                seen[serial] = dict(self.nodes[serial].profiles.get("LB-Probe", {}))
+                return super().reboot_and_wait(serial, timeout_s)
+        _, sim, _, result = self.go(Templated)
+        self.assertEqual(seen["S1"], {"ssh": "no", "ping": "yes"})                # drained through a local copy
+        for serial in ("S1", "S2", "S3"):
+            self.assertNotIn("LB-Probe", sim.nodes[serial].profiles)               # no local copy left: the template resumes
+            self.assertEqual(sim.nodes[serial].template_profiles["LB-Probe"], {"ssh": "yes", "ping": "yes"})
+        self.assertEqual(result["lb_unrestored"], [])
+
     def test_a_member_that_fails_after_being_drained_has_its_profile_put_back_and_the_group_stops(self):
         plan, sim, journal, result = self.go(fail={("S1", "reboot"): "never came back"}, max_parallel="1")
         self.assertEqual(result["outcome"]["S1"][0], "failed")

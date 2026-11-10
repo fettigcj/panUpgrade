@@ -86,6 +86,9 @@ def parse_pending(op):
 def parse_running_jobs(op):
     node = _result(op("show jobs all"), "show jobs all")
     jobs = node.findall(".//job")
+    # Observed on PA-VMs after their VM was restarted mid-job (2026-11-07): the job table keeps ghost records with the type "Failed-Job" and no id or
+    # status. They are leftovers of failed jobs, not running ones; counting them as "unknown" would block every upgrade of that firewall.
+    jobs = [j for j in jobs if not ((_text(j, "type") or "") == "Failed-Job" and not _text(j, "status"))]
     return sum(1 for j in jobs if (_text(j, "status") or "") != "FIN")
 
 

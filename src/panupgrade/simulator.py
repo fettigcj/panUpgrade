@@ -18,6 +18,7 @@ class Node:
         self.sessions, self.preemption, self.pending, self.jobs = sessions, preemption, pending, jobs
         self.downloaded, self.staged = set(), None
         self.backed_up = False
+        self.template_profiles = {}                                       # profiles only a Panorama template holds: name -> values (a local copy overrides)
         self.profiles = {"LB-Probe": {"ssh": "yes", "ping": "yes"}}       # interface management profiles: name -> {protocol: "yes" | "no"} (absent = not set)
         self.asym = {"reject_non_syn": True, "reject_non_syn_config": None, "asymmetric_path": None}   # on by default; neither is in the config
         self.config_synced = True
@@ -116,15 +117,23 @@ class SimBackend(Backend):
 
     def lb_profile(self, serial, profile, protocols):
         n = self._enter(serial, "read profile", profile)
-        return {"exists": profile in n.profiles, "values": {p: n.profiles.get(profile, {}).get(p) for p in protocols}}
+        source = n.profiles.get(profile)
+        origin = "local" if source is not None else ("template" if profile in n.template_profiles else None)
+        source = source if source is not None else n.template_profiles.get(profile, {})
+        return {"exists": origin is not None, "values": {p: source.get(p) for p in protocols}, "origin": origin}
 
     def set_lb_profile(self, serial, profile, changes):
         n = self._enter(serial, "set profile", profile, tuple(sorted(changes.items())))
+        if profile not in n.profiles and profile in n.template_profiles:
+            n.profiles[profile] = dict(n.template_profiles[profile])        # the same-named local copy
         for protocol, value in changes.items():
             if value is None:
                 n.profiles[profile].pop(protocol, None)
             else:
                 n.profiles[profile][protocol] = value
+
+    def remove_lb_override(self, serial, profile):
+        self._enter(serial, "remove profile copy", profile).profiles.pop(profile, None)
 
     def tcp_asymmetry(self, serial):
         return dict(self._enter(serial, "read asymmetry").asym)

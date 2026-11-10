@@ -284,7 +284,7 @@ class LiveBackend(Backend):
         self._wait_until(serial, lambda: self.state(serial)["ha_state"] in ("active", "passive", "initial", "active-primary", "active-secondary"),
                          300, "the member leaving the suspended state")
 
-    # ---- the asymmetry window (windows.py). UNVERIFIED on a real firewall: the reply shapes below and a Panorama-proxied config edit and commit.
+    # ---- the asymmetry window (windows.py). Reply shapes, Panorama-proxied config edit and commit VERIFIED on a lab firewall 2026-11-07.
 
     def tcp_asymmetry(self, serial):
         """{"reject_non_syn": bool in force, "reject_non_syn_config": "yes" | "no" | None, "asymmetric_path": "drop" | "bypass" | None}.
@@ -294,7 +294,7 @@ class LiveBackend(Backend):
             config = self.read.op_xml("<show><config><running/></config></show>", target=serial)
         except SourceError as exc:
             raise BackendError(f"{serial}: cannot read the TCP settings: {exc}") from None
-        flag = next((e for e in info.iter() if e.tag.lower() == "tcp-reject-non-syn"), None)
+        flag = next((e for e in info.iter() if e.tag.lower() == "tcp-nonsyn-rej"), None)      # VERIFIED on a lab firewall: `show session info` calls it tcp-nonsyn-rej (True / False)
         word = ((flag.text or "").strip().lower() if flag is not None else "")
         if word not in ("true", "false", "yes", "no"):
             raise BackendError(f"{serial}: cannot read tcp-reject-non-syn from `show session info` (got {word!r}); nothing was changed")
@@ -322,13 +322,12 @@ class LiveBackend(Backend):
         self._send(f"<set><session><tcp-reject-non-syn>{'yes' if reject_non_syn else 'no'}</tcp-reject-non-syn></session></set>", serial)
 
     def lb_profile(self, serial, profile, protocols):
-        """An interface management profile as the firewall has it now: {"exists": bool, "values": {protocol: "yes" | "no" | None}}. UNVERIFIED reply shape."""
-        try:
-            config = self.read.op_xml("<show><config><running/></config></show>", target=serial)
-        except SourceError as exc:
-            raise BackendError(f"{serial}: cannot read the interface management profile: {exc}") from None
-        found = next((e for e in config.iterfind("result/config/devices/entry/network/profiles/interface-management-profile/entry")
-                      if e.get("name") == profile), None)
+        """An interface management profile as the firewall has it now: {"exists": bool, "values": {protocol: "yes" | "no" | None}, "origin": "local" | "template" | None}. Reply shape verified on a lab firewall."""
+        found = self._profile_entry(serial, profile, "running")
+        origin = "local"
+        if found is None:
+            found = self._profile_entry(serial, profile, "merged")      # not in the local XML: a Panorama template may hold it
+            origin = "template"
         values = {}
         for protocol in protocols:
             node = found.find(protocol) if found is not None else None
@@ -336,14 +335,44 @@ class LiveBackend(Backend):
             if value not in (None, "yes", "no"):
                 raise BackendError(f"{serial}: {protocol} in the profile {profile!r} reads {value!r}, which this tool does not know how to put back; nothing was changed")
             values[protocol] = value
-        return {"exists": found is not None, "values": values}
+        return {"exists": found is not None, "values": values, "origin": origin if found is not None else None}
+
+    def _profile_entry(self, serial, profile, view):
+        """The <entry> of the named interface management profile in the firewall's running (local XML only) or merged (local + template) view, or None."""
+        try:
+            config = self.read.op_xml(f"<show><config><{view}/></config></show>", target=serial)
+        except SourceError as exc:
+            raise BackendError(f"{serial}: cannot read the interface management profile: {exc}") from None
+        return next((e for e in config.iterfind("result/config/devices/entry/network/profiles/interface-management-profile/entry")
+                     if e.get("name") == profile), None)
 
     def set_lb_profile(self, serial, profile, changes):
-        """Edit the named profile (one commit on the firewall). None removes the protocol's node: back to "not set"."""
+        """Edit the named profile (one commit on the firewall). None removes the protocol's node: back to "not set". A profile only a Panorama template
+        holds is first copied to a same-named local one with the changes applied (that local copy takes precedence); remove_lb_override deletes it again."""
         try:
-            for protocol, value in changes.items():
-                self.write.write_profile(profile, protocol, "delete" if value is None else "set", value, serial)
+            if self._profile_entry(serial, profile, "running") is None:
+                entry = self._profile_entry(serial, profile, "merged")
+                if entry is None:
+                    raise BackendError(f"{serial}: the interface management profile {profile!r} is on neither the firewall nor a template")
+                for protocol, value in changes.items():
+                    for old in entry.findall(protocol):
+                        entry.remove(old)
+                    if value is not None:
+                        ET.SubElement(entry, protocol).text = value
+                self.write.write_profile_override(profile, ET.tostring(entry, encoding="unicode"), serial)
+            else:
+                for protocol, value in changes.items():
+                    self.write.write_profile(profile, protocol, "delete" if value is None else "set", value, serial)
             job = self._job_id(self.write.commit_local(serial))
         except SourceError as exc:
             raise BackendError(str(exc)) from None
         self._wait_job(serial, job, self.settings.install_timeout_s, "the commit of the interface management profile change")
+
+    def remove_lb_override(self, serial, profile):
+        """Delete the local copy of a template's profile (one commit on the firewall): the template's profile resumes, which is the state before the drain."""
+        try:
+            self.write.write_profile_remove(profile, serial)
+            job = self._job_id(self.write.commit_local(serial))
+        except SourceError as exc:
+            raise BackendError(str(exc)) from None
+        self._wait_job(serial, job, self.settings.install_timeout_s, "the commit that removes the local copy of the interface management profile")

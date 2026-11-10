@@ -206,9 +206,9 @@ def drain(serial, backend, journal, settings):
     found = backend.lb_profile(serial, profile, protocols)
     if not found["exists"]:
         raise BackendError(f"{serial}: the interface management profile {profile!r} is not on this firewall, so there is nothing to drain with")
-    original = found["values"]
+    original, origin = found["values"], found.get("origin") or "local"
     change = {p: "no" for p in protocols if original.get(p) == "yes"}
-    journal.record(serial, LB_DRAIN, "started", {"profile": profile, "original": original, "changed": sorted(change)})
+    journal.record(serial, LB_DRAIN, "started", {"profile": profile, "original": original, "changed": sorted(change), "origin": origin})
     if change:
         backend.set_lb_profile(serial, profile, change)
         now = backend.lb_profile(serial, profile, protocols)["values"]
@@ -216,7 +216,7 @@ def drain(serial, backend, journal, settings):
             raise BackendError(f"{serial}: after the change the profile {profile!r} reads {now}, not {sorted(change)} off")
     if settings.lb_drain_wait_s and getattr(backend, "real_time", True):
         time.sleep(settings.lb_drain_wait_s)
-    journal.record(serial, LB_DRAIN, "ok", {"profile": profile, "original": original, "changed": sorted(change)})
+    journal.record(serial, LB_DRAIN, "ok", {"profile": profile, "original": original, "changed": sorted(change), "origin": origin})
     return {"profile": profile, "taken_out": sorted(change) or "nothing (none of them was permitted)", "waited_s": settings.lb_drain_wait_s}
 
 
@@ -237,10 +237,17 @@ def restore_lb(serial, backend, journal, settings):
     if not opened:
         return ""
     profile, original, changed = opened["profile"], opened["original"], opened["changed"]
-    journal.record(serial, LB_RESTORE, "started", {"profile": profile, "original": original, "changed": changed})
+    from_template = opened.get("origin") == "template"
+    journal.record(serial, LB_RESTORE, "started", {"profile": profile, "original": original, "changed": changed, "origin": opened.get("origin")})
     try:
         if changed:
-            backend.set_lb_profile(serial, profile, {p: original[p] for p in changed})
+            if from_template:          # the profile was the template's: the exact prior state is "no local copy", so delete it instead of writing values back
+                backend.remove_lb_override(serial, profile)
+                after = backend.lb_profile(serial, profile, changed)
+                if after.get("origin") != "template":
+                    raise BackendError(f"{serial}: after removing the local copy the profile {profile!r} is still held locally")
+            else:
+                backend.set_lb_profile(serial, profile, {p: original[p] for p in changed})
             now = backend.lb_profile(serial, profile, changed)["values"]
             if any(now.get(p) != original[p] for p in changed):
                 raise BackendError(f"{serial}: after the restore the profile {profile!r} reads {now}, not {original}")

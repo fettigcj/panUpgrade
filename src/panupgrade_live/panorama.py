@@ -279,6 +279,19 @@ class WriteApi(PanoramaApi):
             raise PermissionError("a write command must name the firewall it is for; none is ever sent to Panorama itself")
         return self._post_params(_profile_params(profile, protocol, action, value), target, f"config {action} {profile} {protocol} {value or ''}".strip())
 
+    def write_profile_override(self, profile, entry_xml, target):
+        """Build a same-named LOCAL copy of a Panorama template's interface management profile (action=override at the profile list), which takes
+        precedence over the template's. VERIFIED on a lab firewall: a set/edit/override of single children is refused, this form is accepted."""
+        if not target:
+            raise PermissionError("a write command must name the firewall it is for; none is ever sent to Panorama itself")
+        return self._post_params(_override_params(profile, entry_xml), target, f"config override profile {profile}")
+
+    def write_profile_remove(self, profile, target):
+        """Delete the whole local entry of the named profile (the local copy: the template's profile then resumes)."""
+        if not target:
+            raise PermissionError("a write command must name the firewall it is for; none is ever sent to Panorama itself")
+        return self._post_params(_profile_params(profile, None, "delete-entry", None), target, f"config delete profile {profile}")
+
     def commit_local(self, target):
         """Commit the firewall's candidate configuration on the firewall itself. The caller has checked that nothing else is uncommitted there."""
         if not target:
@@ -298,7 +311,31 @@ def _profile_params(profile, protocol, action, value):
             return {"type": "config", "action": "set", "xpath": entry, "element": f"<{protocol}>{value}</{protocol}>"}
         if action == "delete" and value is None:
             return {"type": "config", "action": "delete", "xpath": f"{entry}/{protocol}"}
+    if _PROFILE_NAME.fullmatch(profile or "") and protocol is None and action == "delete-entry" and value is None:
+        return {"type": "config", "action": "delete", "xpath": f"{_SETTING.replace('/deviceconfig/setting', '')}/network/profiles/interface-management-profile/entry[@name='{profile}']"}
     raise PermissionError(f"refusing a profile edit that is not on the allow-list: {profile!r} {protocol} {action} {value!r}")
+
+
+_TAG = re.compile(r"[a-z][a-z0-9-]{0,40}")
+
+
+def _override_params(profile, entry_xml):
+    """The same-named local copy of a profile: ONE <entry name=profile> whose descendants are plain elements (tag names a-z0-9-, no attributes besides
+    name on <entry>), serialised from a parsed tree so nothing can ride along."""
+    try:
+        root = ET.fromstring(entry_xml)
+    except ET.ParseError:
+        root = None
+    ok = _PROFILE_NAME.fullmatch(profile or "") and root is not None and root.tag == "entry" and root.get("name") == profile and len(entry_xml) < 4000
+    if ok:
+        for element in root.iter():
+            if not _TAG.fullmatch(element.tag) or any(k != "name" for k in element.attrib) or (element.get("name") is not None and element.tag != "entry"):
+                ok = False
+    if not ok:
+        raise PermissionError(f"refusing a profile copy that is not on the allow-list: {profile!r} {entry_xml[:80]!r}")
+    return {"type": "config", "action": "override",
+            "xpath": f"{_SETTING.replace('/deviceconfig/setting', '')}/network/profiles/interface-management-profile",
+            "element": ET.tostring(root, encoding="unicode")}
 
 
 def write_api(address, creds_file=None, account=None, verify_tls=None, recorder=None, limiter=None, key=None):

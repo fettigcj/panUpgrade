@@ -57,8 +57,9 @@ class Backend:
     def sync_to_peer(self, serial): raise NotImplementedError       # run on the ACTIVE member; returns when the sync job ends
     def suspend(self, serial): raise NotImplementedError
     def functional(self, serial): raise NotImplementedError
-    def lb_profile(self, serial, profile, protocols): raise NotImplementedError    # {"exists": bool, "values": {protocol: "yes" | "no" | None (not set)}} of an interface management profile
-    def set_lb_profile(self, serial, profile, changes): raise NotImplementedError   # {protocol: "yes" | "no" | None (delete the node)}; one commit on the firewall
+    def lb_profile(self, serial, profile, protocols): raise NotImplementedError    # {"exists": bool, "values": {protocol: "yes" | "no" | None (not set)}, "origin": "local" | "template" | None} of an interface management profile
+    def set_lb_profile(self, serial, profile, changes): raise NotImplementedError   # {protocol: "yes" | "no" | None (delete the node)}; one commit on the firewall. A template-held profile gets a same-named local copy
+    def remove_lb_override(self, serial, profile): raise NotImplementedError        # delete that local copy (one commit): the template's profile resumes
     def tcp_asymmetry(self, serial): raise NotImplementedError      # {"reject_non_syn": bool (in force now), "reject_non_syn_config": "yes" | "no" | None (not set), "asymmetric_path": "drop" | "bypass" | None (not set)}
     def set_tcp_asymmetry(self, serial, reject_non_syn, reject_non_syn_config, asymmetric_path): raise NotImplementedError   # the two configuration values (None deletes the node), one commit on the firewall, then the in-force flag
 

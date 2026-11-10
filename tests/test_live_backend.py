@@ -299,7 +299,7 @@ class TheAsymmetryWindowOnARealFirewall(unittest.TestCase):
     def read_script(self, flag="True", path=None, config=None):
         node = f"<asymmetric-path>{path}</asymmetric-path>" if path else ""
         session = f"<session><tcp-reject-non-syn>{config}</tcp-reject-non-syn></session>" if config else ""
-        return {("xml", self.SESSION, "S1"): [ok(f"<tcp-reject-non-syn>{flag}</tcp-reject-non-syn>")],
+        return {("xml", self.SESSION, "S1"): [ok(f"<tcp-nonsyn-rej>{flag}</tcp-nonsyn-rej>")],
                 ("xml", self.CONFIG, "S1"): [R(f"<response status='success'><result><config><devices><entry><deviceconfig><setting><tcp>{node}</tcp>{session}</setting></deviceconfig></entry></devices></config></result></response>")]}
 
     def test_it_reads_both_values_and_none_means_not_configured(self):
@@ -368,9 +368,57 @@ class TheLoadBalancerDrainOnARealFirewall(unittest.TestCase):
 
     def test_it_reads_the_named_profile_and_not_the_others(self):
         w = Scripted({("xml", self.CONFIG, "S1"): [self.config("<entry name='Other'><ssh>yes</ssh></entry><entry name='LB'><ssh>yes</ssh><http>no</http></entry>")]})
-        self.assertEqual(backend(w).lb_profile("S1", "LB", ["ssh", "http", "https"]), {"exists": True, "values": {"ssh": "yes", "http": "no", "https": None}})
-        w = Scripted({("xml", self.CONFIG, "S1"): [self.config("<entry name='Other'/>")]})
-        self.assertEqual(backend(w).lb_profile("S1", "LB", ["ssh"]), {"exists": False, "values": {"ssh": None}})
+        self.assertEqual(backend(w).lb_profile("S1", "LB", ["ssh", "http", "https"]), {"exists": True, "values": {"ssh": "yes", "http": "no", "https": None}, "origin": "local"})
+        merged = "<show><config><merged/></config></show>"
+        w = Scripted({("xml", self.CONFIG, "S1"): [self.config("<entry name='Other'/>")], ("xml", merged, "S1"): [self.config("<entry name='Other'/>")]})
+        self.assertEqual(backend(w).lb_profile("S1", "LB", ["ssh"]), {"exists": False, "values": {"ssh": None}, "origin": None})
+
+    def test_a_profile_that_only_a_panorama_template_holds_is_read_from_the_merged_view_and_marked_as_the_template_s(self):
+        merged = "<show><config><merged/></config></show>"
+        w = Scripted({("xml", self.CONFIG, "S1"): [self.config("<entry name='Other'/>")], ("xml", merged, "S1"): [self.config("<entry name='LB'><ssh>yes</ssh></entry>")]})
+        self.assertEqual(backend(w).lb_profile("S1", "LB", ["ssh"]), {"exists": True, "values": {"ssh": "yes"}, "origin": "template"})
+
+    def test_editing_a_template_s_profile_builds_a_same_named_local_copy_with_the_change_and_removing_it_deletes_the_whole_local_entry(self):
+        merged = "<show><config><merged/></config></show>"
+        sent = []
+
+        class Write(Scripted):
+            def write_profile_override(self, profile, entry_xml, target):
+                sent.append(("override", profile, entry_xml))
+                return ok()
+
+            def write_profile_remove(self, profile, target):
+                sent.append(("remove", profile))
+                return ok()
+
+            def commit_local(self, target):
+                sent.append(("commit",))
+                return ok("<job>9</job>")
+        entry = "<entry name='LB'><permitted-ip><entry name='10.0.0.0/8'/></permitted-ip><http>no</http><ssh>yes</ssh><ping>yes</ping></entry>"
+        w = Write({("xml", self.CONFIG, "S1"): [self.config("<entry name='Other'/>")], ("xml", merged, "S1"): [self.config(entry)],
+                   ("xml", "<show><jobs><id>9</id></jobs></show>", "S1"): [JOB("FIN")]})
+        backend(w, w).set_lb_profile("S1", "LB", {"ssh": "no"})
+        kind, profile, xml = sent[0]
+        self.assertEqual((kind, profile), ("override", "LB"))
+        self.assertIn("<ssh>no</ssh>", xml)
+        self.assertNotIn("<ssh>yes</ssh>", xml)
+        self.assertIn("<permitted-ip>", xml)                                     # a complete copy, not only the changed child
+        self.assertEqual(sent[1], ("commit",))
+        backend(w, w).remove_lb_override("S1", "LB")
+        self.assertEqual(sent[2:], [("remove", "LB"), ("commit",)])
+
+    def test_only_a_well_formed_same_named_copy_can_be_sent_as_an_override(self):
+        from panupgrade_live.panorama import _override_params, _profile_params
+        good = _override_params("LB", "<entry name='LB'><ssh>no</ssh><permitted-ip><entry name='10.0.0.0/8'/></permitted-ip></entry>")
+        self.assertEqual(good["action"], "override")
+        self.assertTrue(good["xpath"].endswith("/network/profiles/interface-management-profile"))
+        for bad in ("<entry name='Other'><ssh>no</ssh></entry>", "<entry name='LB' x='1'><ssh>no</ssh></entry>", "<entry name='LB'><SSH>no</SSH></entry>",
+                    "<other name='LB'/>", "not xml", "<entry name='LB'><a name='x'/></entry>"):
+            with self.assertRaises(PermissionError, msg=bad):
+                _override_params("LB", bad)
+        with self.assertRaises(PermissionError):
+            _override_params("LB]/x[", "<entry name='LB]/x['/>")
+        self.assertTrue(_profile_params("LB", None, "delete-entry", None)["xpath"].endswith("interface-management-profile/entry[@name='LB']"))
 
     def test_it_refuses_a_value_it_cannot_put_back(self):
         w = Scripted({("xml", self.CONFIG, "S1"): [self.config("<entry name='LB'><ssh>maybe</ssh></entry>")]})
@@ -388,7 +436,8 @@ class TheLoadBalancerDrainOnARealFirewall(unittest.TestCase):
             def commit_local(self, target):
                 order.append(("commit",))
                 return ok("<job>9</job>")
-        w = Write({("xml", "<show><jobs><id>9</id></jobs></show>", "S1"): [JOB("FIN")]})
+        w = Write({("xml", "<show><jobs><id>9</id></jobs></show>", "S1"): [JOB("FIN")],
+                   ("xml", self.CONFIG, "S1"): [self.config("<entry name='LB'><ssh>yes</ssh></entry>")]})
         backend(w, w).set_lb_profile("S1", "LB", {"ssh": "no", "http": None})
         self.assertEqual(order, [("LB", "ssh", "set", "no"), ("LB", "http", "delete", None), ("commit",)])
 

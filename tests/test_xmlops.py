@@ -84,6 +84,14 @@ class Parsers(unittest.TestCase):
         facts, _ = collect_facts(op)
         self.assertEqual((facts.ha_mode, facts.running_jobs), ("none", 1))
 
+    def test_ghost_failed_job_records_are_not_running_jobs(self):
+        """Real PA-VMs restarted mid-job keep records of type Failed-Job with no id or status (seen 2026-11-07); a job with a real status still counts."""
+        ghosts = "<job><type>Failed-Job</type></job>" * 3
+        op = CannedOp(responses(**{"show high-availability state": ok("<enabled>no</enabled>"), "show jobs all": ok(ghosts + "<job><status>FIN</status></job>")}))
+        self.assertEqual(collect_facts(op)[0].running_jobs, 0)
+        op = CannedOp(responses(**{"show high-availability state": ok("<enabled>no</enabled>"), "show jobs all": ok(ghosts + "<job><status>ACT</status></job>")}))
+        self.assertEqual(collect_facts(op)[0].running_jobs, 1)
+
     def test_disk_units(self):
         mk = lambda avail: CannedOp({"show system disk-space": ok(f"hdr\n/dev/x 1G 1G {avail} 1% /opt/panrepo\n")})
         self.assertEqual(parse_free_mb(mk("512M")), 512)

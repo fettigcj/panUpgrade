@@ -143,7 +143,8 @@ class LiveBackend(Backend):
         facts, problems = xmlops.collect_facts(self._op(serial))
         if facts.sw_version is None:
             raise BackendError(f"{serial}: cannot read the version: {'; '.join(problems)}")
-        return {"version": facts.sw_version, "pending_changes": facts.pending_changes, "running_jobs": facts.running_jobs}
+        return {"version": facts.sw_version, "pending_changes": facts.pending_changes, "running_jobs": facts.running_jobs,
+                "pending_reboot": facts.pending_reboot, "pending_reboot_version": facts.pending_reboot_version}
 
     def state(self, serial):
         facts, problems = xmlops.collect_facts(self._op(serial))

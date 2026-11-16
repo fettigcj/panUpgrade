@@ -8,7 +8,7 @@ from panupgrade import settings
 from panupgrade.model import DeviceRef
 from panupgrade.planner import Selection, build_plan
 from panupgrade.sources import SourceError
-from panupgrade.xmlops import (READ_ONLY_PREFIXES, CannedOp, OpSource, UnscriptedCommand, XmlOpError, collect_facts, ok,
+from panupgrade.xmlops import (READ_ONLY_EXACT, READ_ONLY_PREFIXES, CannedOp, OpSource, UnscriptedCommand, XmlOpError, collect_facts, ok,
                                parse_free_mb, parse_ha)
 
 DISK = ("Filesystem Size Used Avail Use% Mounted on\n/dev/root 7.0G 3.9G 2.7G 59% /\n"
@@ -24,12 +24,18 @@ def ha(state="active", peer="passive", sync="synchronized", mode="Active-Passive
               f"<running-sync>{sync}</running-sync></group>")
 
 
+# `debug swm status` as a lab firewall printed it (2026-11-16): the running partition, one with an image installed and not yet booted, and the maintenance one
+SWM_CLEAN = 'Partition  State  Version\n----\nsysroot0    RUNNING-ACTIVE    12.1.10-h3\nsysroot1    READY    12.1.10-h3\nmaint       READY    12.1.10-h3\n'
+SWM_PENDING = 'Partition  State  Version\n----\nsysroot0    RUNNING-ACTIVE    12.1.10-h3\nsysroot1    PENDING-CHANGE    10.2.18-h14\nmaint       READY    10.2.18-h14\n'
+
+
 def responses(**over):
     base = {
         "show system info": ok("<system><sw-version>20.2.3</sw-version><app-version>8545-7303</app-version><threat-version>0</threat-version>"
                                "<av-version>0</av-version><wildfire-version>0</wildfire-version></system>"),
         "check pending-changes": ok("no"),
         "show jobs all": ok("<job><status>FIN</status></job><job><status>FIN</status></job>"),
+        "debug swm status": ok(SWM_CLEAN),
         "show session info": ok("<num-active>1000</num-active>"),
         "show system disk-space": ok(DISK),
         "show high-availability state": ha(),
@@ -59,7 +65,27 @@ class Parsers(unittest.TestCase):
         collect_facts(op)
         self.assertTrue(op.calls)
         for call in op.calls:
-            self.assertTrue(call.startswith(READ_ONLY_PREFIXES), call)
+            self.assertTrue(call.startswith(READ_ONLY_PREFIXES) or call in READ_ONLY_EXACT, call)
+
+    def test_an_installed_image_waiting_for_a_reboot_is_read_from_the_software_manager(self):
+        facts, problems = collect_facts(CannedOp(responses(**{"debug swm status": ok(SWM_PENDING)})))
+        self.assertEqual((facts.pending_reboot, facts.pending_reboot_version, problems), (True, "10.2.18-h14", []))
+        facts, _ = collect_facts(CannedOp(responses()))
+        self.assertEqual((facts.pending_reboot, facts.pending_reboot_version), (False, None))
+
+    def test_a_software_manager_table_it_does_not_understand_is_no_data_not_a_guess(self):
+        facts, problems = collect_facts(CannedOp(responses(**{"debug swm status": ok("something else entirely")})))
+        self.assertIsNone(facts.pending_reboot)
+        self.assertTrue(any("no running partition" in p for p in problems))
+        facts, problems = collect_facts(CannedOp(responses(**{"debug swm status": "<response status='error'><result/></response>"})))
+        self.assertIsNone(facts.pending_reboot)
+
+    def test_only_that_one_debug_command_is_allowed(self):
+        from panupgrade_live.panorama import PanoramaApi
+        api = PanoramaApi("192.0.2.1", key="not-a-key")
+        for bad in ("debug swm status foo", "debug swm", "debug dataplane reset", "debug software restart", "request restart system"):
+            with self.assertRaises(PermissionError, msg=bad):
+                api.op(bad, target="S1")
 
     def test_unscripted_command_fails_loudly(self):
         with self.assertRaises(UnscriptedCommand):

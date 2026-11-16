@@ -95,6 +95,7 @@ flowchart TD
     n_panupgrade_checks_disk_space["checks.disk_space"]
     n_panupgrade_checks__images_already_here["checks._images_already_here<br/><i>True when the upgrade path needs at least one download and every image</i>"]
     n_panupgrade_checks_pending_changes["checks.pending_changes"]
+    n_panupgrade_checks_pending_reboot["checks.pending_reboot<br/><i>An image that was installed and never booted (a finished install job w</i>"]
     n_panupgrade_checks_running_jobs["checks.running_jobs"]
     n_panupgrade_checks_session_baseline["checks.session_baseline<br/><i>The active node's session count is the yardstick for the failover and </i>"]
     n_panupgrade_checks_ntp["checks.ntp"]
@@ -170,6 +171,8 @@ flowchart TD
     n_panupgrade_checks_disk_space --> n_panupgrade_checks__images_already_here
     n_panupgrade_checks_run_device_checks --> n_panupgrade_checks_pending_changes
     n_panupgrade_checks_pending_changes --> n_panupgrade_checks__no_data
+    n_panupgrade_checks_run_device_checks --> n_panupgrade_checks_pending_reboot
+    n_panupgrade_checks_pending_reboot --> n_panupgrade_checks__no_data
     n_panupgrade_checks_run_device_checks --> n_panupgrade_checks_running_jobs
     n_panupgrade_checks_running_jobs --> n_panupgrade_checks__no_data
     n_panupgrade_checks_run_device_checks --> n_panupgrade_checks_session_baseline
@@ -293,6 +296,7 @@ flowchart TD
     n_panupgrade_checks_preemption["checks.preemption"]
     n_panupgrade_checks_disk_space["checks.disk_space"]
     n_panupgrade_checks_pending_changes["checks.pending_changes"]
+    n_panupgrade_checks_pending_reboot["checks.pending_reboot<br/><i>An image that was installed and never booted (a finished install job w</i>"]
     n_panupgrade_checks_running_jobs["checks.running_jobs"]
     n_panupgrade_checks_session_baseline["checks.session_baseline<br/><i>The active node's session count is the yardstick for the failover and </i>"]
     n_panupgrade_checks_ntp["checks.ntp"]
@@ -378,6 +382,7 @@ flowchart TD
     n_panupgrade_checks_run_device_checks --> n_panupgrade_checks_preemption
     n_panupgrade_checks_run_device_checks --> n_panupgrade_checks_disk_space
     n_panupgrade_checks_run_device_checks --> n_panupgrade_checks_pending_changes
+    n_panupgrade_checks_run_device_checks --> n_panupgrade_checks_pending_reboot
     n_panupgrade_checks_run_device_checks --> n_panupgrade_checks_running_jobs
     n_panupgrade_checks_run_device_checks --> n_panupgrade_checks_session_baseline
     n_panupgrade_checks_run_device_checks --> n_panupgrade_checks_ntp

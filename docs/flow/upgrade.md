@@ -124,7 +124,7 @@ flowchart TD
 
 ## 2. How a unit and a firewall are run
 
-`executor.run`, for each unit ([executor.py:71]). A member is run only when the one before it in the unit finished; a firewall that failed earlier in the journal is not retried.
+`executor.run`, for each unit ([executor.py:75]). A member is run only when the one before it in the unit finished; a firewall that failed earlier in the journal is not retried.
 
 ```mermaid
 flowchart TD
@@ -150,7 +150,7 @@ flowchart TD
     class u6 done
 ```
 
-`executor._run_device` ([executor.py:151]): preflight, then each step in order. A step already marked done in the journal is skipped, and one that was started and never finished is never repeated: it needs a person to look at the firewall.
+`executor._run_device` ([executor.py:155]): preflight, then each step in order. A step already marked done in the journal is skipped, and one that was started and never finished is never repeated: it needs a person to look at the firewall.
 
 ```mermaid
 flowchart TD
@@ -178,7 +178,7 @@ flowchart TD
     class r5 done
 ```
 
-`executor._preflight` ([executor.py:294]): the plan is checked against the firewall again just before it is touched.
+`executor._preflight` ([executor.py:298]): the plan is checked against the firewall again just before it is touched.
 
 ```mermaid
 flowchart TD
@@ -190,7 +190,9 @@ flowchart TD
     p6(["raise 'pending (uncommitted) configuration, or unknown; settings say block'"])
     p7{"seen.get('running_jobs') != 0"}
     p8(["raise f'jobs running or unknown: {seen.get('running_jobs')!r}'"])
-    p9(["return {'version': seen['version']}"])
+    p9{"seen.get('pending_reboot') is True"}
+    p10(["raise f'{seen.get('pending_reboot_version') or 'an image'} is installed and waiting…"])
+    p11(["return {'version': seen['version']}"])
     p1 --> p2
     p2 --> p3
     p3 -->|yes| p4
@@ -199,6 +201,8 @@ flowchart TD
     p5 -->|no| p7
     p7 -->|yes| p8
     p7 -->|no| p9
+    p9 -->|yes| p10
+    p9 -->|no| p11
     classDef api stroke:#2f6fed,stroke-width:3px
     classDef refuse stroke:#d64545,stroke-width:3px
     classDef done stroke:#2e9e5b,stroke-width:3px
@@ -209,10 +213,11 @@ flowchart TD
     class p4 refuse
     class p6 refuse
     class p8 refuse
-    class p9 done
+    class p10 refuse
+    class p11 done
 ```
 
-`executor._step` ([executor.py:283]) wraps every step: write `started`, run it, write `ok` or `failed`.
+`executor._step` ([executor.py:287]) wraps every step: write `started`, run it, write `ok` or `failed`.
 
 ```mermaid
 flowchart TD
@@ -237,7 +242,7 @@ flowchart TD
 
 ## 3. How each step is carried out
 
-`executor._do` ([executor.py:332]). Before any step that installs or reboots, a verified backup must be in the journal:
+`executor._do` ([executor.py:339]). Before any step that installs or reboots, a verified backup must be in the journal:
 
 ```mermaid
 flowchart TD
@@ -257,7 +262,7 @@ flowchart TD
 
 ### starts with 'download '
 
-executor.py:336
+executor.py:343
 
 ```mermaid
 flowchart TD
@@ -275,7 +280,7 @@ flowchart TD
 
 ### 'backup'
 
-executor.py:338
+executor.py:345
 
 ```mermaid
 flowchart TD
@@ -309,7 +314,7 @@ flowchart TD
 
 ### 'sync to peer'
 
-executor.py:346
+executor.py:353
 
 ```mermaid
 flowchart TD
@@ -347,7 +352,7 @@ flowchart TD
 
 ### "wait for the passive firewall's upgrade to finish"
 
-executor.py:357
+executor.py:364
 
 ```mermaid
 flowchart TD
@@ -373,7 +378,7 @@ flowchart TD
 
 ### 'fail over'
 
-executor.py:364
+executor.py:371
 
 ```mermaid
 flowchart TD
@@ -422,7 +427,7 @@ flowchart TD
 
 ### 'hold suspended'
 
-executor.py:381
+executor.py:388
 
 ```mermaid
 flowchart TD
@@ -442,7 +447,7 @@ flowchart TD
 
 ### starts with 'install '
 
-executor.py:384
+executor.py:391
 
 ```mermaid
 flowchart TD
@@ -462,7 +467,7 @@ flowchart TD
 
 ### 'drain'
 
-executor.py:387
+executor.py:394
 
 ```mermaid
 flowchart TD
@@ -480,7 +485,7 @@ flowchart TD
 
 ### 'undrain'
 
-executor.py:390
+executor.py:397
 
 ```mermaid
 flowchart TD
@@ -498,7 +503,7 @@ flowchart TD
 
 ### 'reboot'
 
-executor.py:393
+executor.py:400
 
 ```mermaid
 flowchart TD
@@ -519,7 +524,7 @@ flowchart TD
 
 ### 'verify'
 
-executor.py:397
+executor.py:404
 
 ```mermaid
 flowchart TD
@@ -552,7 +557,7 @@ flowchart TD
 
 ### 'go live'
 
-executor.py:405
+executor.py:412
 
 ```mermaid
 flowchart TD
@@ -570,7 +575,7 @@ flowchart TD
 
 ### 'verify HA'
 
-executor.py:407
+executor.py:414
 
 ```mermaid
 flowchart TD
@@ -619,7 +624,7 @@ flowchart TD
 
 ### 'restore roles'
 
-executor.py:427
+executor.py:434
 
 ```mermaid
 flowchart TD
@@ -640,7 +645,7 @@ flowchart TD
 
 ### anything else
 
-executor.py:432
+executor.py:439
 
 ```mermaid
 flowchart TD
@@ -664,25 +669,25 @@ Found by reading every decision in the code that looks at the config-sync or ses
 |---|---|---|---|
 | checks | `ha_peer` (checks.py:159) | `problems == ['HA1 config sync'] and f.ha_session_sync and (f.ha_links_ok is not False)` | plan, upgrade, prepare |
 | prepare | `build` (prepare.py:180) | `facts.ha_config_sync is False` | prepare |
-| executor | `_do` (executor.py:353) | `after['ha_config_sync'] is not True` | upgrade |
-| executor | `_do` (executor.py:373) | `not _band_ok(before or 0, after or 0, settings.failover_band)` | upgrade |
-| executor | `_do` (executor.py:412) | `got['ha_session_sync'] is not True` | upgrade |
-| executor | `_do` (executor.py:423) | `not base or not _band_ok(base, got['session_count'] or 0, settings.post_upgrade_band)` | upgrade |
+| executor | `_do` (executor.py:360) | `after['ha_config_sync'] is not True` | upgrade |
+| executor | `_do` (executor.py:380) | `not _band_ok(before or 0, after or 0, settings.failover_band)` | upgrade |
+| executor | `_do` (executor.py:419) | `got['ha_session_sync'] is not True` | upgrade |
+| executor | `_do` (executor.py:430) | `not base or not _band_ok(base, got['session_count'] or 0, settings.post_upgrade_band)` | upgrade |
 | fleetreport | `_attention` (fleetreport.py:47) | `facts.get('ha_config_sync') is False and (not mixed)` | report |
 
 ## Helpers the charts call
 
 | function | what it does |
 |---|---|
-| `_backup_verified` (executor.py:305) | return any((st['action'] == 'backup' and journal.last_state(serial, _key(i, 'backup')) == 'ok' for i, st in enumerate(steps))) |
-| `_band_ok` (executor.py:67) | return before > 0 and abs(after - before) / before <= band |
-| `_baseline` (executor.py:323) | The pair's session baseline: the count on the node that was active before the unit started. |
-| `_expected_version` (executor.py:315) | see the source |
-| `_retry_while_busy` (executor.py:265) | Run a command the firewall may refuse because it is busy. The jobs list showed nothing a moment ago, but a commit can be queued |
-| `_run_steps` (executor.py:167) | see the source |
-| `_settle` (executor.py:228) | Wait ``seconds``, then until the firewall has no unfinished job, before the next step touches it. |
-| `_target_version` (executor.py:310) | return _expected_version(steps, len(steps)) |
-| `_wait_for_quiet` (executor.py:250) | A config sync, an HA state change or a boot queues a commit on the firewall, and the install is refused while that is still in the |
+| `_backup_verified` (executor.py:312) | return any((st['action'] == 'backup' and journal.last_state(serial, _key(i, 'backup')) == 'ok' for i, st in enumerate(steps))) |
+| `_band_ok` (executor.py:71) | return before > 0 and abs(after - before) / before <= band |
+| `_baseline` (executor.py:330) | The pair's session baseline: the count on the node that was active before the unit started. |
+| `_expected_version` (executor.py:322) | see the source |
+| `_retry_while_busy` (executor.py:269) | Run a command the firewall may refuse because it is busy. The jobs list showed nothing a moment ago, but a commit can be queued |
+| `_run_steps` (executor.py:171) | see the source |
+| `_settle` (executor.py:232) | Wait ``seconds``, then until the firewall has no unfinished job, before the next step touches it. |
+| `_target_version` (executor.py:317) | return _expected_version(steps, len(steps)) |
+| `_wait_for_quiet` (executor.py:254) | A config sync, an HA state change or a boot queues a commit on the firewall, and the install is refused while that is still in the |
 
 ## Settings the charts read
 

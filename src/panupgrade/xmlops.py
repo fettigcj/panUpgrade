@@ -22,6 +22,9 @@ from .sources import Source, SourceError
 
 READ_ONLY_PREFIXES = ("show ", "check ", "request system software check", "request system software info",
                       "request content upgrade check", "request anti-virus upgrade check", "request wildfire upgrade check")
+# Spelled out whole, never as a prefix: `debug swm status` only prints the software manager's partition table (which version runs, which is installed and
+# waiting for a reboot). It is the one debug command panUpgrade sends, and it changes nothing. Nothing else beginning with "debug" is allowed.
+READ_ONLY_EXACT = ("debug swm status",)
 
 
 class XmlOpError(Exception):
@@ -81,6 +84,18 @@ def parse_version(op):
 def parse_pending(op):
     node = _result(op("check pending-changes"), "check pending-changes")
     return _yes((node.text or "").strip() or None)
+
+
+def parse_pending_reboot(op):
+    """{"pending": bool, "version": the installed version waiting for a reboot or None} from `debug swm status`, whose table reads like
+    ``sysroot1  PENDING-CHANGE  10.2.18-h14``. Seen on a lab firewall 2026-11-16: the running partition is RUNNING-ACTIVE, and an image that was
+    installed but not booted is PENDING-CHANGE. A table with no running partition is not understood and is reported, never guessed at."""
+    text = _result(op("debug swm status"), "debug swm status").text or ""
+    rows = [line.split() for line in text.splitlines() if len(line.split()) == 3]
+    if not any(r[1].upper().startswith("RUNNING") for r in rows):
+        raise XmlOpError("debug swm status: no running partition in the reply")
+    waiting = [r[2] for r in rows if r[1].upper().startswith("PENDING")]
+    return {"pending": bool(waiting), "version": waiting[0] if waiting else None}
 
 
 def parse_running_jobs(op):
@@ -259,6 +274,10 @@ def collect_facts(op, peer_serial=None):
     attempt("version", parse_version, lambda v: setattr(facts, "sw_version", v))
     attempt("pending changes", parse_pending, lambda v: setattr(facts, "pending_changes", v))
     attempt("jobs", parse_running_jobs, lambda v: setattr(facts, "running_jobs", v))
+    def apply_pending_reboot(found):
+        facts.pending_reboot, facts.pending_reboot_version = found["pending"], found["version"]
+
+    attempt("software waiting for a reboot", parse_pending_reboot, apply_pending_reboot)
     attempt("sessions", parse_session_count, lambda v: setattr(facts, "session_count", v))
     attempt("disk", parse_free_mb, lambda v: setattr(facts, "disk_free_mb", v))
     def apply_software(listing):

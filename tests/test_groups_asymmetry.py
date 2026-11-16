@@ -180,6 +180,18 @@ class Running(unittest.TestCase):
         for serial in ("S1", "S2", "S3"):
             self.assertEqual(sim.nodes[serial].asym, ORIGINAL)
 
+    def test_an_installed_image_waiting_for_a_reboot_holds_the_firewall_before_anything_is_changed(self):
+        class Dirty(SimBackend):
+            def preflight(self, serial):
+                seen = super().preflight(serial)
+                return {**seen, "pending_reboot": True, "pending_reboot_version": "10.2.18-h14"} if serial == "S2" else seen
+        _, sim, journal, result = self.go(Dirty)
+        self.assertEqual(result["outcome"]["S2"][0], "failed")
+        self.assertIn("waiting for a reboot", result["outcome"]["S2"][1])
+        self.assertEqual([c for c in sim.calls if c[0] == "S2" and c[1] in ("install", "reboot")], [])    # nothing was done to S2 itself
+        for serial in ("S1", "S2", "S3"):
+            self.assertEqual(sim.nodes[serial].asym, ORIGINAL)
+
     def test_a_firewall_with_uncommitted_changes_is_refused_before_anything_is_changed(self):
         data = three()
         data["devices"][1]["facts"]["pending_changes"] = True

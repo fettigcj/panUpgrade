@@ -243,6 +243,21 @@ def pending_changes(ctx):
     return CheckResult("pending_changes", INFO, msg + " (setting pending_changes=ignore)")
 
 
+def pending_reboot(ctx):
+    """An image that was installed and never booted (a finished install job whose reboot did not happen). The firewall refuses to commit in that state
+    ("Software has been downgraded, please reboot"), so anything the tool does next that needs a commit fails half way. Read from `debug swm status`,
+    which is deterministic, not from the job table, which rotates."""
+    pending = ctx.facts.pending_reboot
+    if pending is None:
+        return _no_data("pending_reboot", "whether an installed image is waiting for a reboot")
+    if not pending:
+        return CheckResult("pending_reboot", PASS, "no installed image is waiting for a reboot")
+    return CheckResult("pending_reboot", FAIL,
+                       f"{ctx.facts.pending_reboot_version or 'an image'} is installed and waiting for a reboot (the software manager shows it as pending). "
+                       f"Reboot this firewall first (and let its first commit finish); until then it refuses to commit and its running version is not "
+                       f"the one it will boot")
+
+
 def running_jobs(ctx):
     jobs = ctx.facts.running_jobs
     if jobs is None:
@@ -373,7 +388,7 @@ def panorama_range(ctx):
 DEVICE_CHECKS = [
     (reachable, True), (current_version, True), (upgrade_path, True), (ha_state, True),
     (ha_peer, True), (preemption, False), (disk_space, True), (pending_changes, True),
-    (running_jobs, False), (session_baseline, False), (ntp, False), (licenses, False), (panorama_range, False), (certificate_advisory, False), (device_certificate, False), (clock_skew, False), (content_minimum, False),
+    (pending_reboot, False), (running_jobs, False), (session_baseline, False), (ntp, False), (licenses, False), (panorama_range, False), (certificate_advisory, False), (device_certificate, False), (clock_skew, False), (content_minimum, False),
 ]
 REQUIRED = {fn.__name__ for fn, req in DEVICE_CHECKS if req}
 

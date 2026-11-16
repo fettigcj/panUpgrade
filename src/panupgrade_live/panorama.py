@@ -27,7 +27,7 @@ from panupgrade import credstore, progress, site, trust
 from panupgrade.trust import CertificateChanged, CertificateProblem
 from panupgrade.model import DeviceRef
 from panupgrade.sources import SourceError
-from panupgrade.xmlops import OpSource, READ_ONLY_PREFIXES
+from panupgrade.xmlops import OpSource, READ_ONLY_EXACT, READ_ONLY_PREFIXES
 
 
 def to_xml_cmd(command):
@@ -180,7 +180,7 @@ class PanoramaApi:
         _tls(verify_tls)                                   # says once, loudly, if checking is off
 
     def op(self, command, target=None):
-        if not command.startswith(READ_ONLY_PREFIXES):
+        if not (command.startswith(READ_ONLY_PREFIXES) or command in READ_ONLY_EXACT):
             raise PermissionError(f"refusing non-read-only command: {command!r}")
         return self._post(to_xml_cmd(command), target, command)
 

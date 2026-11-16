@@ -54,6 +54,8 @@ class Facts:
     base_images: dict = None         # {feature release: the lowest version without a hotfix the firewall offers}: the base image to download
     pending_changes: bool = None
     running_jobs: int = None
+    pending_reboot: bool = None          # an image is installed and not yet booted (`debug swm status` shows a PENDING partition)
+    pending_reboot_version: str = None   # that image's version
     session_count: int = None
     ntp_synced: bool = None
     licenses_ok: bool = None

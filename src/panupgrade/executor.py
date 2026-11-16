@@ -303,6 +303,9 @@ def _preflight(dev, backend, settings):
         raise StepFailed("pending (uncommitted) configuration, or unknown; settings say block")
     if seen.get("running_jobs") != 0:
         raise StepFailed(f"jobs running or unknown: {seen.get('running_jobs')!r}")
+    if seen.get("pending_reboot") is True:
+        raise StepFailed(f"{seen.get('pending_reboot_version') or 'an image'} is installed and waiting for a reboot, and the firewall refuses to commit "
+                         f"until it has been rebooted; reboot it first")
     return {"version": seen["version"]}
 
 

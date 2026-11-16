@@ -16,15 +16,16 @@ flowchart LR
     c5("preemption")
     c6[["disk_space<br/>(required)"]]
     c7[["pending_changes<br/>(required)"]]
-    c8("running_jobs")
-    c9("session_baseline<br/><i>The active node's session count is the yardstick for the fai</i>")
-    c10("ntp")
-    c11("licenses")
-    c12("panorama_range<br/><i>Advice only, never a blocker: a firewall far behind Panorama</i>")
-    c13("certificate_advisory<br/><i>Is this build (and the target) one that carries the fix for </i>")
-    c14("device_certificate<br/><i>The device certificate (`show device-certificate status`). N</i>")
-    c15("clock_skew<br/><i>The firewall's clock against Panorama's. A firewall hours of</i>")
-    c16("content_minimum<br/><i>PAN-OS refuses to install some releases unless the dynamic c</i>")
+    c8("pending_reboot<br/><i>An image that was installed and never booted (a finished ins</i>")
+    c9("running_jobs")
+    c10("session_baseline<br/><i>The active node's session count is the yardstick for the fai</i>")
+    c11("ntp")
+    c12("licenses")
+    c13("panorama_range<br/><i>Advice only, never a blocker: a firewall far behind Panorama</i>")
+    c14("certificate_advisory<br/><i>Is this build (and the target) one that carries the fix for </i>")
+    c15("device_certificate<br/><i>The device certificate (`show device-certificate status`). N</i>")
+    c16("clock_skew<br/><i>The firewall's clock against Panorama's. A firewall hours of</i>")
+    c17("content_minimum<br/><i>PAN-OS refuses to install some releases unless the dynamic c</i>")
     c0 --> c1
     c1 --> c2
     c2 --> c3
@@ -41,6 +42,7 @@ flowchart LR
     c13 --> c14
     c14 --> c15
     c15 --> c16
+    c16 --> c17
 ```
 
 ## Which verbs run them
@@ -71,6 +73,7 @@ flowchart LR
 | `preemption` | no | ha_mode, preemption | - | - |
 | `disk_space` | yes | disk_free_mb, images_downloaded, sw_version | allow_downgrade, min_free_disk_mb | - |
 | `pending_changes` | yes | pending_changes | pending_changes | - |
+| `pending_reboot` | no | pending_reboot, pending_reboot_version | - | - |
 | `running_jobs` | no | running_jobs | - | - |
 | `session_baseline` | no | ha_mode, ha_state, session_count | - | - |
 | `ntp` | no | ntp_synced | - | ntp_synced |
@@ -92,6 +95,7 @@ A fact in the last column is read by the check but is not set by `collect_facts`
 | version | `show system info` | sw_version | certificate_advisory, content_minimum, current_version, disk_space, ha_peer, panorama_range, upgrade_path |
 | pending changes | `check pending-changes` | pending_changes | pending_changes |
 | jobs | `show jobs all` | running_jobs | running_jobs |
+| software waiting for a reboot | `debug swm status` | pending_reboot, pending_reboot_version | pending_reboot |
 | sessions | `show session info` | session_count | session_baseline |
 | disk | `show system disk-space` | disk_free_mb | disk_space |
 | images | `request system software info` | images_downloaded, base_images | disk_space |
@@ -118,6 +122,8 @@ flowchart LR
     reads --> q_pending_changes
     q_jobs["jobs<br/>show jobs all"]
     reads --> q_jobs
+    q_software_waiting_for_a_reboot["software waiting for a reboot<br/>debug swm status"]
+    reads --> q_software_waiting_for_a_reboot
     q_sessions["sessions<br/>show session info"]
     reads --> q_sessions
     q_disk["disk<br/>show system disk-space"]
@@ -140,6 +146,7 @@ flowchart LR
     k_preemption("preemption")
     k_disk_space("disk_space")
     k_pending_changes("pending_changes")
+    k_pending_reboot("pending_reboot")
     k_running_jobs("running_jobs")
     k_session_baseline("session_baseline")
     k_ntp("ntp")
@@ -158,6 +165,7 @@ flowchart LR
     q_version --> k_content_minimum
     q_pending_changes --> k_pending_changes
     q_jobs --> k_running_jobs
+    q_software_waiting_for_a_reboot --> k_pending_reboot
     q_sessions --> k_session_baseline
     q_disk --> k_disk_space
     q_images --> k_disk_space
@@ -177,6 +185,7 @@ flowchart LR
     k_preemption --> judged
     k_disk_space --> judged
     k_pending_changes --> judged
+    k_pending_reboot --> judged
     k_running_jobs --> judged
     k_session_baseline --> judged
     k_ntp --> judged

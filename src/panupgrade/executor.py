@@ -26,6 +26,10 @@ class BackendError(Exception):
     """A device operation failed. Always surfaced; never retried silently."""
 
 
+class CommitRefused(BackendError):
+    """The firewall answered a commit with an error, so nothing was committed (the candidate edits made for it were taken back)."""
+
+
 class StepFailed(Exception):
     """The executor's own judgment that a step's outcome is not acceptable."""
 

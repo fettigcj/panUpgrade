@@ -337,6 +337,29 @@ class TheAsymmetryWindowOnARealFirewall(unittest.TestCase):
         backend(w, w).set_tcp_asymmetry("S1", True, None, None)
         self.assertEqual(order[:2], [("config", "tcp-reject-non-syn", "delete", None), ("config", "asymmetric-path", "delete", None)])
 
+    def test_a_refused_commit_says_why_and_takes_the_candidate_edits_back(self):
+        from panupgrade.executor import CommitRefused
+        sent = []
+
+        class Write(Scripted):
+            def write_config(self, knob, action, value, target):
+                return ok()
+
+            def commit_local(self, target):
+                return R('<response status="error" code="13"><msg><line>Software has been downgraded, please reboot the device before committing the configuration</line></msg></response>')
+
+            def write_xml(self, xml, target):
+                sent.append(xml)
+                return R("<response status='success'/>")
+        w = Write({})
+        with self.assertRaises(CommitRefused) as caught:
+            backend(w, w).set_tcp_asymmetry("S1", False, "no", "bypass")
+        text = str(caught.exception)
+        self.assertIn("please reboot the device", text)
+        self.assertIn("Reboot it first", text)
+        self.assertIn("reverted", text)
+        self.assertEqual(sent, ["<revert><config/></revert>"])           # no runtime flag was set, the candidate was reverted
+
     def test_only_the_asymmetric_path_may_be_edited_and_only_those_ways(self):
         from panupgrade_live.panorama import WRITE_ALLOWED, _config_params
         w = WriteApi("192.0.2.1", key="not-a-key")

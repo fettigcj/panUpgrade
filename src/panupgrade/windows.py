@@ -15,7 +15,7 @@
 import threading
 import time
 
-from .executor import BackendError
+from .executor import BackendError, CommitRefused
 
 OPEN, RESTORE = "asymmetry open", "asymmetry restore"
 LB_DRAIN, LB_RESTORE = "asymmetry lb drain", "asymmetry lb restore"      # the load-balancer drain of one member (see drain / restore_lb)
@@ -142,6 +142,10 @@ class Windows:
             now = self.backend.tcp_asymmetry(serial)
             if now != TOLERANT:
                 raise BackendError(f"{serial}: after the change the firewall reads {now}, not {TOLERANT}")
+        except CommitRefused as exc:                                # nothing was committed and the edits were taken back: there is nothing to restore
+            window["opened"].remove((serial, original))
+            self.journal.record(serial, OPEN, "failed", {"original": original, "error": str(exc), "changed": False})
+            raise
         except BackendError as exc:
             self.journal.record(serial, OPEN, "failed", {"original": original, "error": str(exc)})
             raise
@@ -186,6 +190,8 @@ def unrestored_in_journal(journal, serials):
                 state = ("opened", event["detail"].get("original"))
             elif event["step"] == RESTORE and event["state"] == "ok":
                 state = None
+            elif event["step"] == OPEN and event["state"] == "failed" and event["detail"].get("changed") is False:
+                state = None                                         # the firewall refused the commit: nothing was ever changed
         if state:
             found.append({"serial": serial, "original": state[1]})
     return found

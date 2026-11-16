@@ -237,6 +237,8 @@ WRITE_ALLOWED = [
     re.compile(r"<request><high-availability><sync-to-remote><running-config/></sync-to-remote></high-availability></request>"),
     # the asymmetry window (see windows.py): the runtime half; the configuration half is write_config() below
     re.compile(r"<set><session><tcp-reject-non-syn>(?:yes|no)</tcp-reject-non-syn></session></set>"),
+    # take back the candidate edits of a commit the firewall refused (only sent when nothing else was uncommitted, which the window checks first)
+    re.compile(r"<revert><config/></revert>"),
 ]
 
 # The ONLY configuration edits a write-capable connection may make: the asymmetric-path value under the firewall's own device settings,

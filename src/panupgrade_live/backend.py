@@ -18,7 +18,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 
-from panupgrade.executor import Backend, BackendError
+from panupgrade.executor import Backend, BackendError, CommitRefused
 from panupgrade.sources import SourceError
 from panupgrade import xmlops
 
@@ -315,9 +315,21 @@ class LiveBackend(Backend):
         try:
             for knob, value in (("tcp-reject-non-syn", reject_non_syn_config), ("asymmetric-path", asymmetric_path)):
                 self.write.write_config(knob, "delete" if value is None else "set", value, serial)
-            job = self._job_id(self.write.commit_local(serial))
+            reply = self.write.commit_local(serial)
         except SourceError as exc:
             raise BackendError(str(exc)) from None
+        if reply.get("status") != "success":
+            # Nothing was committed, so the running configuration is untouched; only the candidate holds the edits just made. Take them back
+            # (the callers checked that nothing else was uncommitted) so the firewall is not left dirty, and say what the firewall said.
+            said = " ".join(" ".join((e.text or "").split()) for e in reply.iter("line")) or str(reply.get("status"))
+            hint = " Reboot it first, then run again." if "reboot" in said.lower() else ""
+            try:
+                self._send("<revert><config/></revert>", serial)
+                tidy = "the uncommitted edits were reverted"
+            except BackendError as exc:
+                tidy = f"the uncommitted edits could NOT be reverted ({exc}); discard the candidate configuration by hand"
+            raise CommitRefused(f"{serial}: the firewall refused the commit: {said}.{hint} Nothing was changed on it; {tidy}.")
+        job = self._job_id(reply)
         self._wait_job(serial, job, self.settings.install_timeout_s, "the commit of the TCP setting change")
         self._send(f"<set><session><tcp-reject-non-syn>{'yes' if reject_non_syn else 'no'}</tcp-reject-non-syn></session></set>", serial)
 

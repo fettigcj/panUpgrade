@@ -168,6 +168,18 @@ class Running(unittest.TestCase):
         self.assertEqual([s for s in unrestored_in_journal(journal, ["S1", "S2", "S3"])][0]["serial"], "S2")
         self.assertIn(("asymmetry restore", "failed"), [(e["step"], e["state"]) for e in journal.steps_of("S2")])
 
+    def test_a_commit_the_firewall_refuses_leaves_no_false_alert(self):
+        class Refuses(SimBackend):
+            def set_tcp_asymmetry(self, serial, reject_non_syn, reject_non_syn_config, asymmetric_path):
+                if serial == "S2":
+                    raise executor.CommitRefused("S2: the firewall refused the commit: please reboot")
+                super().set_tcp_asymmetry(serial, reject_non_syn, reject_non_syn_config, asymmetric_path)
+        _, sim, journal, result = self.go(Refuses)
+        self.assertEqual(result["asymmetry_unrestored"], [])               # nothing was committed on S2, so there is nothing to put back
+        self.assertEqual(unrestored_in_journal(journal, ["S1", "S2", "S3"]), [])
+        for serial in ("S1", "S2", "S3"):
+            self.assertEqual(sim.nodes[serial].asym, ORIGINAL)
+
     def test_a_firewall_with_uncommitted_changes_is_refused_before_anything_is_changed(self):
         data = three()
         data["devices"][1]["facts"]["pending_changes"] = True

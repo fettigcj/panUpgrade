@@ -27,7 +27,7 @@ def _pair_key(dev, by_serial):
     return tuple(sorted([dev["serial"], peer])) if peer and peer in by_serial else (dev["serial"],)
 
 
-def _attention(devices):
+def _attention(devices, settings=None):
     """[(hostname, [what is wrong, in plain words])] for firewalls that need a look, most worrying first."""
     by_serial = {d["serial"]: d for d in devices}
     found = {}
@@ -62,6 +62,9 @@ def _attention(devices):
         if facts.get("pending_reboot"):
             note(dev, f"{facts.get('pending_reboot_version') or 'an image'} is installed and waiting for a reboot: it refuses to commit until it is rebooted, "
                       f"and is still running {facts.get('sw_version') or dev['sw_version']}")
+        free, floor = facts.get("disk_free_mb"), getattr(settings, "min_free_disk_mb", None)
+        if free is not None and floor and free < floor:
+            note(dev, f"low disk space: {free} MB free, setting min_free_disk_mb is {floor} (an upgrade that has to download an image may not fit)")
         if facts.get("running_jobs"):
             note(dev, f"has {facts['running_jobs']} job(s) running")
         if facts.get("licenses_ok") is False:
@@ -117,7 +120,7 @@ def build(snap, settings=None, table=None):
     standalone = sum(1 for d in devices if len(_pair_key(d, by_serial)) == 1)
     return {"panorama_version": (snap.get("panorama") or {}).get("version"),
             "devices": devices, "versions": dict(versions), "pairs": pairs, "standalone": standalone,
-            "attention": _attention(devices), "advice": [a for a in [lagging(devices, (snap.get("panorama") or {}).get("version"), settings, table)] if a]}
+            "attention": _attention(devices, settings), "advice": [a for a in [lagging(devices, (snap.get("panorama") or {}).get("version"), settings, table)] if a]}
 
 
 def _sync(facts):

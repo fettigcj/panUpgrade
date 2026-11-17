@@ -116,6 +116,17 @@ class FleetReport(unittest.TestCase):
         self.assertIn("still running 12.1.10-h3", text["f1"])
         self.assertNotIn("f3", text)
 
+    def test_low_disk_space_is_called_out_against_the_setting(self):
+        from panupgrade import settings as settings_mod
+        s = settings_mod.Settings()
+        r = fleetreport.build({"panorama": {"version": "12.1"}, "devices": [dev("A", "f1", disk_free_mb=3072), dev("B", "f3", disk_free_mb=9000),
+                                                                           dev("C", "f4")]}, s)
+        text = self.problems(r)
+        self.assertIn("low disk space: 3072 MB free, setting min_free_disk_mb is 4096", text["f1"])
+        self.assertNotIn("f3", text)
+        self.assertNotIn("f4", text)                  # unread disk is not called low
+        self.assertEqual(self.problems(self.report(dev("A", "f1", disk_free_mb=1))), {})      # no settings, no floor to judge by
+
     def test_the_written_record_is_html_text_and_excel(self):
         import tempfile
         import zipfile

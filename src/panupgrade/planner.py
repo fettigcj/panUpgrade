@@ -251,11 +251,11 @@ def _apply_standalone(devices, ctxs, selection):
         if dev["group"]:
             _add(dev, CheckResult("standalone_group", INFO, f"member of the stand-alone group {dev['group']!r}: the other members carry the traffic while "
                                                            f"this one reboots (a group reboots {ctx.settings.group_reboot_tolerance} member(s) at a time)"))
-        elif selection.accept_standalone_outage:
+        elif selection.accept_standalone_outage or getattr(ctx.settings, "accept_standalone_outage", False):
             _add(dev, CheckResult("standalone_outage", INFO, "standalone: outage during the reboot accepted by the user"))
         else:
             dev["results"].append(CheckResult("standalone_outage", SKIP,
-                                              "standalone firewall: the reboot is an outage; select it with --accept-standalone-outage",
+                                              "standalone firewall: the reboot is an outage; set accept_standalone_outage (Settings) or use --accept-standalone-outage",
                                               kind=EXCLUDED).to_dict())
             dev["verdict"], dev["skip_kind"] = "skipped", EXCLUDED
 

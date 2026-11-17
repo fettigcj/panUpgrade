@@ -81,6 +81,9 @@ class Settings:
     # Stand-alone groups (firewalls upgraded together that are not HA pairs, e.g. behind a cloud load balancer): how many members of one group may be
     # rebooting / out of service at the same time. 1 = one at a time.
     group_reboot_tolerance: int = 1
+    # Stand-alone firewalls that are not in a group go offline while they reboot. Off: they are left out of the plan (and the plan says so);
+    # on: they are planned, and the plan says each one will be offline.
+    accept_standalone_outage: bool = False
     # Draining a stand-alone group member from a load balancer. The balancer (an Azure load balancer, say) probes a dataplane interface of each firewall
     # with SSH or HTTP, which the interface management profile on that interface permits. lb_drain_profile names that profile (empty = never drain).
     # Before a member reboots the tool takes the listed protocols out of THAT profile (a commit on the firewall), waits lb_drain_wait_s for the balancer

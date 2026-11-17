@@ -26,7 +26,7 @@ SECTIONS = [
     ("HA behaviour", []),
     ("  Active/Passive pairs", ["failover_band", "post_upgrade_band", "restore_roles", "upgrade_suspended", "pair_tolerate_asymmetry", "sync_to_peer", "sync_timeout_s",
                                "busy_wait_s", "settle_after_failover_s", "settle_after_reboot_s", "ha_config_unsynced", "blocked_peer", "sync_content", "content_settle_s"]),
-    ("  Stand-alone groups", ["group_reboot_tolerance", "group_tolerate_asymmetry", "lb_drain_profile", "lb_drain_probe_protocol", "lb_drain_wait_s"]),
+    ("  Stand-alone groups", ["accept_standalone_outage", "group_reboot_tolerance", "group_tolerate_asymmetry", "lb_drain_profile", "lb_drain_probe_protocol", "lb_drain_wait_s"]),
     ("Panorama range", ["spread_limit", "panorama_compare"]),
     ("Failure handling", ["max_failures", "max_parallel", "api_rate_per_s", "pending_changes"]),
     ("Downgrades", ["allow_downgrade"]),
@@ -53,6 +53,10 @@ INFO = {
                                  "finished). Nearly mandatory for groups.",
                                  {"true": "the default. Open the window for each group that is upgraded",
                                   "false": "leave the TCP settings alone; sessions that move to another member will be dropped"}),
+    "accept_standalone_outage": ("A stand-alone firewall that is not in a group has no partner to carry its traffic, so its reboot is an outage. "
+                                 "The plan states which way this is set, at the top.",
+                                 {"true": "plan stand-alone firewalls too; each one is OFFLINE while it reboots",
+                                  "false": "the default. Leave stand-alone firewalls out of the plan (firewalls in a group are not affected)"}),
     "group_reboot_tolerance": ("A stand-alone group is a set of firewalls upgraded together that are not HA pairs (cloud load-balanced firewalls, for example); "
                                "groups are named in the firewall list (Choose firewalls, G on an Included firewall). This is how many members of one group may "
                                "be rebooting at the same time. 1 means one at a time. A group of seven with 5 upgrades five at once, then the other two. "

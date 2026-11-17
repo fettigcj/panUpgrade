@@ -1411,19 +1411,17 @@ class TheUpgradeScreen(ShellCase):
     def test_nothing_ready_offers_no_approval_at_all(self):
         ui = self.at_review(up_review=lambda a: print("plan") or FakeUpgrade(ready=(), blocked=("A1",)))
         text = self.text(ui, 140, 30)
-        self.assertIn("Nothing is ready to upgrade", text)
+        self.assertIn("STARTING IS BLOCKED", text)
         self.assertNotIn("Approve", text)
-        self.assertIn("[ Standalone firewalls: left out ]", text)
+        self.assertIn("STARTING BLOCKED by the issues below", text)
+        self.assertNotIn("[ Standalone firewalls", text)
         self.assertIn("nothing is ready (1 blocked)", ui.status("upgrade")[1])
 
-    def test_standalone_firewalls_are_left_out_until_asked_for_and_then_the_plan_is_read_again(self):
+    def test_the_plan_says_how_stand_alone_firewalls_are_handled_and_the_review_has_no_switch_for_it(self):
         ui = self.at_review()
-        ui.press("right"); ui.press("right"); ui.press("enter"); wait(ui)       # Approve, Rehearse, then the standalone switch
-        self.assertEqual(len(self.up_reviews), 2)
-        self.assertIn("--accept-standalone-outage", ["--accept-standalone-outage"] if self.up_reviews[1].accept_standalone_outage else [])
-        self.assertFalse(self.up_reviews[0].accept_standalone_outage)
         text = self.text(ui, 160, 30)
-        self.assertIn("Standalone firewalls: included (each is OFFLINE while it reboots)", text)
+        self.assertIn("Stand-alone firewalls outside a group: LEFT OUT", text)
+        self.assertNotIn("[ Standalone firewalls", text)
 
     def test_stop_asks_the_run_to_start_nothing_new_and_it_ends_by_itself(self):
         started = threading.Event()

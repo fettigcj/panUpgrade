@@ -299,7 +299,7 @@ class Colours(unittest.TestCase):
     """block is red, warn is gold, and a setting changed from its default is blue: the colour says what the word means."""
 
     def styled(self, form, name, width=120):
-        for line in form.render(width, 40, "t"):
+        for line in form.render(width, 60, "t"):
             if any(text.strip(" >*").startswith(name) for _s, text in line[:1]):
                 return line
         self.fail(f"{name} is not on the screen")

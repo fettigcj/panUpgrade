@@ -890,7 +890,7 @@ class ChangeScreen(Screen):
         if self.note:
             return
         session = self.shell.session
-        self.args = args = session.args_for(self.verb, "--target", session.target.strip(), *self.extra_args())
+        self.args = args = session.args_for(self.verb, "--target", session.target.strip())
         self.key_ = self.key(session)
         self.lines, self.offset, self.bundle, self.typed, self.mode = [], 0, None, "", None
         self.stage = "reading"
@@ -1402,13 +1402,6 @@ class UpgradeScreen(UnitView, ChangeScreen):
              "rebooted and checked, and the run stops by itself after too many failures. It reboots real firewalls, so nothing starts until you "
              "have read the plan and typed APPROVE. Stop lets the steps in progress finish and starts nothing new; a stopped run can be continued.")
 
-    def __init__(self, shell):
-        super().__init__(shell)
-        self.standalone = False
-
-    def extra_args(self):
-        return ["--accept-standalone-outage"] if self.standalone else []
-
     def units(self):
         source = self.source()
         if source is None:
@@ -1428,11 +1421,6 @@ class UpgradeScreen(UnitView, ChangeScreen):
 
     def tasks(self):
         return bool(self.bundle and self.bundle.ready())
-
-    def toggle_standalone(self):
-        self.standalone = not self.standalone
-        self.reset()
-        self.read_plan()
 
     def prepare_run_args(self, args):
         if self.bundle.previous:
@@ -1470,11 +1458,15 @@ class UpgradeScreen(UnitView, ChangeScreen):
         s = self.bundle.plan["summary"]
         line = (f"Plan read at {clock(self.bundle.created)} ({ago(time.time() - self.bundle.created)}), {self.bundle.label}: {s['ready']} ready, "
                 f"{s['caution']} need acknowledgement, {s['blocked']} blocked, {s['skipped']} not planned. Nothing has been changed yet.")
-        return ("ok" if self.tasks() else "error"), line + ("" if self.tasks() else " Nothing is ready to upgrade.")
+        line += (" Stand-alone firewalls: PLANNED, each is OFFLINE while it reboots (Settings: accept_standalone_outage)."
+                 if self.bundle.plan["settings"].get("accept_standalone_outage") else
+                 " Stand-alone firewalls outside a group: LEFT OUT (Settings: accept_standalone_outage).")
+        return ("ok" if self.tasks() else "error"), line + ("" if self.tasks() else " STARTING IS BLOCKED by the issues listed below.")
 
     def review_buttons(self):
-        standalone = ("Standalone firewalls: included (each is OFFLINE while it reboots)" if self.standalone else "Standalone firewalls: left out")
         out = []
+        if not self.tasks():
+            out.append(("STARTING BLOCKED by the issues below - fix them, then read the plan again", self.read_plan))
         if self.tasks():
             if self.bundle.previous:
                 out += [("Approve and CONTINUE the earlier run...", lambda: self.begin_approval("resume")),
@@ -1482,7 +1474,7 @@ class UpgradeScreen(UnitView, ChangeScreen):
             else:
                 out += [("Approve and run...", self.begin_approval)]
             out += [("Rehearse (dry run)", self.rehearse)]
-        return out + [(standalone, self.toggle_standalone), ("Read the plan again", self.read_plan), ("Home", None)]
+        return out + [("Read the plan again", self.read_plan), ("Home", None)]
 
     def status(self):
         if self.stage == "reading":

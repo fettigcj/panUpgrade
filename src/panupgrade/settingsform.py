@@ -24,7 +24,7 @@ SAVE_ONLY, SAVE_EXIT, QUIT = 0, 1, 2
 
 SECTIONS = [
     ("HA behaviour", []),
-    ("  Active/Passive pairs", ["failover_band", "post_upgrade_band", "restore_roles", "upgrade_suspended", "pair_tolerate_asymmetry", "sync_to_peer", "sync_timeout_s",
+    ("  Active/Passive pairs", ["failover_band", "post_upgrade_band", "upgrade_first", "restore_roles", "upgrade_suspended", "pair_tolerate_asymmetry", "sync_to_peer", "sync_timeout_s",
                                "busy_wait_s", "settle_after_failover_s", "settle_after_reboot_s", "ha_config_unsynced", "blocked_peer", "sync_content", "content_settle_s"]),
     ("  Stand-alone groups", ["accept_standalone_outage", "group_reboot_tolerance", "group_tolerate_asymmetry", "lb_drain_profile", "lb_drain_probe_protocol", "lb_drain_wait_s"]),
     ("Panorama range", ["spread_limit", "panorama_compare"]),
@@ -74,6 +74,15 @@ INFO = {
                                  "ssh+http+https": "take all three out", "ping": "take ping (ICMP) out"}),
     "lb_drain_wait_s": ("After the profile is changed, how long to wait for the load balancer to notice the failed probe and drain the member "
                         "before it reboots, in seconds. Set it above (probe interval x failures to mark it out) plus the drain time.", {}),
+    "upgrade_first": ("Which member of an active/passive pair is upgraded first. Only pairs: a firewall with no passive member (stand-alone, "
+                      "or in a load-balanced group) has no such choice. Either way each fail-over is checked against the pair's session count "
+                      "(failover_band), and when the last member is done the active node's session count is checked against the pair's baseline "
+                      "(post_upgrade_band).",
+                      {"passive": "the default. Upgrade the passive member first: it carries no traffic, so the only fail-over is to a member that "
+                                  "is already upgraded",
+                       "active": "suspend the active member first so the passive member carries the traffic (proving its cabling and the session "
+                                 "table), upgrade the suspended member, then fail over again and upgrade the other. Two fail-overs per pair; the "
+                                 "original active member is active again at the end"}),
     "restore_roles": ("What to do with the HA roles once both members are upgraded.",
                       {"leave": "leave the roles as the upgrade left them",
                        "restore": "fail back, so the member that was active at the start is active again"}),

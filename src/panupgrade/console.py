@@ -150,7 +150,7 @@ def render_plan(plan, style, verbose=False):
                 kind = "sync" if st["action"] == "sync to peer" else "down" if downgrade and st["action"].startswith("install") else "start"
                 out.append("        " + style.glyph(kind) + style.dim(st["action"]))
     if plan["order"]:
-        out += ["", style.bold(f"Order: each unit is worked in series (an HA pair, passive first); up to {plan['settings']['max_parallel']} units run at the same time")]
+        out += ["", style.bold(f"Order: each unit is worked in series (an HA pair, {report.pair_first(plan)}); up to {plan['settings']['max_parallel']} units run at the same time")]
         names = {d["serial"]: d["hostname"] for d in plan["devices"]}
         for i, unit in enumerate(plan["order"], 1):
             out.append(f"  {i}. " + " > ".join(names[x] for x in unit))

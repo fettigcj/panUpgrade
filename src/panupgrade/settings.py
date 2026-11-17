@@ -93,6 +93,10 @@ class Settings:
     lb_drain_wait_s: int = 60
     # HA roles after both members are upgraded: leave | restore
     restore_roles: str = "leave"
+    # Which member of an active/passive pair is upgraded first: passive (the default: it carries no traffic, so nothing is at risk until the one
+    # fail-over) | active (suspend the active member first, prove the passive one carries the traffic, upgrade the suspended member, then fail over
+    # again for the other one: two fail-overs per pair, and each one is checked against the session count).
+    upgrade_first: str = "passive"
     # Who fetches images: firewall (default, downloads from the vendor) | panorama
     image_source: str = "firewall"
     # `prepare` deletes the PAN-OS images a firewall does not need for this upgrade (it keeps the running image, the base images
@@ -135,6 +139,7 @@ class Settings:
 _CHOICES = {
     "pending_changes": ("block", "warn", "ignore"),
     "restore_roles": ("leave", "restore"),
+    "upgrade_first": ("passive", "active"),
     "image_source": ("firewall", "panorama"),
     "panorama_compare": ("minor", "major"),
     "sync_to_peer": ("Disable", "Both", "UpgradeOnly"),

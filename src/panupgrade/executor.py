@@ -9,7 +9,7 @@ Rules the code enforces, each with a test:
 - no exception from a backend is swallowed: it fails the step, the device, and counts toward the stop limit;
 - install and reboot refuse to run unless this device's backup step is verified in the journal;
 - the version a device is judged on is read from that device after its own reboot;
-- an HA pair is one unit, passive first; if the first member fails the second is held;
+- an HA pair is one unit, passive first (or active first, setting upgrade_first); if the first member fails the second is held;
 - after max_failures failed devices nothing new starts;
 - a resumed run skips finished steps, never replays an in-doubt step, and never retries a failed device.
 """
@@ -366,12 +366,12 @@ def _do(action, index, dev, backend, journal, settings):
             raise StepFailed(f"after the sync, HA1 config sync reads {after['ha_config_sync']!r}, not synchronized")
         _wait_for_quiet(backend, passive, settings, "anything further", settings.sync_timeout_s)
         return {"synced_from": active, "to": passive}
-    elif action == "wait for the passive firewall's upgrade to finish":
+    elif action == "wait for the passive firewall's upgrade to finish" or action == "wait for the first member's upgrade to finish":
         # The unit runs the passive member first and never starts this one unless it finished. This is the checkpoint that proves it:
         # failing over to a peer that is not on the version this member is going to is refused.
         want, got = _target_version(steps), backend.state(dev["peer_serial"])["version"]
         if want and got != want:
-            raise StepFailed(f"the passive member {dev['peer_serial']} runs {got}, not {want}; refusing to hand over to a peer that is not upgraded")
+            raise StepFailed(f"the other member {dev['peer_serial']} runs {got}, not {want}; refusing to hand over to a peer that is not upgraded")
         return {"peer_version": got}
     elif action == "fail over":
         now = backend.state(serial)
@@ -435,6 +435,15 @@ def _do(action, index, dev, backend, journal, settings):
             if not base or not _band_ok(base, got["session_count"] or 0, settings.post_upgrade_band):
                 raise StepFailed(f"active node has {got['session_count']} sessions vs baseline {base}, "
                                  f"outside {int(settings.post_upgrade_band * 100)}% or no baseline")
+        elif dev.get("position") == "second" and peer:
+            # the last member of a pair is done: service is where it was before? The node that carries the traffic now is the peer, so judge that one.
+            theirs = backend.state(peer)
+            base = _baseline(journal, dev)
+            if theirs["ha_state"] == "active" and base:
+                if not _band_ok(base, theirs["session_count"] or 0, settings.post_upgrade_band):
+                    raise StepFailed(f"the pair is upgraded but the active node {peer} has {theirs['session_count']} sessions vs baseline {base}, "
+                                     f"outside {int(settings.post_upgrade_band * 100)}%")
+                said["active_sessions"] = theirs["session_count"]
         return {"ha_state": got["ha_state"], **said}
     elif action == "restore roles":
         peer = dev["peer_serial"]

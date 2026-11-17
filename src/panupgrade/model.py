@@ -15,6 +15,12 @@ NOT_APPLICABLE, NO_DATA, EXCLUDED = "not_applicable", "no_data", "excluded"
 
 # Cautions that follow from the chosen target, so every firewall gets the same words: the plan says them once for the fleet,
 # naming the firewalls, and approving them is one acknowledgement ("fleet:<code>").
+# The step a pair member starts with when its peer must finish first: the passive member upgraded first (the default), or the member upgraded first
+# when upgrade_first is "active".
+WAIT_PASSIVE = "wait for the passive firewall's upgrade to finish"
+WAIT_FIRST = "wait for the first member's upgrade to finish"
+WAITS = (WAIT_PASSIVE, WAIT_FIRST)
+
 SAID_ONCE = {"target_cert_advisory": "Target is a build affected by a certificate-expiry advisory"}
 
 

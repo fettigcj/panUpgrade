@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from . import __version__, checks, paths, progress
-from .model import (ERROR, EXCLUDED, FAIL, INFO, NO_DATA, NOT_APPLICABLE, SAID_ONCE, SKIP, WARN, CheckResult)
+from .model import (WAIT_FIRST, WAIT_PASSIVE, ERROR, EXCLUDED, FAIL, INFO, NO_DATA, NOT_APPLICABLE, SAID_ONCE, SKIP, WARN, CheckResult)
 from .sources import SourceError, read_facts
 from .versions import Version, VersionError
 
@@ -151,6 +151,7 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
     _apply_pending(devices, ctxs, by_serial, selection, target)
     _apply_standalone(devices, ctxs, selection)
     _apply_pair_rules(devices, ctxs, by_serial, target)
+    _apply_positions(devices, settings)
 
     planned_versions = _planned_versions(devices, refs, target)
     fleet = checks.fleet_checks(pano_version, target, planned_versions, settings, releases)
@@ -158,11 +159,18 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
     for dev in devices.values():
         if dev["verdict"] in ("ready", "caution"):
             dev["steps"], dev["rollback"] = _steps(dev, settings, devices)
-    order = _order(devices, by_serial)
+    order = _order(devices, by_serial, settings)
 
     groups = _groups_planned(devices)
     windows = _asymmetry_windows(devices, order, groups, settings)
     cautions = _cautions(devices, fleet)
+    placed = sorted(d["hostname"] for d in devices.values() if d.get("position") == "first" and settings.upgrade_first == "active")
+    if placed:
+        cautions.append({"scope": "fleet", "code": "upgrade_first_active", "text": (
+            f"upgrade_first is active: in each of these pairs ({', '.join(placed)}) the ACTIVE member is suspended and upgraded first, so its passive "
+            f"peer, still on the old version, takes the traffic; the session count must stay within {int(settings.failover_band * 100)}% or the member is "
+            f"put back. The peer is then suspended in turn so the upgraded member takes the traffic back before the peer is upgraded. That is two "
+            f"HA fail-overs per pair instead of one.")})
     if windows:
         cautions.append({"scope": "fleet", "code": "asymmetry_window", "text": _window_words(windows)})
     if groups and settings.lb_drain_profile:
@@ -236,6 +244,20 @@ def _add(dev, result):
 def _verdict_from_dicts(dev):
     results = [CheckResult(r["check"], r["status"], r["reason"], r.get("kind", ""), r.get("ack", "")) for r in dev["results"]]
     return _verdict(results)
+
+
+def _apply_positions(devices, settings):
+    """For a pair with both members in the run, say which goes first and which second. Passive first (the default): the passive member, then the
+    active one. Active first: the active member, then the one that was passive. A pair with a member missing, or a suspended member, keeps the
+    old order (the suspended member goes first, the active one last) and has no position."""
+    active_first = settings.upgrade_first == "active"
+    for serial, dev in devices.items():
+        if dev["ha_mode"] != "active-passive" or dev["ha_state"] != "active" or dev["verdict"] not in ("ready", "caution"):
+            continue
+        other = devices.get(dev["peer_serial"])
+        if other is None or other["verdict"] not in ("ready", "caution") or other["ha_state"] != "passive":
+            continue
+        dev["position"], other["position"] = ("first", "second") if active_first else ("second", "first")
 
 
 def _swap(dev, result):
@@ -416,15 +438,26 @@ def _steps(dev, settings, devices=None):
         if p["download"]:
             add(f"download {p['version']}", note=f"image source: {settings.image_source}")
     add("backup", note="running config exported, parsed back and checksummed; device-state snapshot taken")
-    if syncing and (role == "passive" or not peer_planned):
+    pos = dev.get("position")                     # "first" / "second" in a pair that is entirely in this run
+    active_first = settings.upgrade_first == "active" and bool(pos)
+    swaps = role == "active" or (active_first and pos == "second")    # this member is suspended so its peer can take over
+    if syncing and (pos == "first" or (pos is None and (role == "passive" or not peer_planned))):
         add("sync to peer", "none", "after this member's own config is backed up, on the ACTIVE member: force its running configuration onto the passive member, then confirm "
                                      "HA1 config sync reads synchronized")
-    if role == "active" and peer_planned:
+    if pos == "second" or (pos is None and role == "active" and peer_planned):
         peer = devices[dev["peer_serial"]]["hostname"]
-        add("wait for the passive firewall's upgrade to finish", note=f"this member does not start until {peer} (the passive member) has finished its own upgrade and checks; "
-                                     f"its version is confirmed before this member hands over")
-    if role == "active":
-        takes_over = "its already upgraded passive peer takes over" if peer_planned else "its peer takes over"
+        if active_first:
+            add(WAIT_FIRST, note=f"this member does not start until {peer} (the member upgraded first) has finished its own upgrade and checks; "
+                                 f"its version is confirmed before this member hands over")
+        else:
+            add(WAIT_PASSIVE, note=f"this member does not start until {peer} (the passive member) has finished its own upgrade and checks; "
+                                   f"its version is confirmed before this member hands over")
+    if swaps:
+        if active_first and pos == "first":
+            takes_over = ("its passive peer takes over, which proves that member's cabling and that it carries the traffic: the session count "
+                          "must stay roughly stable")
+        else:
+            takes_over = ("its already upgraded " + ("peer" if active_first else "passive peer") + " takes over") if peer_planned else "its peer takes over"
         add("fail over", "failover",
             f"suspend this member so {takes_over}; compare the new active node's sessions with this one's, within {int(settings.failover_band * 100)}%; revert if out of band")
     if hold:
@@ -453,20 +486,20 @@ def _steps(dev, settings, devices=None):
         add("verify", note="version as expected, no jobs running")
     if drained:
         add("undrain", note=f"put the interface management profile {settings.lb_drain_profile!r} back as it was, so the load balancer takes this member back")
-    if hold or role == "active":
+    if hold or swaps:
         add("go live", note="release the suspension so the member can rejoin the pair")
     if role != "standalone":
         add("verify HA", note="HA1 config sync, HA2 session sync, and (on the active node) sessions within "
             f"{int(settings.post_upgrade_band * 100)}% of the baseline")
-    if role != "standalone" and settings.restore_roles == "restore" and role == "active":
+    if role != "standalone" and settings.restore_roles == "restore" and role == "active" and not active_first:
         add("restore roles", "failover", "fail back so the original active member is active again")
     rollback = ("not automatic. The saved config and the previous image remain; a rollback is planned and approved "
                 "separately. Exact commands to be verified from vendor documentation before implementation.")
     return steps, rollback
 
 
-def _order(devices, by_serial):
-    """Units in plan order: an HA pair is one unit (passive first), a standalone is one unit."""
+def _order(devices, by_serial, settings=None):
+    """Units in plan order: an HA pair is one unit (passive first, or active first when upgrade_first says so), a standalone is one unit."""
     seen, units = set(), []
     for serial, dev in devices.items():
         if dev["verdict"] not in ("ready", "caution") or serial in seen:
@@ -475,7 +508,8 @@ def _order(devices, by_serial):
         peer = dev["peer_serial"]
         if peer and peer in devices and devices[peer]["verdict"] in ("ready", "caution"):
             members.append(peer)
-        members.sort(key=lambda s: (devices[s]["ha_state"] not in ("passive", "suspended"), s))
+        placed = len(members) == 2 and all(devices[m].get("position") for m in members)
+        members.sort(key=lambda s: (devices[s]["position"] != "first" if placed else devices[s]["ha_state"] not in ("passive", "suspended"), s))
         seen.update(members)
         units.append(members)
     return units

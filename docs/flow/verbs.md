@@ -120,11 +120,12 @@ flowchart TD
     n_panupgrade_planner__add["planner._add"]
     n_panupgrade_planner__apply_pair_rules["planner._apply_pair_rules"]
     n_panupgrade_planner__peer_problem["planner._peer_problem<br/><i>Why an HA peer that is not in this run is a problem (words that fit 'i</i>"]
+    n_panupgrade_planner__apply_positions["planner._apply_positions<br/><i>For a pair with both members in the run, say which goes first and whic</i>"]
     n_panupgrade_planner__planned_versions["planner._planned_versions"]
     n_panupgrade_checks_fleet_checks["checks.fleet_checks<br/><i>planned_versions: versions the selected firewalls will have after the </i>"]
     n_panupgrade_planner__steps["planner._steps"]
     n_panupgrade_planner__path_steps["planner._path_steps"]
-    n_panupgrade_planner__order["planner._order<br/><i>Units in plan order: an HA pair is one unit (passive first), a standal</i>"]
+    n_panupgrade_planner__order["planner._order<br/><i>Units in plan order: an HA pair is one unit (passive first, or active </i>"]
     n_panupgrade_planner__groups_planned["planner._groups_planned"]
     n_panupgrade_planner__asymmetry_windows["planner._asymmetry_windows<br/><i>Each place the tool will let a pair or group accept traffic that looks</i>"]
     n_panupgrade_planner__cautions["planner._cautions"]
@@ -219,6 +220,7 @@ flowchart TD
     n_panupgrade_planner__apply_pair_rules --> n_panupgrade_planner__add
     n_panupgrade_planner__apply_pair_rules --> n_panupgrade_versions_Version_parse
     n_panupgrade_planner__apply_pair_rules --> n_panupgrade_planner__peer_problem
+    n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_positions
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__planned_versions
     n_panupgrade_planner__planned_versions --> n_panupgrade_versions_Version_parse
     n_panupgrade_planner_build_plan --> n_panupgrade_checks_fleet_checks
@@ -321,6 +323,7 @@ flowchart TD
     n_panupgrade_planner__add["planner._add"]
     n_panupgrade_planner__apply_pair_rules["planner._apply_pair_rules"]
     n_panupgrade_planner__peer_problem["planner._peer_problem<br/><i>Why an HA peer that is not in this run is a problem (words that fit 'i</i>"]
+    n_panupgrade_planner__apply_positions["planner._apply_positions<br/><i>For a pair with both members in the run, say which goes first and whic</i>"]
     n_panupgrade_planner__planned_versions["planner._planned_versions"]
     n_panupgrade_checks_fleet_checks["checks.fleet_checks<br/><i>planned_versions: versions the selected firewalls will have after the </i>"]
     n_panupgrade_checks__skip["checks._skip"]
@@ -330,7 +333,7 @@ flowchart TD
     n_panupgrade_releases_Releases_behind["releases.Releases.behind<br/><i>How many ``unit`` ('major' or 'minor') the firewall's release is behin</i>"]
     n_panupgrade_planner__steps["planner._steps"]
     n_panupgrade_planner__path_steps["planner._path_steps"]
-    n_panupgrade_planner__order["planner._order<br/><i>Units in plan order: an HA pair is one unit (passive first), a standal</i>"]
+    n_panupgrade_planner__order["planner._order<br/><i>Units in plan order: an HA pair is one unit (passive first, or active </i>"]
     n_panupgrade_planner__groups_planned["planner._groups_planned"]
     n_panupgrade_planner__asymmetry_windows["planner._asymmetry_windows<br/><i>Each place the tool will let a pair or group accept traffic that looks</i>"]
     n_panupgrade_planner__cautions["planner._cautions"]
@@ -412,6 +415,7 @@ flowchart TD
     n_panupgrade_planner__apply_pair_rules --> n_panupgrade_planner__add
     n_panupgrade_planner__apply_pair_rules --> n_panupgrade_versions_Version_parse
     n_panupgrade_planner__apply_pair_rules --> n_panupgrade_planner__peer_problem
+    n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_positions
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__planned_versions
     n_panupgrade_planner__planned_versions --> n_panupgrade_versions_Version_parse
     n_panupgrade_planner_build_plan --> n_panupgrade_checks_fleet_checks
@@ -490,10 +494,11 @@ flowchart TD
     n_panupgrade_planner__apply_pending["planner._apply_pending<br/><i>An image that is installed and not booted holds a firewall (it refuses</i>"]
     n_panupgrade_planner__apply_standalone["planner._apply_standalone"]
     n_panupgrade_planner__apply_pair_rules["planner._apply_pair_rules"]
+    n_panupgrade_planner__apply_positions["planner._apply_positions<br/><i>For a pair with both members in the run, say which goes first and whic</i>"]
     n_panupgrade_planner__planned_versions["planner._planned_versions"]
     n_panupgrade_checks_fleet_checks["checks.fleet_checks<br/><i>planned_versions: versions the selected firewalls will have after the </i>"]
     n_panupgrade_planner__steps["planner._steps"]
-    n_panupgrade_planner__order["planner._order<br/><i>Units in plan order: an HA pair is one unit (passive first), a standal</i>"]
+    n_panupgrade_planner__order["planner._order<br/><i>Units in plan order: an HA pair is one unit (passive first, or active </i>"]
     n_panupgrade_planner__groups_planned["planner._groups_planned"]
     n_panupgrade_planner__asymmetry_windows["planner._asymmetry_windows<br/><i>Each place the tool will let a pair or group accept traffic that looks</i>"]
     n_panupgrade_planner__cautions["planner._cautions"]
@@ -557,6 +562,7 @@ flowchart TD
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_pending
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_standalone
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_pair_rules
+    n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_positions
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__planned_versions
     n_panupgrade_planner_build_plan --> n_panupgrade_checks_fleet_checks
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__steps

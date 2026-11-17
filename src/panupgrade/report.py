@@ -12,12 +12,17 @@ import json
 import textwrap
 from html import escape
 
-from .model import SAID_ONCE
+from .model import SAID_ONCE, WAITS
 
 BANNER = "REPORT ONLY - nothing has been changed on any device"
 
 _CHIP = {"ready": "pass", "caution": "warn", "blocked": "fail", "skipped": "skip",
          "pass": "pass", "warn": "warn", "fail": "fail", "skip": "skip", "info": "info", "error": "error"}
+
+
+def pair_first(plan):
+    """'passive first' or 'active first': which member of an HA pair the plan upgrades first."""
+    return "active first" if plan["settings"].get("upgrade_first") == "active" else "passive first"
 
 
 def to_json(plan):
@@ -52,8 +57,7 @@ def not_planned_groups(plan):
     return [(heading, found[key]) for key, heading in NOT_PLANNED if found[key]]
 
 
-WAIT_STEP = "wait for the passive firewall's upgrade to finish"
-WAIT_NOTE = ("this member does not start until its passive member (named beside it above) has finished its own upgrade and checks; "
+WAIT_NOTE = ("this member does not start until its pair's other member (named beside it above) has finished its own upgrade and checks; "
              "its version is confirmed before this member hands over")
 
 
@@ -112,10 +116,10 @@ def step_groups(plan):
             downgrade = any(r.get("ack") == "downgrade" for r in dev["results"])
             # the wait step names this member's passive peer; that is the one thing that differs between otherwise identical actives,
             # so it is said beside the firewall's name and the step is worded the same for all of them
-            steps = [dict(st, note=WAIT_NOTE) if st["action"] == WAIT_STEP else st for st in dev["steps"]]
+            steps = [dict(st, note=WAIT_NOTE) if st["action"] in WAITS else st for st in dev["steps"]]
             key = json.dumps([[(st["action"], st["traffic"], st["note"]) for st in steps], downgrade])
             role = "standalone" if dev.get("ha_mode") == "none" else f"currently {dev.get('ha_state') or 'unknown'}"
-            if any(st["action"] == WAIT_STEP for st in steps) and dev.get("peer_serial") in hostnames:
+            if any(st["action"] in WAITS for st in steps) and dev.get("peer_serial") in hostnames:
                 role += f", after {hostnames[dev['peer_serial']]}"
             groups.setdefault(key, ([], steps, downgrade))[0].append(f"{dev['hostname']} ({role})")
     return list(groups.values())
@@ -176,7 +180,7 @@ def to_text(plan, verbose=False):
         for dev, why in rows:
             lines.append(_wrap(f"{dev['hostname']} ({dev['serial']}) {dev['model']} {dev['current_version']}" + (f" - {why}" if why else ""), 2))
     if plan["order"]:
-        lines += ["", f"Order (each unit is worked in series, an HA pair passive first; up to {plan['settings']['max_parallel']} units run at the same time)"]
+        lines += ["", f"Order (each unit is worked in series, an HA pair {pair_first(plan)}; up to {plan['settings']['max_parallel']} units run at the same time)"]
         names = {d["serial"]: d["hostname"] for d in plan["devices"]}
         for i, unit in enumerate(plan["order"], 1):
             lines.append(f"  {i}. " + " > ".join(names[m] for m in unit))
@@ -254,7 +258,7 @@ def to_html(plan):
         names = {d["serial"]: d["hostname"] for d in plan["devices"]}
         out.append("<h2>Order and steps</h2>")
         for i, unit in enumerate(plan["order"], 1):
-            out.append(f'<div class="card"><b>Unit {i}</b> <span class="mute">(worked in series, an HA pair passive first; up to {plan["settings"]["max_parallel"]} units run at the same time)</span>')
+            out.append(f'<div class="card"><b>Unit {i}</b> <span class="mute">(worked in series, an HA pair {pair_first(plan)}; up to {plan["settings"]["max_parallel"]} units run at the same time)</span>')
             for member in unit:
                 dev = next(d for d in plan["devices"] if d["serial"] == member)
                 out.append(f'<h2>{escape(names[member])} <span class="mono">{escape(member)}</span></h2><table>')

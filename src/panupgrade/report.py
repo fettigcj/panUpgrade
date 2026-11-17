@@ -26,8 +26,30 @@ def to_json(plan):
 
 VERDICT_GROUPS = (("blocked", "Blocked: will not be upgraded until fixed"),
                   ("caution", "Need your acknowledgement"),
-                  ("ready", "Ready"),
-                  ("skipped", "Not planned"))
+                  ("ready", "Ready"))
+
+# Why a firewall is not planned, grouped so a fleet of fourteen firewalls outside the window is one heading and one line each, not fourteen blocks.
+NOT_PLANNED = (("selection", "Not in the selection"),
+               ("standalone", "Stand-alone firewalls left out (setting accept_standalone_outage is off)"),
+               ("nothing", "Nothing to upgrade: already on the target, or newer with downgrades off"),
+               ("no_data", "Could not be assessed: no data was collected"))
+
+
+def not_planned_groups(plan):
+    """[(heading, [(device, why or "")])] for the firewalls that are not planned. A firewall outside the selection needs no reason;
+    the others say theirs, because someone expected them to be in the run."""
+    found = {key: [] for key, _ in NOT_PLANNED}
+    for dev in plan["devices"]:
+        if dev["verdict"] != "skipped":
+            continue
+        skips = [r for r in dev["results"] if r["status"] == "skip"]
+        names = {r["check"] for r in skips}
+        key = ("selection" if "selection" in names else "standalone" if "standalone_outage" in names
+               else "nothing" if dev["skip_kind"] == "not_applicable" else "no_data")
+        why = next((r["reason"] for r in skips if r["check"] in ("standalone_outage", "current_version", "upgrade_path", "reachable")
+                    or r.get("kind") == dev["skip_kind"]), "")
+        found[key].append((dev, "" if key == "selection" else why))
+    return [(heading, found[key]) for key, heading in NOT_PLANNED if found[key]]
 
 
 WAIT_STEP = "wait for the passive firewall's upgrade to finish"
@@ -149,6 +171,10 @@ def to_text(plan, verbose=False):
                 lines.append(_wrap(f"- {r['status']}{'/' + r['kind'] if r.get('kind') else ''} {r['check']}: {r['reason']}", 6))
             if note:
                 lines.append(f"      ({note})")
+    for heading, rows in not_planned_groups(plan):
+        lines += ["", f"Not planned - {heading} ({len(rows)})"]
+        for dev, why in rows:
+            lines.append(_wrap(f"{dev['hostname']} ({dev['serial']}) {dev['model']} {dev['current_version']}" + (f" - {why}" if why else ""), 2))
     if plan["order"]:
         lines += ["", f"Order (each unit is worked in series, an HA pair passive first; up to {plan['settings']['max_parallel']} units run at the same time)"]
         names = {d["serial"]: d["hostname"] for d in plan["devices"]}
@@ -171,6 +197,8 @@ _CSS = """:root{--bg:#f6f7f9;--card:#fff;--ink:#1c2430;--mute:#6b7686;--line:#e3
 main{max-width:1400px;margin:0 auto;padding:18px 20px 60px}h1{font-size:22px;margin:4px 0 14px}
 h2{font-size:13px;margin:24px 0 8px;color:var(--mute);text-transform:uppercase;letter-spacing:.6px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;margin-bottom:12px}
+h2.h-blocked{color:var(--fail)}h2.h-caution{color:var(--warn)}tr.v-blocked td:first-child{border-left:4px solid var(--fail)}
+.f-fail,.f-error{color:var(--fail)}
 .banner{border-color:var(--accent);font-weight:600}.caution{border-color:var(--warn)}
 table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
 th{color:var(--mute);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
@@ -204,16 +232,24 @@ def to_html(plan):
         for c in plan["cautions"]:
             out.append(f'<tr><td class="mono">{escape(c["code"])}</td><td class="mono">{escape(c["scope"])}</td><td>{escape(c["text"])}</td></tr>')
         out.append("</table></div>")
-    out.append('<h2>Devices</h2><div class="card"><table><tr><th>Firewall</th><th>Model</th><th>Now</th><th>Verdict</th><th>Findings</th></tr>')
-    for dev in plan["devices"]:
-        label = dev["verdict"] + (f" / {dev['skip_kind'].replace('_', ' ')}" if dev["skip_kind"] else "")
-        findings = "".join(
-            f'<div>{_chip(r["status"])} <span class="mono">{escape(r["check"])}</span> {escape(r["reason"])}</div>'
-            for r in dev["results"] if r["status"] != "pass")
-        out.append(f'<tr><td>{escape(dev["hostname"])}<br><span class="mono mute">{escape(dev["serial"])}</span></td>'
-                   f'<td>{escape(dev["model"])}</td><td class="mono">{escape(dev["current_version"])}</td>'
-                   f'<td>{_chip(dev["verdict"], label)}</td><td>{findings}</td></tr>')
-    out.append("</table></div>")
+    for heading, devs in grouped_devices(plan):
+        verdict = devs[0]["verdict"]
+        out.append(f'<h2 class="h-{verdict}">{escape(heading)} ({len(devs)})</h2><div class="card"><table><tr><th>Firewall</th><th>Model</th><th>Now</th>'
+                   f'<th>Verdict</th><th>Findings</th></tr>')
+        for dev in devs:
+            findings = "".join(
+                f'<div class="f-{r["status"]}">{_chip(r["status"])} <span class="mono">{escape(r["check"])}</span> {escape(r["reason"])}</div>'
+                for r in dev["results"] if r["status"] != "pass")
+            out.append(f'<tr class="v-{verdict}"><td>{escape(dev["hostname"])}<br><span class="mono mute">{escape(dev["serial"])}</span></td>'
+                       f'<td>{escape(dev["model"])}</td><td class="mono">{escape(dev["current_version"])}</td>'
+                       f'<td>{_chip(verdict, verdict)}</td><td>{findings}</td></tr>')
+        out.append("</table></div>")
+    for heading, rows in not_planned_groups(plan):
+        out.append(f'<h2>Not planned - {escape(heading)} ({len(rows)})</h2><div class="card"><table>')
+        for dev, why in rows:
+            out.append(f'<tr><td>{escape(dev["hostname"])} <span class="mono mute">{escape(dev["serial"])}</span></td><td>{escape(dev["model"])}</td>'
+                       f'<td class="mono">{escape(dev["current_version"])}</td><td class="mute">{escape(why)}</td></tr>')
+        out.append("</table></div>")
     if plan["order"]:
         names = {d["serial"]: d["hostname"] for d in plan["devices"]}
         out.append("<h2>Order and steps</h2>")

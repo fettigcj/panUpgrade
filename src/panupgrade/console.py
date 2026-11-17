@@ -22,7 +22,7 @@ from . import progress, report
 GLYPHS = {
     "start": ("\U0001F680", "[ GO ]", "1;36"),    # a phase begins (preflight, download, install, reboot...)
     "ok": ("✅", "[ OK ]", "32"),             # an outcome was confirmed
-    "fail": ("❌", "[FAIL]", "1;31"),         # a step or device failed
+    "fail": ("❌", "[FAIL]", "1;91"),       # a step or device failed
     "warn": ("\U0001F7E7", "[WARN]", "38;5;208"),  # proceed, but a person should read this
     "skip": ("\U0001F7E8", "[SKIP]", "33"),       # deliberately not done
     "info": ("\U0001F4DD", "[INFO]", "36"),       # a fact worth recording (job ids, versions, counts)
@@ -87,6 +87,8 @@ class Style:
         if self.width and len(text) + indent + 3 > self.width:
             text = textwrap.fill(text, max(self.width - indent - 3, 40), subsequent_indent=" " * (indent + 3), break_long_words=False)
             text = text.lstrip() if text.startswith(" ") else text
+        if kind in ("fail", "stop") and self.color:
+            text = text.replace("\033[0m", f"\033[0m\033[{code}m")           # a bold word inside the line must not end the red
         return " " * indent + self.glyph(kind) + (self.paint(text, code) if kind in ("fail", "stop") else text)
 
     def bullet(self, text, indent=4):
@@ -126,7 +128,7 @@ def render_plan(plan, style, verbose=False):
             else:
                 out.append(style.line("info", f"[{c['code']}] {c['scope']}: {c['text']}", 2))
     for heading, devs in report.grouped_devices(plan):
-        out += ["", style.bold(f"{heading} ({len(devs)})")]
+        out += ["", style.paint(f"{heading} ({len(devs)})", {"blocked": "1;91", "caution": "1;33"}.get(devs[0]["verdict"], "1"))]
         for dev in devs:
             role = dev.get("ha_state") or "standalone"
             head = f"{dev['hostname']} ({dev['serial']}) {role}  {dev['current_version']} -> {plan['target']}"
@@ -136,6 +138,10 @@ def render_plan(plan, style, verbose=False):
             out += [style.line(STATUS_GLYPH[r["status"]], f"{r['check']}: {r['reason']}", 6) for r in shown]
             if note:
                 out.append(style.dim("      " + note))
+    for heading, rows in report.not_planned_groups(plan):
+        out += ["", style.dim(f"Not planned - {heading} ({len(rows)})")]
+        for dev, why in rows:
+            out.append(style.bullet(f"{dev['hostname']} ({dev['serial']}) {dev['current_version']}" + (f" - {why}" if why else ""), 2))
     if plan["order"]:
         out += ["", style.bold("Steps")]
         for names_, steps, downgrade in report.step_groups(plan):

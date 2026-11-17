@@ -105,3 +105,37 @@ class PendingReboot(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NotPlannedAndColour(unittest.TestCase):
+    def setUp(self):
+        from tests.support import pair
+        data = fleet_data(device("OUT", version="20.2.3"), device("SOLO", version="20.2.3"), device("DONE", version=TARGET),
+                          pending("BAD", "20.2.3", "20.2.5"), device("OK", version="20.2.3"))
+        s = settings.load()
+        self.plan = build_plan(FakeFleet(data), TARGET, s, Selection(serials=["SOLO", "DONE", "BAD", "OK"], groups={"OK": "g", "BAD": "g"}), rules=TEST_RULES)
+
+    def test_not_planned_firewalls_are_one_heading_per_reason_with_one_line_each(self):
+        from panupgrade import report
+        groups = {heading: [d["serial"] for d, _ in rows] for heading, rows in report.not_planned_groups(self.plan)}
+        self.assertEqual(groups["Not in the selection"], ["OUT"])
+        self.assertEqual(groups["Stand-alone firewalls left out (setting accept_standalone_outage is off)"], ["SOLO"])
+        self.assertEqual(groups["Nothing to upgrade: already on the target, or newer with downgrades off"], ["DONE"])
+        text = report.to_text(self.plan)
+        self.assertIn("Not planned - Not in the selection (1)", text)
+        self.assertNotIn("selection: not in the selection", text)             # the per-firewall detail is gone
+
+    def test_a_blocked_firewall_is_red_all_the_way_along_its_line(self):
+        from panupgrade import console
+        out = console.render_plan(self.plan, console.Style(color=True, emoji=False))
+        head = next(line for line in out.split("\n") if "BAD" in line and "->" in line)
+        self.assertIn("\033[1;91m", head)
+        self.assertIn("\033[0m\033[1;91m", head)                                 # the bold word's reset is followed by red again
+        self.assertTrue(head.rstrip().endswith("\033[0m"))
+        self.assertIn("\033[1;91mBlocked", out)
+
+    def test_the_html_has_the_blocked_section_and_the_grouped_list(self):
+        from panupgrade import report
+        html = report.to_html(self.plan)
+        self.assertIn('class="h-blocked"', html)
+        self.assertIn("Not planned - Not in the selection (1)", html)

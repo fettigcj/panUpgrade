@@ -196,7 +196,10 @@ def _run_steps(dev, backend, journal, settings, stop, gate, group, held):
         err = _step(journal, serial, key, lambda: _do(st["action"], index, dev, backend, journal, settings))
         if err:
             return "failed", f"{_standing(dev, journal, index)}; {st['action']} failed: {err}"
-        if held and (st["action"] == "undrain" or (st["action"] == "verify" and not any(x["action"] == "undrain" for x in dev["steps"]))):
+        # A group member keeps its slot until its LAST step that matters: the undrain when there is one, else its last verify. A path of several
+        # installs, or an activation reboot followed by an install, has several verifies; the first of them is not the end.
+        last_verify = max((i for i, x in enumerate(dev["steps"]) if x["action"] == "verify"), default=-1)
+        if held and (st["action"] == "undrain" or (index == last_verify and not any(x["action"] == "undrain" for x in dev["steps"]))):
             held.clear()
             gate.leave(group)
     return "done", ""

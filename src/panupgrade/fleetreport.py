@@ -8,8 +8,10 @@ running where, and what each firewall looks like. It reads only; it has no targe
 """
 
 from collections import Counter
+from datetime import datetime
+from html import escape
 
-from . import checks, console, releases as releases_mod, report as report_mod
+from . import checks, console, releases as releases_mod, report as report_mod, runlog
 from .versions import Version, VersionError
 
 
@@ -57,6 +59,9 @@ def _attention(devices):
             note(dev, f"PAN-OS cannot tell whether content matches its HA peer ({', '.join(unknown)})")
         if facts.get("pending_changes"):
             note(dev, "has uncommitted configuration changes")
+        if facts.get("pending_reboot"):
+            note(dev, f"{facts.get('pending_reboot_version') or 'an image'} is installed and waiting for a reboot: it refuses to commit until it is rebooted, "
+                      f"and is still running {facts.get('sw_version') or dev['sw_version']}")
         if facts.get("running_jobs"):
             note(dev, f"has {facts['running_jobs']} job(s) running")
         if facts.get("licenses_ok") is False:
@@ -149,3 +154,66 @@ def render(report, style, address=""):
     out += ["", style.bold("Every firewall, HA pairs together")]
     out.append(console.render_table(["hostname", "model", "PAN-OS", "HA", "cfg sync", "app content", "threat content", "online"], rows, style).rstrip("\n"))
     return "\n".join(out) + "\n"
+
+
+# ---------------------------------------------------------------- the written record (HTML, text, Excel), like the plan and the run reports
+
+def file_name(stamp, extension):
+    return f"PanUpgrade_FleetReport_{stamp}.{extension}"
+
+
+def to_text(report, address=""):
+    return render(report, console.Style.detect("never", True), address)
+
+
+def _rows(report):
+    by_serial = {d["serial"]: d for d in report["devices"]}
+    out = []
+    for dev in sorted(report["devices"], key=lambda d: (_pair_key(d, by_serial), d["hostname"])):
+        facts = _facts(dev)
+        cv = facts.get("content_versions") or {}
+        out.append([dev["hostname"], dev["serial"], dev["model"], facts.get("sw_version") or dev["sw_version"],
+                    facts.get("ha_state") or dev.get("ha_state") or "standalone", _sync(facts), cv.get("app") or "-", cv.get("threat") or "-",
+                    "yes" if dev.get("connected") else "NO",
+                    {True: "yes", False: "no", None: "-"}[facts.get("pending_changes")],
+                    (facts.get("pending_reboot_version") or "yes") if facts.get("pending_reboot") else {False: "no", None: "-"}.get(facts.get("pending_reboot"), "-")])
+    return out
+
+
+HEADER = ["hostname", "serial", "model", "PAN-OS", "HA", "cfg sync", "app content", "threat content", "online", "uncommitted config", "reboot pending"]
+
+
+def sheets(report):
+    """For xlsxout.write_sheets: what needs attention, and every firewall."""
+    return [("Needs attention", ["hostname", "problem"], [[name, p] for name, problems in report["attention"] for p in problems]),
+            ("Every firewall", HEADER, _rows(report))]
+
+
+def to_html(report, address="", generated=None):
+    generated = generated or datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+    n = len(report["devices"])
+    out = ['<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">',
+           f"<title>panUpgrade fleet report</title><style>{runlog._CSS}</style></head><body><main>",
+           f"<h1>Fleet report{escape(' for ' + address) if address else ''}</h1>",
+           f'<div class="card {"bad" if report["attention"] else "good"}">{n} firewall{"s" if n != 1 else ""}: {report["pairs"]} HA pair'
+           f'{"s" if report["pairs"] != 1 else ""} and {report["standalone"]} standalone - Panorama {escape(report["panorama_version"] or "unknown")} - '
+           f'nothing was changed<br><span class="mute">written {escape(generated)}</span></div>']
+    if report["attention"]:
+        out.append(f'<h2>Needs attention ({len(report["attention"])} firewalls)</h2><div class="card"><table><tr><th>Firewall</th><th>What</th></tr>')
+        for name, problems in report["attention"]:
+            out += [f'<tr><td>{escape(name)}</td><td><span class="chip warn">warn</span> {escape(p)}</td></tr>' for p in problems]
+        out.append("</table></div>")
+    else:
+        out.append('<div class="card good">Nothing needs attention.</div>')
+    for note in report.get("advice", []):
+        out.append(f'<h2>{escape(note["title"])} ({len(note["devices"])})</h2><div class="card">{escape(note["text"])}<table>'
+                   '<tr><th>Firewall</th><th>Serial</th><th>PAN-OS</th></tr>')
+        out += [f'<tr><td>{escape(d["hostname"])}</td><td class="mono">{escape(d["serial"])}</td><td>{escape(d["version"])}</td></tr>' for d in note["devices"]]
+        out.append("</table></div>")
+    out.append('<h2>PAN-OS versions</h2><div class="card"><table>')
+    out += [f"<tr><td>{escape(v)}</td><td>{c} firewall{'s' if c != 1 else ''}</td></tr>" for v, c in sorted(report["versions"].items())]
+    out.append('</table></div><h2>Every firewall, HA pairs together</h2><div class="card"><table><tr>' + "".join(f"<th>{escape(h)}</th>" for h in HEADER) + "</tr>")
+    for row in _rows(report):
+        out.append("<tr>" + "".join(f'<td class="mono">{escape(str(c))}</td>' if i == 1 else f"<td>{escape(str(c))}</td>" for i, c in enumerate(row)) + "</tr>")
+    out.append("</table></div></main></body></html>")
+    return "".join(out)

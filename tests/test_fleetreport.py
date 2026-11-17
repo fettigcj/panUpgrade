@@ -108,5 +108,34 @@ class FleetReport(unittest.TestCase):
         self.assertIn("nothing was changed", out)
 
 
+    def test_an_installed_image_waiting_for_a_reboot_is_called_out(self):
+        r = self.report(dev("A", "f1", "12.1.10-h3", sw_version="12.1.10-h3", pending_reboot=True, pending_reboot_version="10.2.18-h14"),
+                        dev("B", "f3", "10.2.18-h14", pending_reboot=False))
+        text = self.problems(r)
+        self.assertIn("10.2.18-h14 is installed and waiting for a reboot", text["f1"])
+        self.assertIn("still running 12.1.10-h3", text["f1"])
+        self.assertNotIn("f3", text)
+
+    def test_the_written_record_is_html_text_and_excel(self):
+        import tempfile
+        import zipfile
+        from pathlib import Path
+        r = self.report(dev("A", "f1", pending_reboot=True, pending_reboot_version="10.2.18-h14", pending_changes=True), dev("B", "f3"))
+        page = fleetreport.to_html(r, "192.0.2.1", "2026-11-17 09:00:00 EST")
+        self.assertIn("<title>panUpgrade fleet report</title>", page)
+        self.assertIn("waiting for a reboot", page)
+        self.assertIn("Every firewall, HA pairs together", page)
+        self.assertIn("reboot pending", page)
+        self.assertIn("Needs attention", fleetreport.to_text(r, "192.0.2.1"))
+        names = [name for name, _, _ in fleetreport.sheets(r)]
+        self.assertEqual(names, ["Needs attention", "Every firewall"])
+        from panupgrade import xlsxout
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / fleetreport.file_name("20261117-090000", "xlsx")
+            xlsxout.write_sheets(path, fleetreport.sheets(r))
+            self.assertIn("xl/worksheets/sheet2.xml", zipfile.ZipFile(path).namelist())
+            self.assertEqual(path.name, "PanUpgrade_FleetReport_20261117-090000.xlsx")
+
+
 if __name__ == "__main__":
     unittest.main()

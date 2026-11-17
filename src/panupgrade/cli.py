@@ -544,7 +544,19 @@ def _report(args):
         print(f"error: {exc}", file=sys.stderr)
         return 2
     report = fleetreport.build(snap, settings, table)
-    sys.stdout.write(fleetreport.render(report, style, args.source.split(":", 1)[-1] if args.source.startswith("panorama:") else ""))
+    address = args.source.split(":", 1)[-1] if args.source.startswith("panorama:") else ""
+    sys.stdout.write(fleetreport.render(report, style, address))
+    try:                    # a written record, like the plan and the run reports: HTML, text and Excel in the profile's prepared folder
+        folder = Path(getattr(args, "report_dir", None) or _ws(args, "prepared"))
+        folder.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        name = lambda extension: folder / fleetreport.file_name(stamp, extension)
+        name("html").write_text(fleetreport.to_html(report, address), encoding="utf-8")
+        name("txt").write_text(fleetreport.to_text(report, address), encoding="utf-8")
+        xlsxout.write_sheets(name("xlsx"), fleetreport.sheets(report))
+        print(style.line("info", f"fleet report: {name('html')} (also .txt and .xlsx)"))
+    except OSError as exc:
+        print(style.line("warn", f"could not write the fleet report files: {exc}"), file=sys.stderr)
     if args.out:
         Path(args.out).write_text(json.dumps({"panorama_version": report["panorama_version"], "versions": report["versions"],
                                               "attention": report["attention"], "advice": report["advice"], "devices": report["devices"]}, indent=1) + chr(10), encoding="utf-8")
@@ -1438,6 +1450,7 @@ def build_parser():
     rep.add_argument("--set", action="append", help="override a setting: name=value")
     rep.add_argument("--releases", help=f"PAN-OS release table JSON (default ./{DEFAULT_RELEASES} if present, else the one that ships with the tool)")
     rep.add_argument("--out", help="also save the full report as JSON")
+    rep.add_argument("--report-dir", help="where the report is written as HTML, text and Excel (default: the profile's prepared folder, else ./prepared)")
     rep.set_defaults(func=_report)
 
     plan = sub.add_parser("plan", help="show what would happen to each device; changes nothing")

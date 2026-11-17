@@ -673,7 +673,7 @@ Found by reading every decision in the code that looks at the config-sync or ses
 | executor | `_do` (executor.py:380) | `not _band_ok(before or 0, after or 0, settings.failover_band)` | upgrade |
 | executor | `_do` (executor.py:419) | `got['ha_session_sync'] is not True` | upgrade |
 | executor | `_do` (executor.py:430) | `not base or not _band_ok(base, got['session_count'] or 0, settings.post_upgrade_band)` | upgrade |
-| fleetreport | `_attention` (fleetreport.py:47) | `facts.get('ha_config_sync') is False and (not mixed)` | report |
+| fleetreport | `_attention` (fleetreport.py:49) | `facts.get('ha_config_sync') is False and (not mixed)` | report |
 
 ## Helpers the charts call
 

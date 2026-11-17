@@ -113,9 +113,11 @@ flowchart TD
     n_panupgrade_checks_content_minimum["checks.content_minimum<br/><i>PAN-OS refuses to install some releases unless the dynamic content is </i>"]
     n_panupgrade_paths_content_requirement["paths.content_requirement<br/><i>The highest app-content number any installed step needs, as (number, v</i>"]
     n_panupgrade_planner__verdict["planner._verdict"]
+    n_panupgrade_planner__apply_pending["planner._apply_pending<br/><i>An image that is installed and not booted holds a firewall (it refuses</i>"]
+    n_panupgrade_planner__swap["planner._swap<br/><i>Replace the recorded result of the same check, then judge the firewall</i>"]
+    n_panupgrade_planner__verdict_from_dicts["planner._verdict_from_dicts"]
     n_panupgrade_planner__apply_standalone["planner._apply_standalone"]
     n_panupgrade_planner__add["planner._add"]
-    n_panupgrade_planner__verdict_from_dicts["planner._verdict_from_dicts"]
     n_panupgrade_planner__apply_pair_rules["planner._apply_pair_rules"]
     n_panupgrade_planner__peer_problem["planner._peer_problem<br/><i>Why an HA peer that is not in this run is a problem (words that fit 'i</i>"]
     n_panupgrade_planner__planned_versions["planner._planned_versions"]
@@ -157,6 +159,7 @@ flowchart TD
     n_panupgrade_checks_current_version --> n_panupgrade_versions_Version_parse
     n_panupgrade_checks_current_version --> n_panupgrade_checks__skip
     n_panupgrade_checks_run_device_checks --> n_panupgrade_checks_upgrade_path
+    n_panupgrade_checks_upgrade_path --> n_panupgrade_versions_Version_parse
     n_panupgrade_checks_upgrade_path --> n_panupgrade_checks__path
     n_panupgrade_checks_upgrade_path --> n_panupgrade_checks__skip
     n_panupgrade_checks_run_device_checks --> n_panupgrade_checks_ha_state
@@ -168,6 +171,7 @@ flowchart TD
     n_panupgrade_checks_preemption --> n_panupgrade_checks__no_data
     n_panupgrade_checks_run_device_checks --> n_panupgrade_checks_disk_space
     n_panupgrade_checks_disk_space --> n_panupgrade_checks__no_data
+    n_panupgrade_checks_disk_space --> n_panupgrade_versions_Version_parse
     n_panupgrade_checks_disk_space --> n_panupgrade_checks__images_already_here
     n_panupgrade_checks_run_device_checks --> n_panupgrade_checks_pending_changes
     n_panupgrade_checks_pending_changes --> n_panupgrade_checks__no_data
@@ -204,6 +208,10 @@ flowchart TD
     n_panupgrade_checks_content_minimum --> n_panupgrade_checks__skip
     n_panupgrade_checks_content_minimum --> n_panupgrade_paths_content_requirement
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__verdict
+    n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_pending
+    n_panupgrade_planner__apply_pending --> n_panupgrade_versions_Version_parse
+    n_panupgrade_planner__apply_pending --> n_panupgrade_planner__swap
+    n_panupgrade_planner__swap --> n_panupgrade_planner__verdict_from_dicts
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_standalone
     n_panupgrade_planner__apply_standalone --> n_panupgrade_planner__add
     n_panupgrade_planner__add --> n_panupgrade_planner__verdict_from_dicts
@@ -307,6 +315,8 @@ flowchart TD
     n_panupgrade_checks_clock_skew["checks.clock_skew<br/><i>The firewall's clock against Panorama's. A firewall hours off sees val</i>"]
     n_panupgrade_checks_content_minimum["checks.content_minimum<br/><i>PAN-OS refuses to install some releases unless the dynamic content is </i>"]
     n_panupgrade_planner__verdict["planner._verdict"]
+    n_panupgrade_planner__apply_pending["planner._apply_pending<br/><i>An image that is installed and not booted holds a firewall (it refuses</i>"]
+    n_panupgrade_planner__swap["planner._swap<br/><i>Replace the recorded result of the same check, then judge the firewall</i>"]
     n_panupgrade_planner__apply_standalone["planner._apply_standalone"]
     n_panupgrade_planner__add["planner._add"]
     n_panupgrade_planner__apply_pair_rules["planner._apply_pair_rules"]
@@ -393,6 +403,9 @@ flowchart TD
     n_panupgrade_checks_run_device_checks --> n_panupgrade_checks_clock_skew
     n_panupgrade_checks_run_device_checks --> n_panupgrade_checks_content_minimum
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__verdict
+    n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_pending
+    n_panupgrade_planner__apply_pending --> n_panupgrade_versions_Version_parse
+    n_panupgrade_planner__apply_pending --> n_panupgrade_planner__swap
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_standalone
     n_panupgrade_planner__apply_standalone --> n_panupgrade_planner__add
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_pair_rules
@@ -474,6 +487,7 @@ flowchart TD
     n_panupgrade_planner__device["planner._device"]
     n_panupgrade_checks_run_device_checks["checks.run_device_checks<br/><i>Run every check in order. Stops early only when the device cannot be r</i>"]
     n_panupgrade_planner__verdict["planner._verdict"]
+    n_panupgrade_planner__apply_pending["planner._apply_pending<br/><i>An image that is installed and not booted holds a firewall (it refuses</i>"]
     n_panupgrade_planner__apply_standalone["planner._apply_standalone"]
     n_panupgrade_planner__apply_pair_rules["planner._apply_pair_rules"]
     n_panupgrade_planner__planned_versions["planner._planned_versions"]
@@ -540,6 +554,7 @@ flowchart TD
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__device
     n_panupgrade_planner_build_plan --> n_panupgrade_checks_run_device_checks
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__verdict
+    n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_pending
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_standalone
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_pair_rules
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__planned_versions

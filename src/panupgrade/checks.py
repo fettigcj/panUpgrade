@@ -75,11 +75,21 @@ def current_version(ctx):
 def _path(ctx):
     """The path from what is running to the target, with the firewall's own base images and the table of releases."""
     raw = ctx.facts.sw_version if ctx.facts and ctx.facts.sw_version else ctx.ref.sw_version
+    if ctx.facts is not None and ctx.facts.pending_reboot is True and ctx.facts.pending_reboot_version:
+        raw = ctx.facts.pending_reboot_version        # the image it will boot into: the path starts there (the plan reboots it first)
     return paths.compute(raw, str(ctx.target), ctx.path_rules, ctx.settings.allow_downgrade,
                          getattr(ctx.facts, "base_images", None), ctx.releases)
 
 
 def upgrade_path(ctx):
+    f = ctx.facts
+    if f is not None and f.pending_reboot is True and f.pending_reboot_version:
+        try:
+            if Version.parse(f.pending_reboot_version) == ctx.target:
+                return CheckResult("upgrade_path", PASS, f"nothing to install: {ctx.target} is already installed and only needs a reboot",
+                                   evidence={"steps": []})
+        except VersionError:
+            pass
     try:
         result = _path(ctx)
     except VersionError as exc:
@@ -219,6 +229,14 @@ def disk_space(ctx):
     if free is None:
         return _no_data("disk_space", "free disk space")
     need = ctx.settings.min_free_disk_mb
+    f = ctx.facts
+    if free < need and f.pending_reboot is True and f.pending_reboot_version:
+        try:
+            if Version.parse(f.pending_reboot_version) == ctx.target:
+                return CheckResult("disk_space", PASS, f"{free} MB free; below min_free_disk_mb ({need}), but the target is already installed and "
+                                                       f"only needs a reboot, so nothing is downloaded")
+        except VersionError:
+            pass
     if free < need and _images_already_here(ctx):
         # the space is for fetching the image; once it is on the firewall, what it used is not a reason to hold the upgrade
         return CheckResult("disk_space", PASS, f"{free} MB free; below min_free_disk_mb ({need}), but every image this upgrade needs "

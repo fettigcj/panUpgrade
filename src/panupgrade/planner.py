@@ -148,6 +148,7 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
     for serial, name in selection.groups.items():
         if serial in devices:
             devices[serial]["group"] = name
+    _apply_pending(devices, ctxs, by_serial, selection, target)
     _apply_standalone(devices, ctxs, selection)
     _apply_pair_rules(devices, ctxs, by_serial, target)
 
@@ -235,6 +236,65 @@ def _add(dev, result):
 def _verdict_from_dicts(dev):
     results = [CheckResult(r["check"], r["status"], r["reason"], r.get("kind", ""), r.get("ack", "")) for r in dev["results"]]
     return _verdict(results)
+
+
+def _swap(dev, result):
+    """Replace the recorded result of the same check, then judge the firewall again."""
+    dev["results"] = [r for r in dev["results"] if r["check"] != result.check] + [result.to_dict()]
+    dev["verdict"], dev["skip_kind"] = _verdict_from_dicts(dev)
+
+
+def _apply_pending(devices, ctxs, by_serial, selection, target):
+    """An image that is installed and not booted holds a firewall (it refuses every commit). Three cases are understood; anything else is
+    left to the user to clean up first:
+    * the pending image IS the target: the upgrade only needs the reboot ("finish");
+    * the pending image is what the firewall's HA peer, or every other member of its group, already runs: reboot into it so the pair or
+      group is on one version, then go on to the target ("match");
+    * anything else: blocked, with what to run first."""
+    for serial, ctx in ctxs.items():
+        dev, facts = devices[serial], ctx.facts
+        if facts is None or facts.pending_reboot is not True or dev["verdict"] in ("skipped",):
+            continue
+        shown = facts.pending_reboot_version or "an image"
+        try:
+            pend = Version.parse(facts.pending_reboot_version)
+        except VersionError:
+            pend = None
+        clean_up = (f"{shown} is installed and waiting for a reboot, and the plan cannot tell whether booting it is wanted. Run a clean-up batch first "
+                    f"(reboot it into {shown}, or install the version you want and reboot) so this firewall starts from a clean slate, then plan again")
+        if pend is None:
+            _swap(dev, CheckResult("pending_reboot", FAIL, clean_up))
+            continue
+        case, others = "", []
+        if pend == target:
+            case = "finish"
+        elif ctx.facts.ha_mode in ("active-passive", "active-active"):
+            others = [ctx.peer_version]
+        elif dev["group"]:
+            others = [by_serial[s].sw_version for s, name in selection.groups.items() if name == dev["group"] and s != serial and s in by_serial]
+        if not case and others:
+            try:
+                if all(o and Version.parse(o) == pend for o in others):
+                    case = "match"
+            except VersionError:
+                pass
+        if not case:
+            what = ("its HA peer" if ctx.facts.ha_mode in ("active-passive", "active-active") else "the rest of its group" if dev["group"] else "")
+            tail = (f" ({what} is not running {shown}, so this is not a way to get them onto one version)" if what else "")
+            _swap(dev, CheckResult("pending_reboot", FAIL, clean_up + tail))
+            continue
+        window = ((dev["group"] and ctx.settings.group_tolerate_asymmetry)
+                  or (not dev["group"] and ctx.facts.ha_mode != "none" and ctx.settings.pair_tolerate_asymmetry))
+        if window:
+            _swap(dev, CheckResult("pending_reboot", FAIL,
+                                   f"{shown} is installed and waiting for a reboot. The plan would reboot it first, but the Allow Asymmetric Return window "
+                                   f"has to commit on this firewall and it refuses commits until it has been rebooted. Reboot it yourself first, or turn the "
+                                   f"window off (pair_tolerate_asymmetry / group_tolerate_asymmetry) for this run"))
+            continue
+        dev["activate"] = {"version": str(pend), "case": case}
+        words = ("it is the target version, so the upgrade is only the reboot that makes it live" if case == "finish" else
+                 "its HA peer or the rest of its group already runs it: the plan reboots into it first so they are on one version, then goes on to the target")
+        _swap(dev, CheckResult("pending_reboot", WARN, f"{shown} is installed and waiting for a reboot; {words}", ack="pending_reboot"))
 
 
 def _apply_standalone(devices, ctxs, selection):
@@ -371,15 +431,27 @@ def _steps(dev, settings, devices=None):
         add("hold suspended", note="preemption is on: keep this member suspended until go-live")
     installs = [p for p in _path_steps(dev) if p["install"]]
     drains = bool(dev.get("group")) and bool(settings.lb_drain_profile)
-    for n, p in enumerate(installs):
-        traffic = "outage" if role == "standalone" and not dev.get("group") else "redundancy"
-        add(f"install {p['version']}", note=f"timeout {settings.install_timeout_s}s")
-        if drains and n == 0:
+    traffic = "outage" if role == "standalone" and not dev.get("group") else "redundancy"
+    drained = False
+
+    def drain_once():
+        nonlocal drained
+        if drains and not drained:
+            drained = True
             add("drain", "redundancy", f"take {settings.lb_drain_probe_protocol} out of the interface management profile {settings.lb_drain_profile!r} (commit on the "
                                        f"firewall) so the load balancer drains this member, then wait {settings.lb_drain_wait_s}s")
+    activate = dev.get("activate")
+    if activate:
+        drain_once()
+        add(f"reboot to activate {activate['version']}", traffic,
+            f"{activate['version']} is already installed and waiting for a reboot; timeout {settings.reboot_timeout_s}s")
+        add("verify", note=f"version is {activate['version']}, no jobs running")
+    for p in installs:
+        add(f"install {p['version']}", note=f"timeout {settings.install_timeout_s}s")
+        drain_once()
         add("reboot", traffic, f"timeout {settings.reboot_timeout_s}s")
         add("verify", note="version as expected, no jobs running")
-    if drains and installs:
+    if drained:
         add("undrain", note=f"put the interface management profile {settings.lb_drain_profile!r} back as it was, so the load balancer takes this member back")
     if hold or role == "active":
         add("go live", note="release the suspension so the member can rejoin the pair")

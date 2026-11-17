@@ -67,11 +67,11 @@ flowchart LR
 |---|---|---|---|---|
 | `reachable` | yes | - | - | - |
 | `current_version` | yes | sw_version | allow_downgrade | - |
-| `upgrade_path` | yes | sw_version | allow_downgrade | - |
+| `upgrade_path` | yes | pending_reboot, pending_reboot_version, sw_version | allow_downgrade | - |
 | `ha_state` | yes | ha_mode, ha_state | upgrade_suspended | - |
 | `ha_peer` | yes | ha_config_sync, ha_links_ok, ha_mode, ha_session_sync, ha_state, sw_version | ha_config_unsynced, sync_to_peer | - |
 | `preemption` | no | ha_mode, preemption | - | - |
-| `disk_space` | yes | disk_free_mb, images_downloaded, sw_version | allow_downgrade, min_free_disk_mb | - |
+| `disk_space` | yes | disk_free_mb, images_downloaded, pending_reboot, pending_reboot_version, sw_version | allow_downgrade, min_free_disk_mb | - |
 | `pending_changes` | yes | pending_changes | pending_changes | - |
 | `pending_reboot` | no | pending_reboot, pending_reboot_version | - | - |
 | `running_jobs` | no | running_jobs | - | - |
@@ -82,7 +82,7 @@ flowchart LR
 | `certificate_advisory` | no | content_versions, sw_version | - | - |
 | `device_certificate` | no | device_cert | - | - |
 | `clock_skew` | no | clock_utc | - | - |
-| `content_minimum` | no | content_versions, sw_version | allow_downgrade | - |
+| `content_minimum` | no | content_versions, pending_reboot, pending_reboot_version, sw_version | allow_downgrade | - |
 
 A fact in the last column is read by the check but is not set by `collect_facts`, so on a live firewall it is always empty and that check always reports "no data".
 
@@ -95,7 +95,7 @@ A fact in the last column is read by the check but is not set by `collect_facts`
 | version | `show system info` | sw_version | certificate_advisory, content_minimum, current_version, disk_space, ha_peer, panorama_range, upgrade_path |
 | pending changes | `check pending-changes` | pending_changes | pending_changes |
 | jobs | `show jobs all` | running_jobs | running_jobs |
-| software waiting for a reboot | `debug swm status` | pending_reboot, pending_reboot_version | pending_reboot |
+| software waiting for a reboot | `debug swm status` | pending_reboot, pending_reboot_version | content_minimum, disk_space, pending_reboot, upgrade_path |
 | sessions | `show session info` | session_count | session_baseline |
 | disk | `show system disk-space` | disk_free_mb | disk_space |
 | images | `request system software info` | images_downloaded, base_images | disk_space |
@@ -165,7 +165,10 @@ flowchart LR
     q_version --> k_content_minimum
     q_pending_changes --> k_pending_changes
     q_jobs --> k_running_jobs
+    q_software_waiting_for_a_reboot --> k_upgrade_path
+    q_software_waiting_for_a_reboot --> k_disk_space
     q_software_waiting_for_a_reboot --> k_pending_reboot
+    q_software_waiting_for_a_reboot --> k_content_minimum
     q_sessions --> k_session_baseline
     q_disk --> k_disk_space
     q_images --> k_disk_space

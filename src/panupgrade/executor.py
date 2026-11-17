@@ -188,7 +188,7 @@ def _run_steps(dev, backend, journal, settings, stop, gate, group, held):
             return "stopped", f"stopped by you before {st['action']}"
         if last == "started":
             return "needs_attention", f"{st['action']} was started and not finished; check the device before resuming"
-        if group and st["action"] in ("drain", "reboot", "verify") and not held:
+        if group and (st["action"] in ("drain", "reboot", "verify") or st["action"].startswith("reboot to activate ")) and not held:
             why = gate.enter(group, stop)
             if why:
                 return "held", why
@@ -210,6 +210,8 @@ def _standing(dev, journal, index):
         return journal.last_state(serial, _key(i, steps[i]["action"])) == "ok"
     installs = [i for i in range(index) if steps[i]["action"].startswith("install ") and ok(i)]
     reboots = [i for i in range(index) if steps[i]["action"] == "reboot" and ok(i)]
+    if index < len(steps) and steps[index]["action"].startswith("reboot to activate "):
+        return f"still on {dev['current_version']}; {steps[index]['action'].split(' ', 3)[3]} is installed and has not been booted"
     if installs and reboots and reboots[-1] > installs[-1]:
         return f"already on {steps[installs[-1]]['action'].split(' ', 1)[1]}"
     if installs and index < len(steps) and steps[index]["action"] == "reboot":
@@ -303,7 +305,7 @@ def _preflight(dev, backend, settings):
         raise StepFailed("pending (uncommitted) configuration, or unknown; settings say block")
     if seen.get("running_jobs") != 0:
         raise StepFailed(f"jobs running or unknown: {seen.get('running_jobs')!r}")
-    if seen.get("pending_reboot") is True:
+    if seen.get("pending_reboot") is True and not (dev.get("activate") and seen.get("pending_reboot_version") == dev["activate"]["version"]):
         raise StepFailed(f"{seen.get('pending_reboot_version') or 'an image'} is installed and waiting for a reboot, and the firewall refuses to commit "
                          f"until it has been rebooted; reboot it first")
     return {"version": seen["version"]}
@@ -321,7 +323,7 @@ def _target_version(steps):
 
 def _expected_version(steps, index):
     for st in reversed(steps[:index]):
-        m = re.fullmatch(r"install (\S+)", st["action"])
+        m = re.fullmatch(r"(?:install|reboot to activate) (\S+)", st["action"])
         if m:
             return m.group(1)
     return None
@@ -397,7 +399,7 @@ def _do(action, index, dev, backend, journal, settings):
     elif action == "undrain":
         from .windows import undrain
         return undrain(serial, backend, journal, settings)
-    elif action == "reboot":
+    elif action == "reboot" or action.startswith("reboot to activate "):
         version = backend.reboot_and_wait(serial, settings.reboot_timeout_s)
         # a rebooted member reconnects to Panorama and then runs a second auto-commit of its own; wait that out before calling it back
         return {"version": version, **_settle(journal, backend, serial, action, settings, settings.settle_after_reboot_s, "after the reboot")}

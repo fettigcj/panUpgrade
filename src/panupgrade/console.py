@@ -101,7 +101,9 @@ class Style:
 
 def render_plan(plan, style, verbose=False):
     s = plan["summary"]
-    out = [style.bold("REPORT ONLY - nothing has been changed on any device"), "",
+    level, words, facts = report.headline(plan)
+    out = [style.paint(words, {"pass": "1;32", "warn": "1;33", "fail": "1;91"}.get(level, "1")), style.dim("  " + "  |  ".join(facts)), "",
+           style.bold("REPORT ONLY - nothing has been changed on any device"), "",
            f"Target {style.bold(plan['target'])}  |  Panorama {plan['panorama_version'] or 'unknown'}  |  "
            f"source {plan['source']}  |  plan {plan['hash'][:12]}",
            f"{s['devices']} devices: " + ", ".join([

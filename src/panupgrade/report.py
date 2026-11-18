@@ -25,6 +25,28 @@ def pair_first(plan):
     return "active first" if plan["settings"].get("upgrade_first") == "active" else "passive first"
 
 
+def headline(plan):
+    """(level, words, facts): the one-line verdict a reader meets first, and the facts under it. It says what the plan contains and what
+    needs attention; it never says how long a run will take or how it will go."""
+    s = plan["summary"]
+    planned = s["ready"] + s["caution"] + s["blocked"]
+    go = s["ready"] + s["caution"]
+    if planned == 0:
+        level, words = "skip", "NOTHING TO UPGRADE: no firewall in this plan needs the target version"
+    elif go == 0:
+        level, words = "fail", f"BLOCKED: none of the {s['blocked']} firewalls in scope can start until the blocking issues are fixed"
+    elif s["blocked"]:
+        level, words = "warn", f"READY WITH CAUTIONS: {go} to upgrade, {s['blocked']} BLOCKED (will not run until fixed)"
+    elif s["caution"] or plan["cautions"]:
+        level, words = "warn", f"READY WITH CAUTIONS: {go} to upgrade, {s['caution']} need acknowledgement first"
+    else:
+        level, words = "pass", f"READY: {go} to upgrade"
+    facts = [f"target {plan['target']}", f"Panorama {plan['panorama_version'] or 'unknown'}",
+             f"in scope: {planned} of {s['devices']} in the fleet" + (f" ({len(plan['order'])} units)" if plan["order"] else ""),
+             f"traffic-affecting steps: {s['outage_steps']} outage, {s['failover_steps']} HA failover", f"plan {plan['hash'][:12]}"]
+    return level, words, facts
+
+
 def to_json(plan):
     return json.dumps(plan, indent=2, sort_keys=True) + "\n"
 
@@ -137,7 +159,8 @@ def device_rows(devices, indent):
 
 def to_text(plan, verbose=False):
     s = plan["summary"]
-    lines = [BANNER, "",
+    level, words, facts = headline(plan)
+    lines = [words, "  " + "  |  ".join(facts), "", BANNER, "",
              f"Target {plan['target']}  |  Panorama {plan['panorama_version'] or 'unknown'}  |  source {plan['source']}  |  plan {plan['hash'][:12]}",
              f"{s['devices']} devices: {s['ready']} ready, {s['caution']} need acknowledgement, {s['blocked']} blocked, {s['skipped']} not planned "
              f"(not applicable {s['skipped_by_kind']['not_applicable']}, no data {s['skipped_by_kind']['no_data']}, excluded {s['skipped_by_kind']['excluded']})",
@@ -203,7 +226,7 @@ h2{font-size:13px;margin:24px 0 8px;color:var(--mute);text-transform:uppercase;l
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;margin-bottom:12px}
 h2.h-blocked{color:var(--fail)}h2.h-caution{color:var(--warn)}tr.v-blocked td:first-child{border-left:4px solid var(--fail)}
 .f-fail,.f-error{color:var(--fail)}
-.banner{border-color:var(--accent);font-weight:600}.caution{border-color:var(--warn)}
+.banner{border-color:var(--accent);font-weight:600}.head{border-width:2px}.head .verdict{font-size:18px;font-weight:700}.head.pass{border-color:var(--pass)}.head.warn{border-color:var(--warn)}.head.fail{border-color:var(--fail)}.head.fail .verdict{color:var(--fail)}.caution{border-color:var(--warn)}
 table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
 th{color:var(--mute);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
 .chip{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;font-weight:600;color:#fff;background:var(--skip)}
@@ -217,9 +240,12 @@ def _chip(word, label=None):
 
 def to_html(plan):
     s = plan["summary"]
+    level, words, facts = headline(plan)
     out = ['<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">',
            f"<title>panUpgrade plan</title><style>{_CSS}</style></head><body><main>",
            f'<h1>panUpgrade plan: target {escape(plan["target"])}</h1>',
+           f'<div class="card head {_CHIP[level]}"><div class="verdict">{escape(words)}</div>'
+           f'<div class="mute">{escape("  -  ".join(facts))}  -  {escape(plan["created"])}</div></div>',
            f'<div class="card banner">{escape(BANNER)}</div>',
            f'<div class="card">{s["devices"]} devices: {s["ready"]} ready, {s["caution"]} need acknowledgement, '
            f'{s["blocked"]} blocked, {s["skipped"]} not planned (not applicable {s["skipped_by_kind"]["not_applicable"]}, '

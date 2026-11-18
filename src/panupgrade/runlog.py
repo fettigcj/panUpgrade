@@ -38,6 +38,20 @@ def _derived_state(rows):
     return "in doubt" if rows and rows[-1][1] in ("start", "wait", "sync") else "done"
 
 
+def headline(run, result):
+    """(level, words): PREPARED / PREPARED WITH WARNINGS / NEEDS ATTENTION, or COMPLETED / COMPLETED WITH PROBLEMS / STOPPED."""
+    prepared = run == "preparation"
+    if result is None or result.get("stopped"):
+        return "fail", "NEEDS ATTENTION" if prepared else "STOPPED"
+    states = {state for state, _ in result["outcome"].values()}
+    alerts = result.get("lb_unrestored") or result.get("asymmetry_unrestored")
+    if result["failures"] or alerts:
+        return "fail", "NEEDS ATTENTION" if prepared else "COMPLETED WITH PROBLEMS"
+    if states - {"done"}:
+        return "warn", "PREPARED WITH WARNINGS" if prepared else "COMPLETED WITH PROBLEMS"
+    return "pass", "PREPARED" if prepared else "COMPLETED"
+
+
 def build(run, plan, hosts, events, label, journal_path, result=None):
     """Everything the log shows, as plain data. ``run`` is "preparation" or "upgrade"; ``plan`` is that run's plan (its target, which a
     preparation may not have, and hash); ``hosts`` maps serial to hostname; ``result`` is the run's outcome dict, or None when the run was
@@ -73,7 +87,8 @@ def build(run, plan, hosts, events, label, journal_path, result=None):
         if result.get("asymmetry_unrestored"):
             verdict += (f" ALERT: {len(result['asymmetry_unrestored'])} firewall(s) are still set to accept asymmetric traffic (tcp-reject-non-syn / "
                         f"asymmetric-path were changed for the window and not put back): " + ", ".join(e["serial"] for e in result["asymmetry_unrestored"]) + ".")
-    return {"run": run, "heading": HEADINGS[run], "target": plan.get("target") or NO_TARGET, "label": label, "plan_hash": plan["hash"][:12],
+    level, words = headline(run, result)
+    return {"run": run, "heading": HEADINGS[run], "level": level, "headline": words, "target": plan.get("target") or NO_TARGET, "label": label, "plan_hash": plan["hash"][:12],
             "journal": str(journal_path), "generated": datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z"),
             "verdict": verdict, "failed": result is None or bool(result["failures"]) or bool(result.get("asymmetry_unrestored")) or bool(result.get("lb_unrestored")),
             "outcome": [{"host": hosts.get(s, s), "serial": s, "state": st, "detail": d} for s, (st, d) in outcome.items()],
@@ -81,7 +96,8 @@ def build(run, plan, hosts, events, label, journal_path, result=None):
 
 
 def to_text(data):
-    out = [f"panUpgrade {data['heading'].lower()}: target {data['target']}  |  {data['label']}  |  plan {data['plan_hash']}",
+    out = [f"{data['headline']}: " + data["verdict"],
+           f"panUpgrade {data['heading'].lower()}: target {data['target']}  |  {data['label']}  |  plan {data['plan_hash']}",
            f"journal {data['journal']}  |  written {data['generated']}", "", data["verdict"], ""]
     if data["outcome"]:
         out.append("Result")
@@ -104,6 +120,7 @@ _CSS = """:root{--bg:#f6f7f9;--card:#fff;--ink:#1c2430;--mute:#6b7686;--line:#e3
 main{max-width:1400px;margin:0 auto;padding:18px 20px 60px}h1{font-size:22px;margin:4px 0 14px}
 h2{font-size:13px;margin:24px 0 8px;color:var(--mute);text-transform:uppercase;letter-spacing:.6px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;margin-bottom:12px}
+.verdict{font-size:18px;font-weight:700}.verdict.fail{color:var(--fail)}.verdict.warn{color:var(--warn)}.verdict.pass{color:var(--pass)}
 .bad{border-color:var(--fail)}.good{border-color:var(--pass)}
 table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top}
 th{color:var(--mute);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
@@ -135,7 +152,7 @@ def to_html(data):
     out = ['<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">',
            f"<title>panUpgrade {escape(data['heading'].lower())}</title><style>{_CSS}</style></head><body><main>",
            f"<h1>{escape(data['heading'])}: target {escape(data['target'])}</h1>",
-           f'<div class="card {"bad" if data["failed"] else "good"}">{escape(data["verdict"])}<br>'
+           f'<div class="card {"bad" if data["failed"] else "good"}"><div class="verdict {data["level"]}">{escape(data["headline"])}</div>{escape(data["verdict"])}<br>'
            f'<span class="mute">{escape(data["label"])} - plan <span class="mono">{escape(data["plan_hash"])}</span> - journal '
            f'<span class="mono">{escape(data["journal"])}</span> - written {escape(data["generated"])}</span></div>']
     if data["outcome"]:

@@ -23,9 +23,14 @@ class SettingsError(ValueError):
 
 @dataclass
 class Settings:
-    # HA / session checks (fractions of the active node's session count)
-    failover_band: float = 0.30
-    post_upgrade_band: float = 0.50
+    # HA pairs: the session table is judged where it is carried. Only the ACTIVE member sees sessions built on it; the passive member holds a copy over
+    # the HA2 link, so the count the pair had before (the active member's) is what the member that takes over must show. Judged after a fail-over
+    # (does the new active member hold the table?) and when the last member is done (is the service where it was?). The member is waited for up to
+    # pair_session_wait_s until it is no more than pair_session_warn_band short; then still less than pair_session_fail_band short is a WARNING and
+    # that short or more is a FAILURE (after a fail-over: the suspended member is put back into service first). Shortfall only.
+    pair_session_warn_band: float = 0.35
+    pair_session_fail_band: float = 0.80
+    pair_session_wait_s: int = 60
     # Panorama should stay within this many versions of the firewalls it manages (a rule of thumb from experience with schema
     # conversion), counted in the unit panorama_compare names. A firewall further behind gets "advise upgrade"; it never blocks that
     # firewall's upgrade.
@@ -123,7 +128,7 @@ class Settings:
         out = []
         if self.pending_changes != "block":
             out.append(f"pending_changes={self.pending_changes}: uncommitted candidate config will not stop an upgrade.")
-        if self.failover_band > 0.5 or self.post_upgrade_band > 0.75:
+        if self.pair_session_warn_band > 0.6 or self.pair_session_fail_band > 0.95 or self.group_session_warn_band > 0.6 or self.group_session_fail_band > 0.95:
             out.append("Session-count bands are very wide; a real traffic loss could pass unnoticed.")
         if self.ha_config_unsynced == "warn":
             out.append("ha_config_unsynced=warn: a pair whose passive config is not synchronized is planned anyway; when the active member "
@@ -177,6 +182,10 @@ def _coerce(name, value, typ):
     raise SettingsError(f"unsupported setting type for {name}")
 
 
+RETIRED = {"failover_band": "pair_session_warn_band, pair_session_fail_band and pair_session_wait_s",
+           "post_upgrade_band": "pair_session_warn_band, pair_session_fail_band and pair_session_wait_s"}
+
+
 def from_dict(data):
     known = {f.name: f.type for f in fields(Settings)}
     kwargs = {}
@@ -184,6 +193,8 @@ def from_dict(data):
         lowered = name.lower()
         if any(word in lowered for word in _SECRET_WORDS):
             raise SettingsError(f"{name}: secrets do not belong in settings; sign-in is set with --creds-file / --account (see `panupgrade help`)")
+        if name in RETIRED:
+            raise SettingsError(f"{name} was replaced by {RETIRED[name]}: a warning band, a failure band and how long to wait (see `panupgrade settings`)")
         if name not in known:
             raise SettingsError(f"unknown setting {name!r}")
         kwargs[name] = _coerce(name, value, known[name])
@@ -198,7 +209,7 @@ def from_dict(data):
         setattr(settings, name, by_lower[value.lower()])               # 'both' and 'Both' are the same choice
     if settings.api_rate_per_s <= 0:
         raise SettingsError("api_rate_per_s must be above 0")
-    for name in ("failover_band", "post_upgrade_band", "group_session_warn_band", "group_session_fail_band"):
+    for name in ("pair_session_warn_band", "pair_session_fail_band", "group_session_warn_band", "group_session_fail_band"):
         if not 0 < getattr(settings, name) <= 1:
             raise SettingsError(f"{name} must be between 0 and 1")
     for name in ("content_settle_s", "settle_after_failover_s", "settle_after_reboot_s"):
@@ -206,9 +217,10 @@ def from_dict(data):
             raise SettingsError(f"{name} must not be negative")
     if settings.lb_drain_profile and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,30}", settings.lb_drain_profile):
         raise SettingsError("lb_drain_profile must be the name of an interface management profile (letters, digits, space, . _ -, at most 31)")
-    if settings.group_session_warn_band > settings.group_session_fail_band:
-        raise SettingsError("group_session_warn_band must not be above group_session_fail_band")
-    for name in ("lb_drain_wait_s", "group_session_wait_s"):
+    for kind in ("pair", "group"):
+        if getattr(settings, f"{kind}_session_warn_band") > getattr(settings, f"{kind}_session_fail_band"):
+            raise SettingsError(f"{kind}_session_warn_band must not be above {kind}_session_fail_band")
+    for name in ("lb_drain_wait_s", "group_session_wait_s", "pair_session_wait_s"):
         if getattr(settings, name) < 0:
             raise SettingsError(f"{name} must not be negative")
     for name in ("group_reboot_tolerance", "spread_limit", "max_failures", "max_parallel", "sync_timeout_s", "busy_wait_s", "poll_interval_s"):

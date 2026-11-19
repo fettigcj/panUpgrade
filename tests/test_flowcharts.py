@@ -59,8 +59,8 @@ class Flowcharts(unittest.TestCase):
     def test_the_fail_over_chart_suspends_then_compares_the_sessions_within_the_band(self):
         page = self.docs["upgrade.md"]
         section = page.split("### 'fail over'")[1].split("\n### ")[0]
-        self.assertLess(section.index("backend.suspend(serial)"), section.index("_band_ok"))
-        self.assertIn("settings.failover_band", section)
+        self.assertLess(section.index("backend.suspend(serial)"), section.index("_watch_sessions"))
+        self.assertIn("settings.pair_session_fail_band", section)
         self.assertIn("backend.functional(serial)", section)              # the revert when the band is missed
 
     def test_the_sync_step_checks_the_config_sync_after_it_asks_for_it(self):

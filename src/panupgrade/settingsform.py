@@ -24,7 +24,7 @@ SAVE_ONLY, SAVE_EXIT, QUIT = 0, 1, 2
 
 SECTIONS = [
     ("HA behaviour", []),
-    ("  Active/Passive pairs", ["failover_band", "post_upgrade_band", "upgrade_first", "restore_roles", "upgrade_suspended", "pair_tolerate_asymmetry", "sync_to_peer", "sync_timeout_s",
+    ("  Active/Passive pairs", ["pair_session_warn_band", "pair_session_fail_band", "pair_session_wait_s", "upgrade_first", "restore_roles", "upgrade_suspended", "pair_tolerate_asymmetry", "sync_to_peer", "sync_timeout_s",
                                "busy_wait_s", "settle_after_failover_s", "settle_after_reboot_s", "ha_config_unsynced", "blocked_peer", "sync_content", "content_settle_s"]),
     ("  Stand-alone groups", ["accept_standalone_outage", "group_reboot_tolerance", "group_tolerate_asymmetry", "lb_drain_profile", "lb_drain_probe_protocol", "lb_drain_wait_s",
                                "group_session_warn_band", "group_session_fail_band", "group_session_wait_s"]),
@@ -36,9 +36,16 @@ SECTIONS = [
 ]
 # name -> (what it does, {choice or "true"/"false": what that value means})
 INFO = {
-    "failover_band": ("After the active member fails over, the new active member's session count must be within this fraction of what "
-                      "it was before. 0.30 means plus or minus 30%.", {}),
-    "post_upgrade_band": ("After the upgrade, the active member's session count must be within this fraction of the pair's baseline.", {}),
+    "pair_session_warn_band": ("HA pairs. Only the active member sees sessions built on it; the passive member holds a copy over the HA2 link. So the "
+                               "count the active member had before is what the member that takes over must show: after a fail-over, and again when the last "
+                               "member is done. How far short of it that member may be and still count as carrying the table. 0.35 means up to 35% short "
+                               "(some sessions do not survive a switch-over). The tool waits up to pair_session_wait_s for it to get inside this band.", {}),
+    "pair_session_fail_band": ("HA pairs. When pair_session_wait_s runs out and the member is still short: less short than this is a WARNING (the upgrade "
+                               "goes on and says so), this short or more is a FAILURE. After a fail-over a failure puts the suspended member back into service "
+                               "and stops that firewall; in the default order the passive member is already upgraded, so the pair is left on two versions "
+                               "(the message says which). 0.80 means the table has lost 80% or more. Must not be below pair_session_warn_band.", {}),
+    "pair_session_wait_s": ("HA pairs. How long, in seconds, to wait for the member that took over to show the table, read again every poll_interval_s. "
+                            "The suspended member carries no traffic meanwhile, so keep it short.", {}),
     "pair_tolerate_asymmetry": ("Allow Asymmetric Return During Upgrade Window, for HA pairs. When the active member is suspended or reboots, the half-open TCP "
                                 "handshakes it held are not synchronized to its peer; the peer then sees the rest of those flows as asymmetric and drops them. "
                                 "On: before the first member of a pair is touched, the tool records each member's current values, sets `set session "
@@ -86,8 +93,8 @@ INFO = {
                              "back. Read again every poll_interval_s; the wait ends the moment the member is inside group_session_warn_band.", {}),
     "upgrade_first": ("Which member of an active/passive pair is upgraded first. Only pairs: a firewall with no passive member (stand-alone, "
                       "or in a load-balanced group) has no such choice. Either way each fail-over is checked against the pair's session count "
-                      "(failover_band), and when the last member is done the active node's session count is checked against the pair's baseline "
-                      "(post_upgrade_band).",
+                      "(pair_session_warn_band / pair_session_fail_band), and when the last member is done the active node's session count is "
+                      "checked against the pair's baseline the same way.",
                       {"passive": "the default. Upgrade the passive member first: it carries no traffic, so the only fail-over is to a member that "
                                   "is already upgraded",
                        "active": "suspend the active member first so the passive member carries the traffic (proving its cabling and the session "
@@ -174,7 +181,7 @@ INFO = {
     "approval_max_age_hours": ("An approval older than this is refused. 168 is a week; 0 means it never expires.", {}),
 }
 LIMITS = {
-    "failover_band": "a number above 0 and up to 1", "post_upgrade_band": "a number above 0 and up to 1",
+    "pair_session_warn_band": "a number above 0 and up to 1", "pair_session_fail_band": "a number above 0 and up to 1", "pair_session_wait_s": "whole seconds, 0 or more",
     "api_rate_per_s": "a number above 0", "spread_limit": "a whole number, 1 or more", "max_failures": "a whole number, 1 or more",
     "max_parallel": "a whole number, 1 or more", "sync_timeout_s": "whole seconds, 1 or more", "busy_wait_s": "whole seconds, 1 or more",
     "poll_interval_s": "whole seconds, 1 or more", "lb_drain_wait_s": "whole seconds, 0 or more",

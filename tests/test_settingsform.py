@@ -141,10 +141,10 @@ class Editing(unittest.TestCase):
 
     def test_out_of_range_values_are_caught_by_the_same_rules_the_command_line_uses(self):
         form = fresh()
-        goto(form, "failover_band")
+        goto(form, "pair_session_warn_band")
         keys(form, "ctrl-u", *typing("1.5"))
         self.assertIsNone(form.settings())
-        self.assertIn("failover_band", form.check()[1])
+        self.assertIn("pair_session_warn_band", form.check()[1])
 
     def test_ctrl_r_and_delete_put_a_setting_back_to_its_default(self):
         form = fresh(max_parallel=2)
@@ -388,7 +388,7 @@ class WritingTheFile(unittest.TestCase):
         self.path = Path(self.tmp.name, "settings.toml")
 
     def test_only_what_differs_from_the_defaults_is_written_and_it_loads_back_the_same(self):
-        chosen = settings.load(None, ["max_parallel=3", "pending_changes=warn", "allow_downgrade=true", "failover_band=0.4", "backup_dir=D:/b"])
+        chosen = settings.load(None, ["max_parallel=3", "pending_changes=warn", "allow_downgrade=true", "pair_session_warn_band=0.4", "backup_dir=D:/b"])
         settingsform.write_file(self.path, chosen)
         text = self.path.read_text(encoding="utf-8")
         self.assertIn("max_parallel = 3", text)

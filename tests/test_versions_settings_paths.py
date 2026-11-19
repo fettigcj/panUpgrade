@@ -44,12 +44,12 @@ class SettingsTests(unittest.TestCase):
     def test_defaults_match_owner_decisions(self):
         s = settings.load()
         self.assertEqual((s.max_failures, s.pending_changes, s.spread_limit), (5, "block", 2))
-        self.assertEqual((s.failover_band, s.post_upgrade_band), (0.30, 0.50))
+        self.assertEqual((s.pair_session_warn_band, s.pair_session_fail_band, s.pair_session_wait_s), (0.35, 0.80, 60))
         self.assertEqual((s.restore_roles, s.image_source, s.max_parallel), ("leave", "firewall", 5))
 
     def test_string_numbers_are_rejected_not_compared_later(self):
         # the old script's --maxUpgrades had no type and crashed later on a string
-        for bad in ({"max_failures": "5"}, {"max_failures": True}, {"failover_band": "0.3"}):
+        for bad in ({"max_failures": "5"}, {"max_failures": True}, {"pair_session_warn_band": "0.3"}):
             with self.assertRaises(settings.SettingsError):
                 settings.from_dict(bad)
         with self.assertRaises(settings.SettingsError):
@@ -65,8 +65,8 @@ class SettingsTests(unittest.TestCase):
                 settings.from_dict({key: "x"})
 
     def test_unknown_and_out_of_range(self):
-        for bad in ({"nope": 1}, {"pending_changes": "maybe"}, {"failover_band": 0}, {"max_parallel": 0},
-                    {"failover_band": 1.5}):
+        for bad in ({"nope": 1}, {"pending_changes": "maybe"}, {"pair_session_warn_band": 0}, {"max_parallel": 0},
+                    {"pair_session_warn_band": 1.5}):
             with self.assertRaises(settings.SettingsError):
                 settings.from_dict(bad)
 

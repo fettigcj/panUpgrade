@@ -3,8 +3,9 @@
 # Secrets never go here (credentials are named accounts in the credentials file, passed by path).
 
 # ---- HA behaviour --------------------------------------------------------------------------------------------
-failover_band      = 0.30      # after failing the active member over, the new active node's sessions must be within +/-30% of before
-post_upgrade_band  = 0.50      # after the upgrade, the active node's sessions must be within +/-50% of the pair's baseline
+pair_session_warn_band = 0.35  # HA pairs: after a fail-over, and when the last member is done, the node carrying the traffic should be no more than 35% short of the active member's earlier session count (it is waited for)
+pair_session_fail_band = 0.80  # still short after the wait: less short than this is a warning, this short or more is a failure (after a fail-over the suspended member is put back into service)
+pair_session_wait_s    = 60    # how long to wait for the table to come back, in seconds
 pair_tolerate_asymmetry = false   # Allow Asymmetric Return During Upgrade Window for HA pairs: record, then set tcp-reject-non-syn no + asymmetric-path bypass (committed on the firewall) for the window, and put both back afterwards
 group_tolerate_asymmetry = true   # the same for stand-alone groups (nearly mandatory: a group has no HA2 link)
 group_reboot_tolerance = 1        # how many members of one stand-alone group may be out of service at the same time

@@ -606,7 +606,7 @@ def steps_by_role():
     return [(name, [s["action"] for s in planner._steps(dev, settings, devices)[0]]) for name, dev, devices in cases]
 
 
-HA_WATCH = {"ha_config_sync", "ha_session_sync", "session_count", "_band_ok", "failover_band", "post_upgrade_band"}
+HA_WATCH = {"ha_config_sync", "ha_session_sync", "session_count", "_band_ok", "_watch_sessions", "pair_session_warn_band", "pair_session_fail_band", "group_session_warn_band", "group_session_fail_band"}
 STAGE_ORDER = ["checks", "planner", "prepare", "executor", "fleetreport", "report"]
 
 

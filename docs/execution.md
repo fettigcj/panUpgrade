@@ -15,7 +15,7 @@
 - Pre-flight at execution time: the device must still report the version the plan assumed, have no pending config (unless the setting allows it), and no running jobs.
 - A device is judged on the version it reports after *its own* reboot (reading it too early would report the previous device's).
 - An HA pair is one unit, passive first; if the first member fails the second is `held`. A member that is no longer active when its turn comes skips the failover step.
-- Failover: the new active node's sessions must be within `failover_band` of the old one's, else the suspension is reverted and the device fails. After the upgrade, the active node must be within `post_upgrade_band` of the pair's baseline (taken once, from the node that was active before the unit started).
+- Failover: only the active member sees sessions built on it (the passive holds a copy over HA2), so the new active node must show the count the old active had: it is waited for up to `pair_session_wait_s` until it is within `pair_session_warn_band` short; still short after that is a warning, `pair_session_fail_band` or more short is a failure, the suspended member is put back into service and the device fails (the message says what version the pair is left on). When the last member is done, the active node is judged the same way against the pair's baseline (taken once, from the node that was active before the unit started).
 - Members suspended by the tool are released with `go live`, then `verify HA` (HA1 config sync, HA2 session sync) is judged.
 - A failed device is never retried automatically on resume.
 

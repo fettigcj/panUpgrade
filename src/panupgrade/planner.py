@@ -169,8 +169,9 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
     if placed:
         cautions.append({"scope": "fleet", "code": "upgrade_first_active", "text": (
             f"upgrade_first is active: in each of these pairs ({', '.join(placed)}) the ACTIVE member is suspended and upgraded first, so its passive "
-            f"peer, still on the old version, takes the traffic; the session count must stay within {int(settings.failover_band * 100)}% or the member is "
-            f"put back. The peer is then suspended in turn so the upgraded member takes the traffic back before the peer is upgraded. That is two "
+            f"peer, still on the old version, takes the traffic; the session count must come within {int(settings.pair_session_warn_band * 100)}% of before (a warning if still short after "
+            f"{settings.pair_session_wait_s}s, a failure at {int(settings.pair_session_fail_band * 100)}% or more short, when the member is "
+            f"put back). The peer is then suspended in turn so the upgraded member takes the traffic back before the peer is upgraded. That is two "
             f"HA fail-overs per pair instead of one.")})
     if windows:
         cautions.append({"scope": "fleet", "code": "asymmetry_window", "text": _window_words(windows)})
@@ -460,7 +461,8 @@ def _steps(dev, settings, devices=None):
         else:
             takes_over = ("its already upgraded " + ("peer" if active_first else "passive peer") + " takes over") if peer_planned else "its peer takes over"
         add("fail over", "failover",
-            f"suspend this member so {takes_over}; compare the new active node's sessions with this one's, within {int(settings.failover_band * 100)}%; revert if out of band")
+            f"suspend this member so {takes_over}; wait up to {settings.pair_session_wait_s}s for the new active node's sessions to come within {int(settings.pair_session_warn_band * 100)}% of this one's (warning if still short, "
+            f"failure and put this member back if {int(settings.pair_session_fail_band * 100)}% or more short)")
     if hold:
         add("hold suspended", note="preemption is on: keep this member suspended until go-live")
     installs = [p for p in _path_steps(dev) if p["install"]]
@@ -495,7 +497,7 @@ def _steps(dev, settings, devices=None):
         add("go live", note="release the suspension so the member can rejoin the pair")
     if role != "standalone":
         add("verify HA", note="HA1 config sync, HA2 session sync, and (on the active node) sessions within "
-            f"{int(settings.post_upgrade_band * 100)}% of the baseline")
+            f"{int(settings.pair_session_warn_band * 100)}% of the baseline (waited for up to {settings.pair_session_wait_s}s)")
     if role != "standalone" and settings.restore_roles == "restore" and role == "active" and not active_first:
         add("restore roles", "failover", "fail back so the original active member is active again")
     rollback = ("not automatic. The saved config and the previous image remain; a rollback is planned and approved "

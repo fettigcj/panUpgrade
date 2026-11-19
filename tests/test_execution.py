@@ -473,18 +473,25 @@ class HappyPath(Base):
 
     def test_failover_outside_the_session_band_is_reverted(self):
         data = fleet_data(pair("A1", "A2"))
-        sim = SimBackend(data, takeover_ratio=0.4)    # the new active holds 40% of the old sessions
+        sim = SimBackend(data, takeover_ratio=0.1)    # the new active holds 10% of the old sessions: 90% short
         _, _, _, _, result = self.go(data, backend=sim, max_failures=5)
         self.assertEqual(result["outcome"]["A2"][0], "done")
         self.assertEqual(result["outcome"]["A1"][0], "failed")
-        self.assertIn("reverted", result["outcome"]["A1"][1])
+        self.assertIn("put back into service", result["outcome"]["A1"][1])
+        self.assertIn("two versions", result["outcome"]["A1"][1])      # A2 (passive first) is already upgraded, A1 is not
         self.assertEqual(sim.nodes["A1"].version, "20.2.3")      # never upgraded
 
     def test_session_band_is_tunable(self):
         data = fleet_data(pair("A1", "A2"))
-        sim = SimBackend(data, takeover_ratio=0.8)
-        _, _, _, _, result = self.go(data, backend=sim, failover_band=0.3)
+        sim = SimBackend(data, takeover_ratio=0.5)                  # 50% short: between the bands, so a warning
+        _, _, _, _, result = self.go(data, backend=sim)
         self.assertEqual(result["outcome"]["A1"][0], "done")
+
+    def test_session_fail_band_is_tunable(self):
+        data = fleet_data(pair("A1", "A2"))
+        sim = SimBackend(data, takeover_ratio=0.5)
+        _, _, _, _, result = self.go(data, backend=sim, pair_session_fail_band=0.4)
+        self.assertEqual(result["outcome"]["A1"][0], "failed")
 
 
 class ASuspendedMemberIsUpgradedAndMustRejoin(Base):

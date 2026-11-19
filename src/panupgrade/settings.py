@@ -28,6 +28,9 @@ class Settings:
     # (does the new active member hold the table?) and when the last member is done (is the service where it was?). The member is waited for up to
     # pair_session_wait_s until it is no more than pair_session_warn_band short; then still less than pair_session_fail_band short is a WARNING and
     # that short or more is a FAILURE (after a fail-over: the suspended member is put back into service first). Shortfall only.
+    # A session count below this is too small to judge: a table of 12 sessions of management traffic moves by more than a band for no reason at all.
+    # Below it the session checks are skipped (and say so); the plan and prepare say it beforehand. 0 sessions is always below it.
+    session_noise_floor: int = 100
     pair_session_warn_band: float = 0.35
     pair_session_fail_band: float = 0.80
     pair_session_wait_s: int = 60
@@ -220,7 +223,7 @@ def from_dict(data):
     for kind in ("pair", "group"):
         if getattr(settings, f"{kind}_session_warn_band") > getattr(settings, f"{kind}_session_fail_band"):
             raise SettingsError(f"{kind}_session_warn_band must not be above {kind}_session_fail_band")
-    for name in ("lb_drain_wait_s", "group_session_wait_s", "pair_session_wait_s"):
+    for name in ("lb_drain_wait_s", "group_session_wait_s", "pair_session_wait_s", "session_noise_floor"):
         if getattr(settings, name) < 0:
             raise SettingsError(f"{name} must not be negative")
     for name in ("group_reboot_tolerance", "spread_limit", "max_failures", "max_parallel", "sync_timeout_s", "busy_wait_s", "poll_interval_s"):

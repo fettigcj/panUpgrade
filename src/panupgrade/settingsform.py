@@ -23,7 +23,7 @@ BUTTON_LABELS = ["Save", "Save & Exit", "Quit without saving"]
 SAVE_ONLY, SAVE_EXIT, QUIT = 0, 1, 2
 
 SECTIONS = [
-    ("HA behaviour", []),
+    ("HA behaviour", ["session_noise_floor"]),
     ("  Active/Passive pairs", ["pair_session_warn_band", "pair_session_fail_band", "pair_session_wait_s", "upgrade_first", "restore_roles", "upgrade_suspended", "pair_tolerate_asymmetry", "sync_to_peer", "sync_timeout_s",
                                "busy_wait_s", "settle_after_failover_s", "settle_after_reboot_s", "ha_config_unsynced", "blocked_peer", "sync_content", "content_settle_s"]),
     ("  Stand-alone groups", ["accept_standalone_outage", "group_reboot_tolerance", "group_tolerate_asymmetry", "lb_drain_profile", "lb_drain_probe_protocol", "lb_drain_wait_s",
@@ -36,6 +36,11 @@ SECTIONS = [
 ]
 # name -> (what it does, {choice or "true"/"false": what that value means})
 INFO = {
+    "session_noise_floor": ("The fewest sessions worth judging. A firewall (the active member of a pair, a stand-alone or group member) whose session count before "
+                            "the upgrade is below this has too little traffic for a before/after comparison to mean anything, so the session checks "
+                            "(after the fail-over, when the pair is done, a group member's recovery) are skipped for it, and the plan, prepare and the log say so. "
+                            "A pre-production firewall with only management traffic is the usual case. 0 sessions is always skipped, whatever this is set to. "
+                            "Set it to 1 to judge everything that has any traffic.", {}),
     "pair_session_warn_band": ("HA pairs. Only the active member sees sessions built on it; the passive member holds a copy over the HA2 link. So the "
                                "count the active member had before is what the member that takes over must show: after a fail-over, and again when the last "
                                "member is done. How far short of it that member may be and still count as carrying the table. 0.35 means up to 35% short "
@@ -181,7 +186,7 @@ INFO = {
     "approval_max_age_hours": ("An approval older than this is refused. 168 is a week; 0 means it never expires.", {}),
 }
 LIMITS = {
-    "pair_session_warn_band": "a number above 0 and up to 1", "pair_session_fail_band": "a number above 0 and up to 1", "pair_session_wait_s": "whole seconds, 0 or more",
+    "pair_session_warn_band": "a number above 0 and up to 1", "pair_session_fail_band": "a number above 0 and up to 1", "pair_session_wait_s": "whole seconds, 0 or more", "session_noise_floor": "whole sessions, 0 or more",
     "api_rate_per_s": "a number above 0", "spread_limit": "a whole number, 1 or more", "max_failures": "a whole number, 1 or more",
     "max_parallel": "a whole number, 1 or more", "sync_timeout_s": "whole seconds, 1 or more", "busy_wait_s": "whole seconds, 1 or more",
     "poll_interval_s": "whole seconds, 1 or more", "lb_drain_wait_s": "whole seconds, 0 or more",

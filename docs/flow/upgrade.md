@@ -276,7 +276,7 @@ flowchart TD
 
 ## 3. How each step is carried out
 
-`executor._do` ([executor.py:420]). Before any step that installs or reboots, a verified backup must be in the journal:
+`executor._do` ([executor.py:426]). Before any step that installs or reboots, a verified backup must be in the journal:
 
 ```mermaid
 flowchart TD
@@ -296,7 +296,7 @@ flowchart TD
 
 ### starts with 'download '
 
-executor.py:424
+executor.py:430
 
 ```mermaid
 flowchart TD
@@ -314,7 +314,7 @@ flowchart TD
 
 ### 'backup'
 
-executor.py:426
+executor.py:432
 
 ```mermaid
 flowchart TD
@@ -348,7 +348,7 @@ flowchart TD
 
 ### 'sync to peer'
 
-executor.py:434
+executor.py:440
 
 ```mermaid
 flowchart TD
@@ -386,7 +386,7 @@ flowchart TD
 
 ### "wait for the passive firewall's upgrade to finish" or "wait for the first member's upgrade to finish"
 
-executor.py:445
+executor.py:451
 
 ```mermaid
 flowchart TD
@@ -412,7 +412,7 @@ flowchart TD
 
 ### 'fail over'
 
-executor.py:452
+executor.py:458
 
 ```mermaid
 flowchart TD
@@ -422,8 +422,8 @@ flowchart TD
     d5_4(["return {'skipped': f'member is {now['ha_state']} now, so there is no active role to…"])
     d5_5["before = now['session_count']"]
     d5_6["backend.suspend(serial)"]
-    d5_7{"before == 0"}
-    d5_8["detail = {'sessions_before': 0, 'sessions_after': backend.state(peer)['session_coun…"]
+    d5_7{"not before or before &lt; _floor(settings)"}
+    d5_8["detail = {'sessions_before': before, 'sessions_after': backend.state(peer)['session…"]
     d5_9["level, after, _, best, waited = _watch_sessions(backend, journal, serial, _key(inde…"]
     d5_10{"level == 'fail'"}
     d5_11["backend.functional(serial)"]
@@ -464,7 +464,7 @@ flowchart TD
 
 ### 'hold suspended'
 
-executor.py:478
+executor.py:485
 
 ```mermaid
 flowchart TD
@@ -484,7 +484,7 @@ flowchart TD
 
 ### starts with 'install '
 
-executor.py:481
+executor.py:488
 
 ```mermaid
 flowchart TD
@@ -504,7 +504,7 @@ flowchart TD
 
 ### 'drain'
 
-executor.py:484
+executor.py:491
 
 ```mermaid
 flowchart TD
@@ -522,7 +522,7 @@ flowchart TD
 
 ### 'undrain'
 
-executor.py:487
+executor.py:494
 
 ```mermaid
 flowchart TD
@@ -540,7 +540,7 @@ flowchart TD
 
 ### 'check service'
 
-executor.py:490
+executor.py:497
 
 ```mermaid
 flowchart TD
@@ -558,7 +558,7 @@ flowchart TD
 
 ### 'reboot' or starts with 'reboot to activate '
 
-executor.py:492
+executor.py:499
 
 ```mermaid
 flowchart TD
@@ -579,7 +579,7 @@ flowchart TD
 
 ### 'verify'
 
-executor.py:496
+executor.py:503
 
 ```mermaid
 flowchart TD
@@ -612,7 +612,7 @@ flowchart TD
 
 ### 'go live'
 
-executor.py:504
+executor.py:511
 
 ```mermaid
 flowchart TD
@@ -630,7 +630,7 @@ flowchart TD
 
 ### 'verify HA'
 
-executor.py:506
+executor.py:513
 
 ```mermaid
 flowchart TD
@@ -644,7 +644,7 @@ flowchart TD
     d14_8["peer_version = backend.state(peer)['version'] if peer else None"]
     d14_9{"got['ha_state'] == 'active'"}
     d14_10["base = _baseline(journal, dev)"]
-    d14_11{"base == 0"}
+    d14_11{"base is not None and base &lt; _floor(settings)"}
     d14_12(["return {'ha_state': got['ha_state'], 'skipped': 'no session baseline (acknowledged)…"])
     d14_13{"not base"}
     d14_14(["raise f'active node has {got['session_count']} sessions and there is no baseline to…"])
@@ -656,9 +656,9 @@ flowchart TD
     d14_20{"dev.get('position') == 'second' and peer"}
     d14_21["theirs = backend.state(peer)"]
     d14_22["base = _baseline(journal, dev)"]
-    d14_23{"theirs['ha_state'] == 'active' and base == 0"}
-    d14_24["said['warning'] = 'the pair's baseline is 0 sessions, so the service check is skipp…"]
-    d14_25{"theirs['ha_state'] == 'active' and base"}
+    d14_23{"theirs['ha_state'] == 'active' and base is not None and (base &lt; _floor(settings))"}
+    d14_24["said['warning'] = f'the pair's baseline is {base} sessions, below the noise floor o…"]
+    d14_25{"theirs['ha_state'] == 'active' and base and (base &gt;= _floor(settings))"}
     d14_26["level, count, _, best, waited = _watch_sessions(backend, journal, serial, _key(inde…"]
     d14_27["words = f'the pair is upgraded but the active node {peer} has {count} sessions vs b…"]
     d14_28{"level == 'fail'"}
@@ -725,7 +725,7 @@ flowchart TD
 
 ### 'restore roles'
 
-executor.py:550
+executor.py:557
 
 ```mermaid
 flowchart TD
@@ -746,7 +746,7 @@ flowchart TD
 
 ### anything else
 
-executor.py:555
+executor.py:562
 
 ```mermaid
 flowchart TD
@@ -769,11 +769,11 @@ Found by reading every decision in the code that looks at the config-sync or ses
 | module | function (line) | the condition, as written | verbs |
 |---|---|---|---|
 | checks | `ha_peer` (checks.py:169) | `problems == ['HA1 config sync'] and f.ha_session_sync and (f.ha_links_ok is not False)` | plan, upgrade, prepare |
-| prepare | `build` (prepare.py:145) | `steps and idle and (not facts.session_count)` | prepare |
-| prepare | `build` (prepare.py:147) | `facts.session_count is None` | prepare |
-| prepare | `build` (prepare.py:187) | `facts.ha_config_sync is False` | prepare |
-| executor | `_do` (executor.py:441) | `after['ha_config_sync'] is not True` | upgrade |
-| executor | `_do` (executor.py:511) | `got['ha_session_sync'] is not True` | upgrade |
+| prepare | `build` (prepare.py:146) | `steps and idle and (not (facts.session_count or 0) >= floor)` | prepare |
+| prepare | `build` (prepare.py:148) | `facts.session_count is None` | prepare |
+| prepare | `build` (prepare.py:189) | `facts.ha_config_sync is False` | prepare |
+| executor | `_do` (executor.py:447) | `after['ha_config_sync'] is not True` | upgrade |
+| executor | `_do` (executor.py:518) | `got['ha_session_sync'] is not True` | upgrade |
 | fleetreport | `_attention` (fleetreport.py:49) | `facts.get('ha_config_sync') is False and (not mixed)` | report |
 
 ## Helpers the charts call
@@ -782,12 +782,13 @@ Found by reading every decision in the code that looks at the config-sync or ses
 |---|---|
 | `_backup_verified` (executor.py:322) | return any((st['action'] == 'backup' and journal.last_state(serial, _key(i, 'backup')) == 'ok' for i, st in enumerate(steps))) |
 | `_baseline` (executor.py:340) | The pair's session baseline: the count on the node that was active before the unit started. |
-| `_check_service` (executor.py:390) | A group member is back (upgraded, undrained): wait until its session table is within ``group_session_warn_band`` of what it was before it |
+| `_check_service` (executor.py:395) | A group member is back (upgraded, undrained): wait until its session table is within ``group_session_warn_band`` of what it was before it |
 | `_expected_version` (executor.py:332) | see the source |
+| `_floor` (executor.py:383) | return max(settings.session_noise_floor, 1) |
 | `_key` (executor.py:151) | return f'{index}:{action}' |
 | `_retry_while_busy` (executor.py:279) | Run a command the firewall may refuse because it is busy. The jobs list showed nothing a moment ago, but a commit can be queued |
 | `_run_steps` (executor.py:171) | see the source |
-| `_sessions` (executor.py:383) | try: return backend.state(serial).get('session_count') or 0 except Exception: return 0 |
+| `_sessions` (executor.py:388) | try: return backend.state(serial).get('session_count') or 0 except Exception: return 0 |
 | `_settle` (executor.py:242) | Wait ``seconds``, then until the firewall has no unfinished job, before the next step touches it. |
 | `_target_version` (executor.py:327) | return _expected_version(steps, len(steps)) |
 | `_versions_note` (executor.py:374) | What the pair is left running, for a failure that cannot be undone: 'A runs x, B runs y'. Empty when it cannot be read. |
@@ -812,6 +813,7 @@ Found by reading every decision in the code that looks at the config-sync or ses
 | `pending_changes` | `'block'` |
 | `reboot_timeout_s` | `1920` |
 | `restore_roles` | `'leave'` |
+| `session_noise_floor` | `100` |
 | `settle_after_failover_s` | `60` |
 | `settle_after_reboot_s` | `120` |
 | `sync_timeout_s` | `600` |

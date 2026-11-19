@@ -142,9 +142,11 @@ def build(source, settings, selection, target=None, rules=None):
                 continue
             steps = result.steps
             idle = not (facts.ha_mode == "active-passive" and facts.ha_state in ("passive", "suspended"))      # a passive member carries no sessions of its own
-            if steps and idle and not facts.session_count:
+            floor = max(settings.session_noise_floor, 1)
+            if steps and idle and not (facts.session_count or 0) >= floor:
                 notes.append({"serial": ref.serial, "hostname": ref.hostname,
-                              "why": ("no session count could be read" if facts.session_count is None else "0 sessions now") +
+                              "why": ("no session count could be read" if facts.session_count is None else
+                                      f"{facts.session_count} sessions now, below the noise floor of {floor} (session_noise_floor)") +
                                      ": the session checks of the upgrade (after the fail-over, when the pair is done, a group member's recovery) have nothing to compare "
                                      "with and will be skipped, and the plan asks you to acknowledge no_session_baseline. If traffic is expected during the window, "
                                      "start it before the plan is read again"})

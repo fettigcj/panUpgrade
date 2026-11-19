@@ -356,7 +356,7 @@ def _watch_sessions(backend, journal, serial, key, observe, settings, warn, fail
     while True:
         mine, references = observe()
         elapsed = time.monotonic() - start
-        references = [r for r in references if r and r > 0]
+        references = [r for r in references if r and r >= _floor(settings)]
         if not references:
             return "none", mine, references, None, elapsed
         best = max(mine / r for r in references)
@@ -378,6 +378,11 @@ def _versions_note(backend, serial, peer):
     except Exception:
         return ""
     return f" The pair is left on two versions: {serial} runs {mine}, {peer} runs {theirs}." if mine != theirs else ""
+
+
+def _floor(settings):
+    """The fewest sessions worth judging; a table of 0 is never judged, whatever the setting."""
+    return max(settings.session_noise_floor, 1)
 
 
 def _sessions(backend, serial):
@@ -406,7 +411,8 @@ def _check_service(dev, backend, journal, settings, key):
     average = seen.get("average", 0)
     if level == "none":
         return {"skipped": "no session count to compare with", "sessions_after": mine,
-                "warning": "this member had no sessions before it was drained and the other members hold none, so the service check is skipped"}
+                "warning": "this member's session count before it was drained, and the other members' average, are both below the noise floor "
+                           f"of {settings.session_noise_floor}, so the service check is skipped"}
     detail = {"sessions_before": own, "sessions_after": mine, "others_average": round(average), "waited_s": round(elapsed)}
     if level == "ok":
         return detail
@@ -456,9 +462,10 @@ def _do(action, index, dev, backend, journal, settings):
         before = now["session_count"]
         backend.suspend(serial)
         peer = dev["peer_serial"]
-        if before == 0:      # the plan said so and the operator acknowledged "no_session_baseline": nothing to compare with
-            detail = {"sessions_before": 0, "sessions_after": backend.state(peer)["session_count"], "skipped": "no session baseline (acknowledged)",
-                      "warning": "the active member had 0 sessions, so there is nothing to compare the new active node with: the session check is skipped"}
+        if not before or before < _floor(settings):      # the plan said so and the operator acknowledged "no_session_baseline": nothing to compare with
+            detail = {"sessions_before": before, "sessions_after": backend.state(peer)["session_count"], "skipped": "no session baseline (acknowledged)",
+                      "warning": f"the active member had {before} sessions, below the noise floor of {settings.session_noise_floor}, so there is nothing to compare "
+                                 f"the new active node with: the session check is skipped"}
         else:
             # Only the active member saw sessions built on it; the passive one holds a copy over HA2. So the count this member had is what the one that
             # took over must now show. A collapse puts this member back into service and fails the firewall; the message says what the pair is left on.
@@ -517,9 +524,9 @@ def _do(action, index, dev, backend, journal, settings):
         said = {"config_sync": got["ha_config_sync"]} if peer_version == got["version"] else {"peer_version": peer_version}
         if got["ha_state"] == "active":
             base = _baseline(journal, dev)
-            if base == 0:
+            if base is not None and base < _floor(settings):
                 return {"ha_state": got["ha_state"], "skipped": "no session baseline (acknowledged)",
-                        "warning": "the pair's baseline is 0 sessions, so the service check is skipped", **said}
+                        "warning": f"the pair's baseline is {base} sessions, below the noise floor of {settings.session_noise_floor}, so the service check is skipped", **said}
             if not base:
                 raise StepFailed(f"active node has {got['session_count']} sessions and there is no baseline to compare with")
             level, count, _, best, waited = _watch_sessions(backend, journal, serial, _key(index, action), lambda: (_sessions(backend, serial), [base]),
@@ -534,9 +541,9 @@ def _do(action, index, dev, backend, journal, settings):
             # the last member of a pair is done: service is where it was before? The node that carries the traffic now is the peer, so judge that one.
             theirs = backend.state(peer)
             base = _baseline(journal, dev)
-            if theirs["ha_state"] == "active" and base == 0:
-                said["warning"] = "the pair's baseline is 0 sessions, so the service check is skipped"
-            if theirs["ha_state"] == "active" and base:
+            if theirs["ha_state"] == "active" and base is not None and base < _floor(settings):
+                said["warning"] = f"the pair's baseline is {base} sessions, below the noise floor of {settings.session_noise_floor}, so the service check is skipped"
+            if theirs["ha_state"] == "active" and base and base >= _floor(settings):
                 level, count, _, best, waited = _watch_sessions(backend, journal, serial, _key(index, action), lambda: (_sessions(backend, peer), [base]),
                                                                 settings, settings.pair_session_warn_band, settings.pair_session_fail_band,
                                                                 settings.pair_session_wait_s, f"the active node {peer}")

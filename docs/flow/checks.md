@@ -75,7 +75,7 @@ flowchart LR
 | `pending_changes` | yes | pending_changes | pending_changes | - |
 | `pending_reboot` | no | pending_reboot, pending_reboot_version | - | - |
 | `running_jobs` | no | running_jobs | - | - |
-| `session_baseline` | no | ha_mode, ha_state, session_count | - | - |
+| `session_baseline` | no | ha_mode, ha_state, session_count | session_noise_floor | - |
 | `ntp` | no | ntp_synced | - | ntp_synced |
 | `licenses` | no | licenses_ok | - | licenses_ok |
 | `panorama_range` | no | sw_version | panorama_compare, spread_limit | - |

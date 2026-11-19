@@ -294,8 +294,9 @@ def session_baseline(ctx):
     if count is None:
         return _no_data("session_baseline", "the session count")
     if count == 0:
-        return CheckResult("session_baseline", WARN, "0 sessions: a before/after comparison cannot detect traffic loss",
-                           ack="no_session_baseline")
+        return CheckResult("session_baseline", WARN, "0 sessions: a before/after comparison cannot detect traffic loss, so the session checks "
+                           "(after the fail-over, when the pair is done, and for a group member before the next one is drained) are SKIPPED for this firewall "
+                           "and say so in the log; the upgrade itself is unchanged", ack="no_session_baseline")
     return CheckResult("session_baseline", PASS, f"{count} active sessions recorded as the baseline")
 
 

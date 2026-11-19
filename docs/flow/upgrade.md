@@ -276,7 +276,7 @@ flowchart TD
 
 ## 3. How each step is carried out
 
-`executor._do` ([executor.py:419]). Before any step that installs or reboots, a verified backup must be in the journal:
+`executor._do` ([executor.py:420]). Before any step that installs or reboots, a verified backup must be in the journal:
 
 ```mermaid
 flowchart TD
@@ -296,7 +296,7 @@ flowchart TD
 
 ### starts with 'download '
 
-executor.py:423
+executor.py:424
 
 ```mermaid
 flowchart TD
@@ -314,7 +314,7 @@ flowchart TD
 
 ### 'backup'
 
-executor.py:425
+executor.py:426
 
 ```mermaid
 flowchart TD
@@ -348,7 +348,7 @@ flowchart TD
 
 ### 'sync to peer'
 
-executor.py:433
+executor.py:434
 
 ```mermaid
 flowchart TD
@@ -386,7 +386,7 @@ flowchart TD
 
 ### "wait for the passive firewall's upgrade to finish" or "wait for the first member's upgrade to finish"
 
-executor.py:444
+executor.py:445
 
 ```mermaid
 flowchart TD
@@ -412,7 +412,7 @@ flowchart TD
 
 ### 'fail over'
 
-executor.py:451
+executor.py:452
 
 ```mermaid
 flowchart TD
@@ -464,7 +464,7 @@ flowchart TD
 
 ### 'hold suspended'
 
-executor.py:476
+executor.py:478
 
 ```mermaid
 flowchart TD
@@ -484,7 +484,7 @@ flowchart TD
 
 ### starts with 'install '
 
-executor.py:479
+executor.py:481
 
 ```mermaid
 flowchart TD
@@ -504,7 +504,7 @@ flowchart TD
 
 ### 'drain'
 
-executor.py:482
+executor.py:484
 
 ```mermaid
 flowchart TD
@@ -522,7 +522,7 @@ flowchart TD
 
 ### 'undrain'
 
-executor.py:485
+executor.py:487
 
 ```mermaid
 flowchart TD
@@ -540,7 +540,7 @@ flowchart TD
 
 ### 'check service'
 
-executor.py:488
+executor.py:490
 
 ```mermaid
 flowchart TD
@@ -558,7 +558,7 @@ flowchart TD
 
 ### 'reboot' or starts with 'reboot to activate '
 
-executor.py:490
+executor.py:492
 
 ```mermaid
 flowchart TD
@@ -579,7 +579,7 @@ flowchart TD
 
 ### 'verify'
 
-executor.py:494
+executor.py:496
 
 ```mermaid
 flowchart TD
@@ -612,7 +612,7 @@ flowchart TD
 
 ### 'go live'
 
-executor.py:502
+executor.py:504
 
 ```mermaid
 flowchart TD
@@ -630,7 +630,7 @@ flowchart TD
 
 ### 'verify HA'
 
-executor.py:504
+executor.py:506
 
 ```mermaid
 flowchart TD
@@ -656,15 +656,17 @@ flowchart TD
     d14_20{"dev.get('position') == 'second' and peer"}
     d14_21["theirs = backend.state(peer)"]
     d14_22["base = _baseline(journal, dev)"]
-    d14_23{"theirs['ha_state'] == 'active' and base"}
-    d14_24["level, count, _, best, waited = _watch_sessions(backend, journal, serial, _key(inde…"]
-    d14_25["words = f'the pair is upgraded but the active node {peer} has {count} sessions vs b…"]
-    d14_26{"level == 'fail'"}
-    d14_27(["raise f'{words} (failure at {int(settings.pair_session_fail_band * 100)}% or more s…"])
-    d14_28{"level == 'warn'"}
-    d14_29["said['warning'] = f'{words} (warning above {int(settings.pair_session_warn_band * 1…"]
-    d14_30["said['active_sessions'] = count"]
-    d14_31(["return {'ha_state': got['ha_state'], **said}"])
+    d14_23{"theirs['ha_state'] == 'active' and base == 0"}
+    d14_24["said['warning'] = 'the pair's baseline is 0 sessions, so the service check is skipp…"]
+    d14_25{"theirs['ha_state'] == 'active' and base"}
+    d14_26["level, count, _, best, waited = _watch_sessions(backend, journal, serial, _key(inde…"]
+    d14_27["words = f'the pair is upgraded but the active node {peer} has {count} sessions vs b…"]
+    d14_28{"level == 'fail'"}
+    d14_29(["raise f'{words} (failure at {int(settings.pair_session_fail_band * 100)}% or more s…"])
+    d14_30{"level == 'warn'"}
+    d14_31["said['warning'] = f'{words} (warning above {int(settings.pair_session_warn_band * 1…"]
+    d14_32["said['active_sessions'] = count"]
+    d14_33(["return {'ha_state': got['ha_state'], **said}"])
     d14_1 --> d14_2
     d14_2 --> d14_3
     d14_3 -->|yes| d14_4
@@ -689,17 +691,20 @@ flowchart TD
     d14_22 --> d14_23
     d14_23 -->|yes| d14_24
     d14_24 --> d14_25
-    d14_25 --> d14_26
-    d14_26 -->|yes| d14_27
-    d14_26 -->|no| d14_28
+    d14_23 -->|no| d14_25
+    d14_25 -->|yes| d14_26
+    d14_26 --> d14_27
+    d14_27 --> d14_28
     d14_28 -->|yes| d14_29
-    d14_29 --> d14_30
     d14_28 -->|no| d14_30
-    d14_19 --> d14_31
-    d14_18 -->|no| d14_31
-    d14_30 --> d14_31
-    d14_23 -->|no| d14_31
-    d14_20 -->|no| d14_31
+    d14_30 -->|yes| d14_31
+    d14_31 --> d14_32
+    d14_30 -->|no| d14_32
+    d14_19 --> d14_33
+    d14_18 -->|no| d14_33
+    d14_32 --> d14_33
+    d14_25 -->|no| d14_33
+    d14_20 -->|no| d14_33
     classDef api stroke:#2f6fed,stroke-width:3px
     classDef refuse stroke:#d64545,stroke-width:3px
     classDef done stroke:#2e9e5b,stroke-width:3px
@@ -714,13 +719,13 @@ flowchart TD
     class d14_14 refuse
     class d14_17 refuse
     class d14_21 api
-    class d14_27 refuse
-    class d14_31 done
+    class d14_29 refuse
+    class d14_33 done
 ```
 
 ### 'restore roles'
 
-executor.py:545
+executor.py:550
 
 ```mermaid
 flowchart TD
@@ -741,7 +746,7 @@ flowchart TD
 
 ### anything else
 
-executor.py:550
+executor.py:555
 
 ```mermaid
 flowchart TD
@@ -764,9 +769,11 @@ Found by reading every decision in the code that looks at the config-sync or ses
 | module | function (line) | the condition, as written | verbs |
 |---|---|---|---|
 | checks | `ha_peer` (checks.py:169) | `problems == ['HA1 config sync'] and f.ha_session_sync and (f.ha_links_ok is not False)` | plan, upgrade, prepare |
-| prepare | `build` (prepare.py:180) | `facts.ha_config_sync is False` | prepare |
-| executor | `_do` (executor.py:440) | `after['ha_config_sync'] is not True` | upgrade |
-| executor | `_do` (executor.py:509) | `got['ha_session_sync'] is not True` | upgrade |
+| prepare | `build` (prepare.py:145) | `steps and idle and (not facts.session_count)` | prepare |
+| prepare | `build` (prepare.py:147) | `facts.session_count is None` | prepare |
+| prepare | `build` (prepare.py:187) | `facts.ha_config_sync is False` | prepare |
+| executor | `_do` (executor.py:441) | `after['ha_config_sync'] is not True` | upgrade |
+| executor | `_do` (executor.py:511) | `got['ha_session_sync'] is not True` | upgrade |
 | fleetreport | `_attention` (fleetreport.py:49) | `facts.get('ha_config_sync') is False and (not mixed)` | report |
 
 ## Helpers the charts call

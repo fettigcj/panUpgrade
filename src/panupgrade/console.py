@@ -172,6 +172,8 @@ def describe_event(record, names):
         return "info", f"group member's own session count before it is drained: {detail.get('sessions')}"
     if state == "ok" and detail.get("warning"):
         return "warn", f"{step}: {detail['warning']}"
+    if step == "baseline" and detail.get("sessions") in (0, None):
+        return "warn", f"session baseline is {detail.get('sessions')} (from {names.get(detail.get('taken_from'), detail.get('taken_from'))}): the session checks will be skipped"
     if step == "baseline":
         return "info", f"session baseline {detail.get('sessions')} (from {names.get(detail.get('taken_from'), detail.get('taken_from'))})"
     if state == "started":

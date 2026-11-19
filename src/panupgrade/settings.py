@@ -91,6 +91,13 @@ class Settings:
     lb_drain_profile: str = ""
     lb_drain_probe_protocol: str = "ssh"      # what the balancer probes with: one of PROBE_CHOICES, e.g. ssh, http, ssh+http
     lb_drain_wait_s: int = 60
+    # After a group member is back (upgraded, undrained) the tool waits for its session table to recover before the next member is drained. The member
+    # is judged against its own count from before it was drained, or the average of the other members now, whichever it is closer to. Back within
+    # group_session_warn_band of that: go on. Still further short when group_session_wait_s runs out: a WARNING if less than group_session_fail_band
+    # short, a FAILURE (the group is not started further) at or beyond it. 0.35 / 0.80 / 600.
+    group_session_warn_band: float = 0.35
+    group_session_fail_band: float = 0.80
+    group_session_wait_s: int = 600
     # HA roles after both members are upgraded: leave | restore
     restore_roles: str = "leave"
     # Which member of an active/passive pair is upgraded first: passive (the default: it carries no traffic, so nothing is at risk until the one
@@ -191,7 +198,7 @@ def from_dict(data):
         setattr(settings, name, by_lower[value.lower()])               # 'both' and 'Both' are the same choice
     if settings.api_rate_per_s <= 0:
         raise SettingsError("api_rate_per_s must be above 0")
-    for name in ("failover_band", "post_upgrade_band"):
+    for name in ("failover_band", "post_upgrade_band", "group_session_warn_band", "group_session_fail_band"):
         if not 0 < getattr(settings, name) <= 1:
             raise SettingsError(f"{name} must be between 0 and 1")
     for name in ("content_settle_s", "settle_after_failover_s", "settle_after_reboot_s"):
@@ -199,7 +206,9 @@ def from_dict(data):
             raise SettingsError(f"{name} must not be negative")
     if settings.lb_drain_profile and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,30}", settings.lb_drain_profile):
         raise SettingsError("lb_drain_profile must be the name of an interface management profile (letters, digits, space, . _ -, at most 31)")
-    for name in ("lb_drain_wait_s",):
+    if settings.group_session_warn_band > settings.group_session_fail_band:
+        raise SettingsError("group_session_warn_band must not be above group_session_fail_band")
+    for name in ("lb_drain_wait_s", "group_session_wait_s"):
         if getattr(settings, name) < 0:
             raise SettingsError(f"{name} must not be negative")
     for name in ("group_reboot_tolerance", "spread_limit", "max_failures", "max_parallel", "sync_timeout_s", "busy_wait_s", "poll_interval_s"):

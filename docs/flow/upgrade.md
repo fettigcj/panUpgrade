@@ -6,7 +6,7 @@ How it fits together: `plan` gives every firewall a list of steps (section 1). `
 
 ## 1. Which steps a firewall is given
 
-`planner._steps` ([planner.py:426]). The same function, run for a model firewall of each kind with default settings (`TARGET` is a version, `CURRENT` the one it runs now):
+`planner._steps` ([planner.py:427]). The same function, run for a model firewall of each kind with default settings (`TARGET` is a version, `CURRENT` the one it runs now):
 
 - **standalone**: `download TARGET` → `backup` → `install TARGET` → `reboot` → `verify`
 - **HA passive (its active peer is in the run)**: `download TARGET` → `backup` → `install TARGET` → `reboot` → `verify` → `verify HA`
@@ -57,13 +57,15 @@ flowchart TD
     s39["step: 'verify'"]
     s40{"drained"}
     s41["step: 'undrain'"]
-    s42{"hold or swaps"}
-    s43["step: 'go live'"]
-    s44{"role != 'standalone'"}
-    s45["step: 'verify HA'"]
-    s46{"role != 'standalone' and settings.restore_roles == 'restore' and (role == 'active')…"}
-    s47["step: 'restore roles'"]
-    s48(["return (steps, rollback)"])
+    s42{"dev.get('group')"}
+    s43["step: 'check service'"]
+    s44{"hold or swaps"}
+    s45["step: 'go live'"]
+    s46{"role != 'standalone'"}
+    s47["step: 'verify HA'"]
+    s48{"role != 'standalone' and settings.restore_roles == 'restore' and (role == 'active')…"}
+    s49["step: 'restore roles'"]
+    s50(["return (steps, rollback)"])
     s1 --> s2
     s2 --> s3
     s3 --> s4
@@ -125,6 +127,9 @@ flowchart TD
     s46 -->|yes| s47
     s47 --> s48
     s46 -->|no| s48
+    s48 -->|yes| s49
+    s49 --> s50
+    s48 -->|no| s50
     classDef api stroke:#2f6fed,stroke-width:3px
     classDef refuse stroke:#d64545,stroke-width:3px
     classDef done stroke:#2e9e5b,stroke-width:3px
@@ -147,7 +152,8 @@ flowchart TD
     class s43 step
     class s45 step
     class s47 step
-    class s48 done
+    class s49 step
+    class s50 done
 ```
 
 ## 2. How a unit and a firewall are run
@@ -206,7 +212,7 @@ flowchart TD
     class r5 done
 ```
 
-`executor._preflight` ([executor.py:303]): the plan is checked against the firewall again just before it is touched.
+`executor._preflight` ([executor.py:308]): the plan is checked against the firewall again just before it is touched.
 
 ```mermaid
 flowchart TD
@@ -245,7 +251,7 @@ flowchart TD
     class p11 done
 ```
 
-`executor._step` ([executor.py:292]) wraps every step: write `started`, run it, write `ok` or `failed`.
+`executor._step` ([executor.py:297]) wraps every step: write `started`, run it, write `ok` or `failed`.
 
 ```mermaid
 flowchart TD
@@ -270,7 +276,7 @@ flowchart TD
 
 ## 3. How each step is carried out
 
-`executor._do` ([executor.py:344]). Before any step that installs or reboots, a verified backup must be in the journal:
+`executor._do` ([executor.py:391]). Before any step that installs or reboots, a verified backup must be in the journal:
 
 ```mermaid
 flowchart TD
@@ -290,7 +296,7 @@ flowchart TD
 
 ### starts with 'download '
 
-executor.py:348
+executor.py:395
 
 ```mermaid
 flowchart TD
@@ -308,7 +314,7 @@ flowchart TD
 
 ### 'backup'
 
-executor.py:350
+executor.py:397
 
 ```mermaid
 flowchart TD
@@ -342,7 +348,7 @@ flowchart TD
 
 ### 'sync to peer'
 
-executor.py:358
+executor.py:405
 
 ```mermaid
 flowchart TD
@@ -380,7 +386,7 @@ flowchart TD
 
 ### "wait for the passive firewall's upgrade to finish" or "wait for the first member's upgrade to finish"
 
-executor.py:369
+executor.py:416
 
 ```mermaid
 flowchart TD
@@ -406,7 +412,7 @@ flowchart TD
 
 ### 'fail over'
 
-executor.py:376
+executor.py:423
 
 ```mermaid
 flowchart TD
@@ -455,7 +461,7 @@ flowchart TD
 
 ### 'hold suspended'
 
-executor.py:393
+executor.py:440
 
 ```mermaid
 flowchart TD
@@ -475,7 +481,7 @@ flowchart TD
 
 ### starts with 'install '
 
-executor.py:396
+executor.py:443
 
 ```mermaid
 flowchart TD
@@ -495,7 +501,7 @@ flowchart TD
 
 ### 'drain'
 
-executor.py:399
+executor.py:446
 
 ```mermaid
 flowchart TD
@@ -513,7 +519,7 @@ flowchart TD
 
 ### 'undrain'
 
-executor.py:402
+executor.py:449
 
 ```mermaid
 flowchart TD
@@ -529,130 +535,87 @@ flowchart TD
     class d9_2 done
 ```
 
-### 'reboot' or starts with 'reboot to activate '
+### 'check service'
 
-executor.py:405
+executor.py:452
 
 ```mermaid
 flowchart TD
-    d10_1(["step: 'reboot' or starts with 'reboot to activate '"])
-    d10_2["version = backend.reboot_and_wait(serial, settings.reboot_timeout_s)"]
-    d10_3(["return {'version': version, **_settle(journal, backend, serial, action, settings, s…"])
+    d10_1(["step: 'check service'"])
+    d10_2(["return _check_service(dev, backend, journal, settings, _key(index, action))"])
     d10_1 --> d10_2
-    d10_2 --> d10_3
     classDef api stroke:#2f6fed,stroke-width:3px
     classDef refuse stroke:#d64545,stroke-width:3px
     classDef done stroke:#2e9e5b,stroke-width:3px
     classDef step stroke:#e0a020,stroke-width:3px
     classDef entry stroke-width:3px
     class d10_1 entry
-    class d10_2 api
-    class d10_3 done
+    class d10_2 done
 ```
 
-### 'verify'
+### 'reboot' or starts with 'reboot to activate '
 
-executor.py:409
+executor.py:454
 
 ```mermaid
 flowchart TD
-    d11_1(["step: 'verify'"])
-    d11_2["_wait_for_quiet(backend, serial, settings, 'the verification')"]
-    d11_3["want, got = (_expected_version(steps, index), backend.state(serial))"]
-    d11_4{"got['version'] != want"}
-    d11_5(["raise f'device reports {got['version']}, expected {want}'"])
-    d11_6{"got['running_jobs'] != 0"}
-    d11_7(["raise f'jobs running or unknown: {got['running_jobs']!r}'"])
-    d11_8(["return {'version': got['version']}"])
+    d11_1(["step: 'reboot' or starts with 'reboot to activate '"])
+    d11_2["version = backend.reboot_and_wait(serial, settings.reboot_timeout_s)"]
+    d11_3(["return {'version': version, **_settle(journal, backend, serial, action, settings, s…"])
     d11_1 --> d11_2
     d11_2 --> d11_3
-    d11_3 --> d11_4
-    d11_4 -->|yes| d11_5
-    d11_4 -->|no| d11_6
-    d11_6 -->|yes| d11_7
-    d11_6 -->|no| d11_8
     classDef api stroke:#2f6fed,stroke-width:3px
     classDef refuse stroke:#d64545,stroke-width:3px
     classDef done stroke:#2e9e5b,stroke-width:3px
     classDef step stroke:#e0a020,stroke-width:3px
     classDef entry stroke-width:3px
     class d11_1 entry
-    class d11_3 api
-    class d11_5 refuse
-    class d11_7 refuse
-    class d11_8 done
+    class d11_2 api
+    class d11_3 done
 ```
 
-### 'go live'
+### 'verify'
 
-executor.py:417
+executor.py:458
 
 ```mermaid
 flowchart TD
-    d12_1(["step: 'go live'"])
-    d12_2["backend.functional(serial)"]
+    d12_1(["step: 'verify'"])
+    d12_2["_wait_for_quiet(backend, serial, settings, 'the verification')"]
+    d12_3["want, got = (_expected_version(steps, index), backend.state(serial))"]
+    d12_4{"got['version'] != want"}
+    d12_5(["raise f'device reports {got['version']}, expected {want}'"])
+    d12_6{"got['running_jobs'] != 0"}
+    d12_7(["raise f'jobs running or unknown: {got['running_jobs']!r}'"])
+    d12_8(["return {'version': got['version']}"])
     d12_1 --> d12_2
+    d12_2 --> d12_3
+    d12_3 --> d12_4
+    d12_4 -->|yes| d12_5
+    d12_4 -->|no| d12_6
+    d12_6 -->|yes| d12_7
+    d12_6 -->|no| d12_8
     classDef api stroke:#2f6fed,stroke-width:3px
     classDef refuse stroke:#d64545,stroke-width:3px
     classDef done stroke:#2e9e5b,stroke-width:3px
     classDef step stroke:#e0a020,stroke-width:3px
     classDef entry stroke-width:3px
     class d12_1 entry
-    class d12_2 api
+    class d12_3 api
+    class d12_5 refuse
+    class d12_7 refuse
+    class d12_8 done
 ```
 
-### 'verify HA'
+### 'go live'
 
-executor.py:419
+executor.py:466
 
 ```mermaid
 flowchart TD
-    d13_1(["step: 'verify HA'"])
-    d13_2["got = backend.state(serial)"]
-    d13_3{"got['ha_state'] == 'suspended' and dev['ha_state'] == 'suspended'"}
-    d13_4(["raise 'the member was suspended when planned and is still suspended after the upgra…"])
-    d13_5{"got['ha_session_sync'] is not True"}
-    d13_6(["raise f'HA2 session sync is {got['ha_session_sync']!r}'"])
-    d13_7["peer = dev.get('peer_serial')"]
-    d13_8["peer_version = backend.state(peer)['version'] if peer else None"]
-    d13_9{"got['ha_state'] == 'active'"}
-    d13_10["base = _baseline(journal, dev)"]
-    d13_11{"base == 0"}
-    d13_12(["return {'ha_state': got['ha_state'], 'skipped': 'no session baseline (acknowledged)…"])
-    d13_13{"not base or not _band_ok(base, got['session_count'] or 0, settings.post_upgrade_ban…"}
-    d13_14(["raise f'active node has {got['session_count']} sessions vs baseline {base}, outside…"])
-    d13_15{"dev.get('position') == 'second' and peer"}
-    d13_16["theirs = backend.state(peer)"]
-    d13_17["base = _baseline(journal, dev)"]
-    d13_18{"theirs['ha_state'] == 'active' and base"}
-    d13_19{"not _band_ok(base, theirs['session_count'] or 0, settings.post_upgrade_band)"}
-    d13_20(["raise f'the pair is upgraded but the active node {peer} has {theirs['session_count'…"])
-    d13_21["said['active_sessions'] = theirs['session_count']"]
-    d13_22(["return {'ha_state': got['ha_state'], **said}"])
+    d13_1(["step: 'go live'"])
+    d13_2["backend.functional(serial)"]
     d13_1 --> d13_2
-    d13_2 --> d13_3
-    d13_3 -->|yes| d13_4
-    d13_3 -->|no| d13_5
-    d13_5 -->|yes| d13_6
-    d13_5 -->|no| d13_7
-    d13_7 --> d13_8
-    d13_8 --> d13_9
-    d13_9 -->|yes| d13_10
-    d13_10 --> d13_11
-    d13_11 -->|yes| d13_12
-    d13_11 -->|no| d13_13
-    d13_13 -->|yes| d13_14
-    d13_9 -->|no| d13_15
-    d13_15 -->|yes| d13_16
-    d13_16 --> d13_17
-    d13_17 --> d13_18
-    d13_18 -->|yes| d13_19
-    d13_19 -->|yes| d13_20
-    d13_19 -->|no| d13_21
-    d13_13 -->|no| d13_22
-    d13_21 --> d13_22
-    d13_18 -->|no| d13_22
-    d13_15 -->|no| d13_22
     classDef api stroke:#2f6fed,stroke-width:3px
     classDef refuse stroke:#d64545,stroke-width:3px
     classDef done stroke:#2e9e5b,stroke-width:3px
@@ -660,27 +623,60 @@ flowchart TD
     classDef entry stroke-width:3px
     class d13_1 entry
     class d13_2 api
-    class d13_4 refuse
-    class d13_6 refuse
-    class d13_8 api
-    class d13_12 done
-    class d13_14 refuse
-    class d13_16 api
-    class d13_20 refuse
-    class d13_22 done
 ```
 
-### 'restore roles'
+### 'verify HA'
 
-executor.py:448
+executor.py:468
 
 ```mermaid
 flowchart TD
-    d14_1(["step: 'restore roles'"])
-    d14_2["backend.suspend(peer)"]
-    d14_3["backend.functional(peer)"]
+    d14_1(["step: 'verify HA'"])
+    d14_2["got = backend.state(serial)"]
+    d14_3{"got['ha_state'] == 'suspended' and dev['ha_state'] == 'suspended'"}
+    d14_4(["raise 'the member was suspended when planned and is still suspended after the upgra…"])
+    d14_5{"got['ha_session_sync'] is not True"}
+    d14_6(["raise f'HA2 session sync is {got['ha_session_sync']!r}'"])
+    d14_7["peer = dev.get('peer_serial')"]
+    d14_8["peer_version = backend.state(peer)['version'] if peer else None"]
+    d14_9{"got['ha_state'] == 'active'"}
+    d14_10["base = _baseline(journal, dev)"]
+    d14_11{"base == 0"}
+    d14_12(["return {'ha_state': got['ha_state'], 'skipped': 'no session baseline (acknowledged)…"])
+    d14_13{"not base or not _band_ok(base, got['session_count'] or 0, settings.post_upgrade_ban…"}
+    d14_14(["raise f'active node has {got['session_count']} sessions vs baseline {base}, outside…"])
+    d14_15{"dev.get('position') == 'second' and peer"}
+    d14_16["theirs = backend.state(peer)"]
+    d14_17["base = _baseline(journal, dev)"]
+    d14_18{"theirs['ha_state'] == 'active' and base"}
+    d14_19{"not _band_ok(base, theirs['session_count'] or 0, settings.post_upgrade_band)"}
+    d14_20(["raise f'the pair is upgraded but the active node {peer} has {theirs['session_count'…"])
+    d14_21["said['active_sessions'] = theirs['session_count']"]
+    d14_22(["return {'ha_state': got['ha_state'], **said}"])
     d14_1 --> d14_2
     d14_2 --> d14_3
+    d14_3 -->|yes| d14_4
+    d14_3 -->|no| d14_5
+    d14_5 -->|yes| d14_6
+    d14_5 -->|no| d14_7
+    d14_7 --> d14_8
+    d14_8 --> d14_9
+    d14_9 -->|yes| d14_10
+    d14_10 --> d14_11
+    d14_11 -->|yes| d14_12
+    d14_11 -->|no| d14_13
+    d14_13 -->|yes| d14_14
+    d14_9 -->|no| d14_15
+    d14_15 -->|yes| d14_16
+    d14_16 --> d14_17
+    d14_17 --> d14_18
+    d14_18 -->|yes| d14_19
+    d14_19 -->|yes| d14_20
+    d14_19 -->|no| d14_21
+    d14_13 -->|no| d14_22
+    d14_21 --> d14_22
+    d14_18 -->|no| d14_22
+    d14_15 -->|no| d14_22
     classDef api stroke:#2f6fed,stroke-width:3px
     classDef refuse stroke:#d64545,stroke-width:3px
     classDef done stroke:#2e9e5b,stroke-width:3px
@@ -688,25 +684,53 @@ flowchart TD
     classDef entry stroke-width:3px
     class d14_1 entry
     class d14_2 api
-    class d14_3 api
+    class d14_4 refuse
+    class d14_6 refuse
+    class d14_8 api
+    class d14_12 done
+    class d14_14 refuse
+    class d14_16 api
+    class d14_20 refuse
+    class d14_22 done
 ```
 
-### anything else
+### 'restore roles'
 
-executor.py:453
+executor.py:497
 
 ```mermaid
 flowchart TD
-    d15_1(["step: anything else"])
-    d15_2(["raise f'unknown step {action!r}'"])
+    d15_1(["step: 'restore roles'"])
+    d15_2["backend.suspend(peer)"]
+    d15_3["backend.functional(peer)"]
     d15_1 --> d15_2
+    d15_2 --> d15_3
     classDef api stroke:#2f6fed,stroke-width:3px
     classDef refuse stroke:#d64545,stroke-width:3px
     classDef done stroke:#2e9e5b,stroke-width:3px
     classDef step stroke:#e0a020,stroke-width:3px
     classDef entry stroke-width:3px
     class d15_1 entry
-    class d15_2 refuse
+    class d15_2 api
+    class d15_3 api
+```
+
+### anything else
+
+executor.py:502
+
+```mermaid
+flowchart TD
+    d16_1(["step: anything else"])
+    d16_2(["raise f'unknown step {action!r}'"])
+    d16_1 --> d16_2
+    classDef api stroke:#2f6fed,stroke-width:3px
+    classDef refuse stroke:#d64545,stroke-width:3px
+    classDef done stroke:#2e9e5b,stroke-width:3px
+    classDef step stroke:#e0a020,stroke-width:3px
+    classDef entry stroke-width:3px
+    class d16_1 entry
+    class d16_2 refuse
 ```
 
 ## Where the code decides about HA synchronisation and the session count
@@ -717,32 +741,37 @@ Found by reading every decision in the code that looks at the config-sync or ses
 |---|---|---|---|
 | checks | `ha_peer` (checks.py:169) | `problems == ['HA1 config sync'] and f.ha_session_sync and (f.ha_links_ok is not False)` | plan, upgrade, prepare |
 | prepare | `build` (prepare.py:180) | `facts.ha_config_sync is False` | prepare |
-| executor | `_do` (executor.py:365) | `after['ha_config_sync'] is not True` | upgrade |
-| executor | `_do` (executor.py:385) | `not _band_ok(before or 0, after or 0, settings.failover_band)` | upgrade |
-| executor | `_do` (executor.py:424) | `got['ha_session_sync'] is not True` | upgrade |
-| executor | `_do` (executor.py:435) | `not base or not _band_ok(base, got['session_count'] or 0, settings.post_upgrade_band)` | upgrade |
-| executor | `_do` (executor.py:443) | `not _band_ok(base, theirs['session_count'] or 0, settings.post_upgrade_band)` | upgrade |
+| executor | `_do` (executor.py:412) | `after['ha_config_sync'] is not True` | upgrade |
+| executor | `_do` (executor.py:432) | `not _band_ok(before or 0, after or 0, settings.failover_band)` | upgrade |
+| executor | `_do` (executor.py:473) | `got['ha_session_sync'] is not True` | upgrade |
+| executor | `_do` (executor.py:484) | `not base or not _band_ok(base, got['session_count'] or 0, settings.post_upgrade_band)` | upgrade |
+| executor | `_do` (executor.py:492) | `not _band_ok(base, theirs['session_count'] or 0, settings.post_upgrade_band)` | upgrade |
 | fleetreport | `_attention` (fleetreport.py:49) | `facts.get('ha_config_sync') is False and (not mixed)` | report |
 
 ## Helpers the charts call
 
 | function | what it does |
 |---|---|
-| `_backup_verified` (executor.py:317) | return any((st['action'] == 'backup' and journal.last_state(serial, _key(i, 'backup')) == 'ok' for i, st in enumerate(steps))) |
+| `_backup_verified` (executor.py:322) | return any((st['action'] == 'backup' and journal.last_state(serial, _key(i, 'backup')) == 'ok' for i, st in enumerate(steps))) |
 | `_band_ok` (executor.py:71) | return before > 0 and abs(after - before) / before <= band |
-| `_baseline` (executor.py:335) | The pair's session baseline: the count on the node that was active before the unit started. |
-| `_expected_version` (executor.py:327) | see the source |
-| `_retry_while_busy` (executor.py:274) | Run a command the firewall may refuse because it is busy. The jobs list showed nothing a moment ago, but a commit can be queued |
+| `_baseline` (executor.py:340) | The pair's session baseline: the count on the node that was active before the unit started. |
+| `_check_service` (executor.py:356) | A group member is back (upgraded, undrained): wait until its session table is within ``group_session_warn_band`` of what it was before it |
+| `_expected_version` (executor.py:332) | see the source |
+| `_key` (executor.py:151) | return f'{index}:{action}' |
+| `_retry_while_busy` (executor.py:279) | Run a command the firewall may refuse because it is busy. The jobs list showed nothing a moment ago, but a commit can be queued |
 | `_run_steps` (executor.py:171) | see the source |
-| `_settle` (executor.py:237) | Wait ``seconds``, then until the firewall has no unfinished job, before the next step touches it. |
-| `_target_version` (executor.py:322) | return _expected_version(steps, len(steps)) |
-| `_wait_for_quiet` (executor.py:259) | A config sync, an HA state change or a boot queues a commit on the firewall, and the install is refused while that is still in the |
+| `_settle` (executor.py:242) | Wait ``seconds``, then until the firewall has no unfinished job, before the next step touches it. |
+| `_target_version` (executor.py:327) | return _expected_version(steps, len(steps)) |
+| `_wait_for_quiet` (executor.py:264) | A config sync, an HA state change or a boot queues a commit on the firewall, and the install is refused while that is still in the |
 
 ## Settings the charts read
 
 | setting | default |
 |---|---|
 | `failover_band` | `0.3` |
+| `group_session_fail_band` | `0.8` |
+| `group_session_wait_s` | `600` |
+| `group_session_warn_band` | `0.35` |
 | `image_source` | `'firewall'` |
 | `install_timeout_s` | `3600` |
 | `lb_drain_probe_protocol` | `'ssh'` |

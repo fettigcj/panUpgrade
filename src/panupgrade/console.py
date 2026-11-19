@@ -168,6 +168,10 @@ def describe_event(record, names):
         return None
     step = record["step"].split(":", 1)[-1]
     state, detail = record["state"], record.get("detail") or {}
+    if step == "group_baseline":
+        return "info", f"group member's own session count before it is drained: {detail.get('sessions')}"
+    if state == "ok" and detail.get("warning"):
+        return "warn", f"{step}: {detail['warning']}"
     if step == "baseline":
         return "info", f"session baseline {detail.get('sessions')} (from {names.get(detail.get('taken_from'), detail.get('taken_from'))})"
     if state == "started":
@@ -177,7 +181,7 @@ def describe_event(record, names):
         return kind, step
     if state == "ok":
         kind = "sync" if step.startswith("sync") else "ok"
-        extra = ", ".join(f"{k}={v}" for k, v in detail.items() if k in ("version", "sessions_before", "sessions_after", "ha_state", "synced_from", "skipped", "config_sync", "peer_version", "original", "now"))
+        extra = ", ".join(f"{k}={v}" for k, v in detail.items() if k in ("version", "others_average", "waited_s", "sessions_before", "sessions_after", "ha_state", "synced_from", "skipped", "config_sync", "peer_version", "original", "now"))
         return kind, (f"{step}  {extra}" if extra else step)
     if state == "failed":
         return "fail", f"{step}: {detail.get('error', '')}"

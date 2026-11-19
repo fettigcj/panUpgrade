@@ -26,7 +26,8 @@ SECTIONS = [
     ("HA behaviour", []),
     ("  Active/Passive pairs", ["failover_band", "post_upgrade_band", "upgrade_first", "restore_roles", "upgrade_suspended", "pair_tolerate_asymmetry", "sync_to_peer", "sync_timeout_s",
                                "busy_wait_s", "settle_after_failover_s", "settle_after_reboot_s", "ha_config_unsynced", "blocked_peer", "sync_content", "content_settle_s"]),
-    ("  Stand-alone groups", ["accept_standalone_outage", "group_reboot_tolerance", "group_tolerate_asymmetry", "lb_drain_profile", "lb_drain_probe_protocol", "lb_drain_wait_s"]),
+    ("  Stand-alone groups", ["accept_standalone_outage", "group_reboot_tolerance", "group_tolerate_asymmetry", "lb_drain_profile", "lb_drain_probe_protocol", "lb_drain_wait_s",
+                               "group_session_warn_band", "group_session_fail_band", "group_session_wait_s"]),
     ("Panorama range", ["spread_limit", "panorama_compare"]),
     ("Failure handling", ["max_failures", "max_parallel", "api_rate_per_s", "pending_changes"]),
     ("Downgrades", ["allow_downgrade"]),
@@ -74,6 +75,15 @@ INFO = {
                                  "ssh+http+https": "take all three out", "ping": "take ping (ICMP) out"}),
     "lb_drain_wait_s": ("After the profile is changed, how long to wait for the load balancer to notice the failed probe and drain the member "
                         "before it reboots, in seconds. Set it above (probe interval x failures to mark it out) plus the drain time.", {}),
+    "group_session_warn_band": ("After a group member is back, how far short of its normal session count it may be and still count as back. "
+                                "The member is compared with its own count from before it was drained, or the average of the other members now, whichever is "
+                                "closer. 0.35 means up to 35% short: some of the traffic moves while a member is drained and comes back gradually. The tool "
+                                "waits (up to group_session_wait_s) until the member is inside this band before the next member of the group is drained.", {}),
+    "group_session_fail_band": ("When group_session_wait_s runs out and the member is still short of its normal session count: less short than this is a "
+                                "WARNING (the run goes on and says so), this short or more is a FAILURE (the group is not started further). 0.80 means "
+                                "the table has lost 80% or more. Must not be below group_session_warn_band.", {}),
+    "group_session_wait_s": ("How long to wait for a group member's session table to recover, in seconds, after its load balancer has been told to take it "
+                             "back. Read again every poll_interval_s; the wait ends the moment the member is inside group_session_warn_band.", {}),
     "upgrade_first": ("Which member of an active/passive pair is upgraded first. Only pairs: a firewall with no passive member (stand-alone, "
                       "or in a load-balanced group) has no such choice. Either way each fail-over is checked against the pair's session count "
                       "(failover_band), and when the last member is done the active node's session count is checked against the pair's baseline "
@@ -167,7 +177,8 @@ LIMITS = {
     "failover_band": "a number above 0 and up to 1", "post_upgrade_band": "a number above 0 and up to 1",
     "api_rate_per_s": "a number above 0", "spread_limit": "a whole number, 1 or more", "max_failures": "a whole number, 1 or more",
     "max_parallel": "a whole number, 1 or more", "sync_timeout_s": "whole seconds, 1 or more", "busy_wait_s": "whole seconds, 1 or more",
-    "poll_interval_s": "whole seconds, 1 or more", "lb_drain_wait_s": "whole seconds, 0 or more", "group_reboot_tolerance": "a whole number, 1 or more", "content_settle_s": "whole seconds, 0 or more",
+    "poll_interval_s": "whole seconds, 1 or more", "lb_drain_wait_s": "whole seconds, 0 or more",
+    "group_session_warn_band": "a number above 0 and up to 1", "group_session_fail_band": "a number above 0 and up to 1", "group_session_wait_s": "whole seconds, 0 or more", "group_reboot_tolerance": "a whole number, 1 or more", "content_settle_s": "whole seconds, 0 or more",
     "settle_after_failover_s": "whole seconds, 0 or more", "settle_after_reboot_s": "whole seconds, 0 or more",
 }
 HELP = {

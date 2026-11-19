@@ -279,6 +279,7 @@ flowchart TD
     n_panupgrade_executor__step["executor._step"]
     n_panupgrade_executor__preflight["executor._preflight"]
     n_panupgrade_executor__key["executor._key"]
+    n_panupgrade_executor__sessions["executor._sessions"]
     n_panupgrade_executor__do["executor._do"]
     n_panupgrade_executor__standing["executor._standing<br/><i>Where a firewall stands when the step at ``index`` did not finish: whi</i>"]
     n_panupgrade_windows_Gate_leave["windows.Gate.leave"]
@@ -365,6 +366,7 @@ flowchart TD
     n_panupgrade_executor__run_steps --> n_panupgrade_executor__step
     n_panupgrade_executor__run_steps --> n_panupgrade_executor__preflight
     n_panupgrade_executor__run_steps --> n_panupgrade_executor__key
+    n_panupgrade_executor__run_steps --> n_panupgrade_executor__sessions
     n_panupgrade_executor__run_steps --> n_panupgrade_executor__do
     n_panupgrade_executor__run_steps --> n_panupgrade_executor__standing
     n_panupgrade_executor__run_steps --> n_panupgrade_windows_Gate_leave

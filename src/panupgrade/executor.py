@@ -193,13 +193,18 @@ def _run_steps(dev, backend, journal, settings, stop, gate, group, held):
             if why:
                 return "held", why
             held.append(group)
+            if not journal.detail(serial, "group_baseline"):                     # the count the member is judged against when it comes back
+                journal.record(serial, "group_baseline", "ok", {"sessions": _sessions(backend, serial)})
         err = _step(journal, serial, key, lambda: _do(st["action"], index, dev, backend, journal, settings))
         if err:
             return "failed", f"{_standing(dev, journal, index)}; {st['action']} failed: {err}"
-        # A group member keeps its slot until its LAST step that matters: the undrain when there is one, else its last verify. A path of several
-        # installs, or an activation reboot followed by an install, has several verifies; the first of them is not the end.
-        last_verify = max((i for i, x in enumerate(dev["steps"]) if x["action"] == "verify"), default=-1)
-        if held and (st["action"] == "undrain" or (index == last_verify and not any(x["action"] == "undrain" for x in dev["steps"]))):
+        # A group member keeps its slot until its LAST step that matters: the service check when there is one (the next member is not drained
+        # until this one carries traffic again), else the undrain, else its last verify. A path of several installs, or an activation reboot
+        # followed by an install, has several verifies; the first of them is not the end.
+        actions = [x["action"] for x in dev["steps"]]
+        last_verify = max((i for i, x in enumerate(actions) if x == "verify"), default=-1)
+        final = ("check service" if "check service" in actions else "undrain" if "undrain" in actions else None)
+        if held and ((final and st["action"] == final) or (not final and index == last_verify)):
             held.clear()
             gate.leave(group)
     return "done", ""
@@ -341,6 +346,48 @@ def _baseline(journal, dev):
     return None
 
 
+def _sessions(backend, serial):
+    try:
+        return backend.state(serial).get("session_count") or 0
+    except Exception:           # a member that cannot be read has no count to compare with; that is not this member's failure
+        return 0
+
+
+def _check_service(dev, backend, journal, settings, key):
+    """A group member is back (upgraded, undrained): wait until its session table is within ``group_session_warn_band`` of what it was before it
+    was drained, or of what the other members hold now, whichever it is closer to (the load balancer hands traffic back gradually, and the members
+    were never equal). Past ``group_session_wait_s`` still short: a warning, or a failure when ``group_session_fail_band`` or more short. Only a
+    shortfall counts; a member that holds more is not a problem. A simulation does not wait: it is judged on one reading."""
+    serial = dev["serial"]
+    own = (journal.detail(serial, "group_baseline") or {}).get("sessions") or 0
+    warn, fail = settings.group_session_warn_band, settings.group_session_fail_band
+    start, noted, real = time.monotonic(), False, getattr(backend, "real_time", True)
+    while True:
+        mine = _sessions(backend, serial)
+        others = [n for n in (_sessions(backend, peer) for peer in dev.get("group_peers") or []) if n]
+        average = sum(others) / len(others) if others else 0
+        references = [r for r in (own, average) if r > 0]
+        elapsed = time.monotonic() - start
+        if not references:
+            return {"skipped": "no session count to compare with", "sessions_after": mine}
+        best = max(mine / r for r in references)
+        detail = {"sessions_before": own, "sessions_after": mine, "others_average": round(average), "waited_s": round(elapsed)}
+        if best >= 1 - warn:
+            return detail
+        if not real or elapsed >= settings.group_session_wait_s:
+            break
+        if not noted:
+            noted = True
+            journal.record(serial, key, "note", {"message": f"{mine} sessions, {round((1 - best) * 100)}% short of its normal count: waiting up to "
+                                                            f"{settings.group_session_wait_s}s for it to come back before the next member is touched"})
+        time.sleep(settings.poll_interval_s)
+    words = (f"{mine} sessions against {own} before the drain and {round(average)} on the other members: {round((1 - best) * 100)}% short "
+             f"after {round(elapsed)}s")
+    if 1 - best >= fail:
+        raise StepFailed(f"the member is not carrying traffic again: {words} (failure at {int(fail * 100)}% or more)")
+    return {**detail, "warning": f"{words}; the run goes on (warning above {int(warn * 100)}%)"}
+
+
 def _do(action, index, dev, backend, journal, settings):
     serial, steps = dev["serial"], dev["steps"]
     if action.startswith(("install ", "reboot")) and not _backup_verified(journal, serial, steps):
@@ -402,6 +449,8 @@ def _do(action, index, dev, backend, journal, settings):
     elif action == "undrain":
         from .windows import undrain
         return undrain(serial, backend, journal, settings)
+    elif action == "check service":
+        return _check_service(dev, backend, journal, settings, _key(index, action))
     elif action == "reboot" or action.startswith("reboot to activate "):
         version = backend.reboot_and_wait(serial, settings.reboot_timeout_s)
         # a rebooted member reconnects to Panorama and then runs a second auto-commit of its own; wait that out before calling it back

@@ -343,7 +343,7 @@ class TheLoadBalancerDrain(unittest.TestCase):
         actions = [s["action"] for s in plan["devices"][0]["steps"]]
         self.assertLess(actions.index("install " + TARGET), actions.index("drain"))
         self.assertLess(actions.index("drain"), actions.index("reboot"))
-        self.assertEqual(actions[-2:], ["verify", "undrain"])
+        self.assertEqual(actions[-3:], ["verify", "undrain", "check service"])
         self.assertIn("lb_drain", [c["code"] for c in plan["cautions"]])
 
     def test_nothing_is_planned_without_a_profile_and_a_pair_or_ungrouped_firewall_is_never_drained(self):

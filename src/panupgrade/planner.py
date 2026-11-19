@@ -148,6 +148,7 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
     for serial, name in selection.groups.items():
         if serial in devices:
             devices[serial]["group"] = name
+            devices[serial]["group_peers"] = sorted(s for s, other in selection.groups.items() if other == name and s != serial)
     _apply_pending(devices, ctxs, by_serial, selection, target)
     _apply_standalone(devices, ctxs, selection)
     _apply_pair_rules(devices, ctxs, by_serial, target)
@@ -486,6 +487,10 @@ def _steps(dev, settings, devices=None):
         add("verify", note="version as expected, no jobs running")
     if drained:
         add("undrain", note=f"put the interface management profile {settings.lb_drain_profile!r} back as it was, so the load balancer takes this member back")
+    if dev.get("group"):
+        add("check service", note=f"wait until this member's session table is back within {int(settings.group_session_warn_band * 100)}% of its count before it "
+                                  f"was drained (or of the other members' average), up to {settings.group_session_wait_s}s, before the next member of the group "
+                                  f"is touched; a warning if still short then, a failure if {int(settings.group_session_fail_band * 100)}% or more short")
     if hold or swaps:
         add("go live", note="release the suspension so the member can rejoin the pair")
     if role != "standalone":

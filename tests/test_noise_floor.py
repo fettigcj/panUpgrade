@@ -68,3 +68,28 @@ class InTheRunToo(InTheRun):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheBaselineLine(InTheRun):
+    def baseline(self, journal):
+        return next(e for serial in ("A1", "A2") for e in journal.steps_of(serial) if e["step"] == "baseline")
+
+    def test_a_count_below_the_floor_shows_as_a_warning_naming_the_floor(self):
+        from panupgrade import console
+        journal, _ = self.run_it(fleet_data(small(pair("A1", "A2"), 12)))
+        record = self.baseline(journal)
+        self.assertEqual((record["detail"]["below_floor"], record["detail"]["floor"]), (True, 100))
+        kind, text = console.describe_event(record, {})
+        self.assertEqual(kind, "warn")
+        self.assertIn("noise floor of 100", text)
+
+    def test_a_count_above_the_floor_stays_information(self):
+        from panupgrade import console
+        journal, _ = self.run_it(fleet_data(pair("A1", "A2")))
+        self.assertEqual(console.describe_event(self.baseline(journal), {})[0], "info")
+
+    def test_an_older_journal_with_only_a_count_still_reads(self):
+        from panupgrade import console
+        old = {"type": "step", "serial": "A1", "step": "baseline", "state": "ok", "detail": {"sessions": 0, "taken_from": "A1"}}
+        self.assertEqual(console.describe_event(old, {})[0], "warn")
+        self.assertEqual(console.describe_event(dict(old, detail={"sessions": 900, "taken_from": "A1"}), {})[0], "info")

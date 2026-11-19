@@ -172,8 +172,10 @@ def describe_event(record, names):
         return "info", f"group member's own session count before it is drained: {detail.get('sessions')}"
     if state == "ok" and detail.get("warning"):
         return "warn", f"{step}: {detail['warning']}"
-    if step == "baseline" and not detail.get("sessions"):
-        return "warn", f"session baseline is {detail.get('sessions')} (from {names.get(detail.get('taken_from'), detail.get('taken_from'))}): the session checks will be skipped"
+    if step == "baseline" and (detail.get("below_floor") or not detail.get("sessions")):        # a journal from before the floor existed has only the count
+        floor = f", below the noise floor of {detail['floor']}" if detail.get("floor") and detail.get("sessions") else ""
+        return "warn", (f"session baseline is {detail.get('sessions')}{floor} (from {names.get(detail.get('taken_from'), detail.get('taken_from'))}): "
+                        f"the session checks will be skipped")
     if step == "baseline":
         return "info", f"session baseline {detail.get('sessions')} (from {names.get(detail.get('taken_from'), detail.get('taken_from'))})"
     if state == "started":

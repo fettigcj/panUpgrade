@@ -479,5 +479,28 @@ class TheLoadBalancerDrainOnARealFirewall(unittest.TestCase):
         self.assertTrue(_profile_params("LB-Probe", "ssh", "delete", None)["xpath"].endswith("entry[@name='LB-Probe']/ssh"))
 
 
+class LongJobProgress(unittest.TestCase):
+    def job(self, status, progress="", result="OK"):
+        return ok(f"<job><status>{status}</status><result>{result}</result><progress>{progress}</progress></job>")
+
+    def test_a_running_job_is_reported_when_it_changes_and_a_failed_one_stops_the_wait(self):
+        api = Scripted({JOBQ(5): [self.job("ACT", "10"), self.job("ACT", "10"), self.job("ACT", "40"), self.job("FIN", "100", "FAIL")]})
+        b = backend(api)
+        said = []
+        b.progress = lambda serial, message: said.append((serial, message))
+        with self.assertRaises(BackendError) as caught:
+            b._wait_job("S1", "5", 3600, "content download")
+        self.assertIn("ended FAIL", str(caught.exception))
+        self.assertEqual(len(said), 2)                       # 10% once (not twice), then 40%
+        self.assertIn("ACT 10%", said[0][1])
+        self.assertIn("ACT 40%", said[1][1])
+
+    def test_a_job_that_never_finishes_times_out(self):
+        api = Scripted({JOBQ(5): [self.job("ACT", "10")] * 1000})
+        with self.assertRaises(BackendError) as caught:
+            backend(api)._wait_job("S1", "5", 60, "content install")
+        self.assertIn("did not finish within 60 s", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

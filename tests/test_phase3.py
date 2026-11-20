@@ -438,6 +438,7 @@ class ContentSyncBeforeConfigSync(unittest.TestCase):
         result = prepare.run(plan, Approval(plan["hash"], plan["serials"]), sim, self.journal(plan), s)
         self.assertEqual(result["outcome"]["A1"][0], "failed")
         self.assertNotIn("sync to peer", [c[1] for c in sim.calls])
+        self.assertEqual([c[0] for c in sim.calls if c[1] == "update content"], ["A2"])       # the pair is finished with: the active member is not tried
 
     def test_with_sync_content_never_a_difference_is_noted_and_still_gates_the_config_sync(self):
         data = self.data(self.NEW, self.OLD)

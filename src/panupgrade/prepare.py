@@ -335,6 +335,9 @@ def run(plan, approval, backend, journal, settings=None, stop=None):
         with lock:
             parts.setdefault(serial, []).append((state_, detail))
 
+    if hasattr(backend, "progress"):                    # a long firewall job (a content download or install) says how it is getting on
+        backend.progress = lambda serial, message: journal.record(serial, "job progress", "note", {"message": message})
+
     def attempt(serial, step, detail_ok, fn, record_serial=None):
         """One journaled task. Returns False if it failed or needs attention."""
         who = record_serial or serial
@@ -427,8 +430,9 @@ def run(plan, approval, backend, journal, settings=None, stop=None):
         if ok and not settled:
             for family in unit["content"]:                  # 1c. otherwise bring content level (passive first, then active)
                 for member, label in ((passive, unit["passive_name"]), (active, unit["active_name"])):
-                    ok = attempt(active, f"update {family}", f"{label}: {family} up to date",
-                                 lambda m=member, f=family: backend.update_content(m, f), record_serial=member) and ok
+                    if ok:                                  # a failed update ends this pair's work: on to the next unit, not more waiting
+                        ok = attempt(active, f"update {family}", f"{label}: {family} up to date",
+                                     lambda m=member, f=family: backend.update_content(m, f), record_serial=member)
         if ok and (unit["content"] or unit["sync_config"]):  # 2. the gate: the members must now match
             ok = attempt(active, "content check", "content versions match" if unit["content"] else "", content_match)
         if ok and unit["sync_config"]:                       # 3. only then the config sync

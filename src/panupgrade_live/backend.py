@@ -69,6 +69,7 @@ class LiveBackend(Backend):
     def __init__(self, read_api, write_api, settings, backup_dir="backups", sleep=time.sleep, clock=time.monotonic):
         self.read, self.write, self.settings = read_api, write_api, settings
         self.backup_dir, self._sleep, self._clock = Path(backup_dir), sleep, clock
+        self.progress = None        # optional callable(serial, message): told how a long job is getting on (set by whoever runs the work)
 
     # ---- plumbing
 
@@ -105,13 +106,20 @@ class LiveBackend(Backend):
         raise BackendError(f"no job id in the reply: {ET.tostring(root, encoding='unicode')[:200]}")
 
     def _wait_job(self, serial, job, timeout_s, label):
-        deadline = self._clock() + timeout_s
+        start = self._clock()
+        deadline, last = start + timeout_s, None
         while True:
             try:
                 reply = self.read.op_xml(f"<show><jobs><id>{job}</id></jobs></show>", target=serial)
             except SourceError as exc:
                 raise BackendError(f"{serial}: lost contact while waiting for {label}: {exc}") from None
             node = reply.find(".//job")
+            if node is not None and self.progress is not None:
+                seen = (node.findtext("status") or "", node.findtext("result") or "", node.findtext("progress") or "")
+                if seen != last and seen[0] != "FIN":          # said when it changes; a finished job is reported by the step itself
+                    last = seen
+                    pct = f" {seen[2]}%" if seen[2].isdigit() else (f" {seen[2]}" if seen[2] else "")
+                    self.progress(serial, f"{label}: job {job} {seen[0] or 'status unknown'}{pct} (running for {int(self._clock() - start)}s of at most {timeout_s}s)")
             if node is not None and (node.findtext("status") or "") == "FIN":
                 if (node.findtext("result") or "") != "OK":
                     detail = " ".join(" ".join((l.text or "").split()) for l in node.iter("line"))

@@ -2497,5 +2497,20 @@ class Jobs(unittest.TestCase):
         self.assertIsNone(getattr(progress._local, "callback", None))
 
 
+class TheEventLines(ShellCase):
+    def test_a_note_shows_its_message_and_the_header_shows_a_job_progress_note(self):
+        ui = self.make()
+        ui.goto("prepare")
+        screen = ui.screen
+        unit = [{"serial": "A1", "hostname": "fw-one"}]
+        rec = {"type": "step", "serial": "A1", "step": "job progress", "state": "note", "detail": {"message": "content download: job 7 ACT 40% (running for 310s of at most 3600s)"}}
+        self.assertIn("ACT 40%", screen.event_line(unit, 0, rec)[1])
+        screen.unit_events = lambda u: [(0, dict(rec, step="download", state="started")), (1, rec)]
+        screen.unit_finished = lambda u, e: False
+        state, words = screen.unit_state(unit)
+        self.assertEqual(state, "running")
+        self.assertIn("ACT 40%", words)
+
+
 if __name__ == "__main__":
     unittest.main()

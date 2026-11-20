@@ -1200,6 +1200,9 @@ class UnitView:
         if final:
             return "stopped", "stopped before it finished"
         _when, rec = events[-1]
+        message = (rec.get("detail") or {}).get("message")
+        if rec["state"] == "note" and message:                   # a long job saying how it is getting on: that is what it is doing now
+            return "running", f"{self._name(unit, rec)}: {message}"
         return "running", f"{self._name(unit, rec)}: {self.step_name(rec)}"
 
     @staticmethod
@@ -1214,6 +1217,8 @@ class UnitView:
         text = f"{clock(when)}  {self._name(unit, rec).ljust(14)} {self.step_name(rec)}  {words}"
         if rec["state"] == "failed":
             text += f": {detail.get('error', '')}"
+        elif rec["state"] == "note" and detail.get("message"):
+            text += f": {detail['message']}"
         elif extra:
             text += f"  {extra}"
         return ("error" if rec["state"] == "failed" else "dim" if rec["state"] == "started" else ""), text

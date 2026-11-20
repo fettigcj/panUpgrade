@@ -196,7 +196,7 @@ def to_text(plan, verbose=False):
     for heading, devs in grouped_devices(plan):
         lines += ["", f"{heading} ({len(devs)})"]
         for dev in devs:
-            lines.append(f"  {dev['hostname']} ({dev['serial']}) ({role(dev)}) {dev['current_version']} -> {plan['target']}"
+            lines.append(f"  {dev['hostname']} ({dev['model']} {dev['serial']} {role(dev)}) {dev['current_version']} -> {plan['target']}"
                          f"{' / ' + dev['skip_kind'].replace('_', ' ') if dev['skip_kind'] else ''}")
             shown, note = findings(dev, verbose)
             for r in shown:

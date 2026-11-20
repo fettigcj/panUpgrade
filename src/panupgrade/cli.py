@@ -849,7 +849,7 @@ def _upgrade_execute(args, style, bundle, approve=None):
         ready = bundle.ready()
         approval = _interactive_approval(
             style, plan["hash"], [d["serial"] for d in ready], bundle.acks(),
-            [f"{d['hostname']} ({d['serial']}) ({d.get('ha_state') or 'standalone'}) {d['current_version']} -> {plan['target']}" for d in ready], args.journal,
+            [f"{d['hostname']} ({d['model']} {d['serial']} {d.get('ha_state') or 'standalone'}) {d['current_version']} -> {plan['target']}" for d in ready], args.journal,
             [f"[{c['code']}] {c['scope']}: {c['text']}" for c in plan["cautions"]])
         if approval is None:
             print("No approval given. Run `panupgrade prepare` first (it writes the approval and a run script), "

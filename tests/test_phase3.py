@@ -846,7 +846,7 @@ class SelectCommandAndDryRun(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("not planned - not in the selection (2)", out.lower())
         self.assertIn("b1 (b1) sim-a 20.2.9", out.lower())
-        self.assertIn("a1 (a1) (active) 20.2.3 -> 20.2.9", out.lower())
+        self.assertIn("a1 (sim-a a1 active) 20.2.3 -> 20.2.9", out.lower())
         written = list((self.dir / "reports").glob("PanUpgrade_Plan_*"))       # the plan leaves its own record: HTML, text and Excel
         self.assertEqual(sorted(p.suffix for p in written), [".html", ".txt", ".xlsx"])
         for plan_file in written:

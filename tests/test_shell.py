@@ -33,9 +33,9 @@ class FakeUpgrade:
     def __init__(self, ready=("A2", "A1"), blocked=(), previous=None, label="LIVE"):
         names = {"A1": "fw-one", "A2": "fw-two", "B1": "fw-three", "B2": "fw-four"}
         steps = [{"action": "backup", "traffic": "none", "note": ""}, {"action": "install 10.2.3", "traffic": "none", "note": ""}]
-        devices = [{"serial": x, "hostname": names[x], "ha_state": "active" if x == "A1" else "passive", "current_version": "10.2.1", "verdict": "ready",
+        devices = [{"serial": x, "hostname": names[x], "ha_state": "active" if x == "A1" else "passive", "model": "PA-VM", "current_version": "10.2.1", "verdict": "ready",
                     "steps": steps} for x in ready]
-        devices += [{"serial": x, "hostname": names[x], "ha_state": "", "current_version": "10.2.1", "verdict": "blocked"} for x in blocked]
+        devices += [{"serial": x, "hostname": names[x], "ha_state": "", "model": "PA-VM", "current_version": "10.2.1", "verdict": "blocked"} for x in blocked]
         self.plan = {"hash": "cd" * 32, "target": "10.2.3", "devices": devices, "settings": {"max_parallel": 5},
                      "summary": {"ready": len(ready), "caution": 0, "blocked": len(blocked), "skipped": 0, "outage_steps": 0, "failover_steps": 1},
                      "order": ([[x for x in ready if x.startswith("A")]] + [[x] for x in ready if not x.startswith("A")]) if ready else [],
@@ -1344,7 +1344,7 @@ class TheUpgradeScreen(ShellCase):
         ui = self.at_review()
         ui.press("enter")
         text = self.text(ui, 120, 40)
-        for needle in ("approve exactly this", "LIVE: this changes real firewalls", "fw-one (A1) (active) 10.2.1 -> 10.2.3", "fw-two (A2) (passive)",
+        for needle in ("approve exactly this", "LIVE: this changes real firewalls", "fw-one (PA-VM A1 active) 10.2.1 -> 10.2.3", "fw-two (PA-VM A2 passive)",
                        "1 HA failover(s)", "1. fw-two then fw-one", "units run at the same time", "Cautions that approving acknowledges", "[failover_band] fw-one: sessions may move",
                        "Type APPROVE to go ahead"):
             self.assertIn(needle, text)

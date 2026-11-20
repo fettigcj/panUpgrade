@@ -132,7 +132,7 @@ def render_plan(plan, style, verbose=False):
     for heading, devs in report.grouped_devices(plan):
         out += ["", style.paint(f"{heading} ({len(devs)})", {"blocked": "1;91", "caution": "1;33"}.get(devs[0]["verdict"], "1"))]
         for dev in devs:
-            head = f"{dev['hostname']} ({dev['serial']}) ({report.role(dev)}) {dev['current_version']} -> {plan['target']}"
+            head = f"{dev['hostname']} ({dev['model']} {dev['serial']} {report.role(dev)}) {dev['current_version']} -> {plan['target']}"
             head += f"  / {dev['skip_kind'].replace('_', ' ')}" if dev["skip_kind"] else ""
             out.append(style.line(VERDICT_GLYPH[dev["verdict"]], style.bold(head), 2))
             shown, note = report.findings(dev, verbose)

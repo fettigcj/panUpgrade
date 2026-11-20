@@ -1436,7 +1436,7 @@ class UpgradeScreen(UnitView, ChangeScreen):
         out = ["Approval needed. You are being asked to approve exactly this:"]
         if bundle.label == "LIVE":
             out.append("LIVE: this changes real firewalls. Each member is rebooted; an HA pair fails over, " + ("active member first." if plan["settings"].get("upgrade_first") == "active" else "passive member first."))
-        out += [""] + [f"  {d['hostname']} ({d['serial']}) ({d['ha_state'] or 'standalone'}) {d['current_version']} -> {plan['target']}" for d in ready]
+        out += [""] + [f"  {d['hostname']} ({d['model']} {d['serial']} {d['ha_state'] or 'standalone'}) {d['current_version']} -> {plan['target']}" for d in ready]
         s = plan["summary"]
         out += ["", f"  {s['outage_steps']} outage step(s) and {s['failover_steps']} HA failover(s)."]
         out.append(f"  Each unit is worked in series; up to {plan['settings']['max_parallel']} units run at the same time.")

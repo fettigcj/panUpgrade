@@ -151,6 +151,11 @@ def _wrap(text, indent, width=100):
     return textwrap.fill(text, width=width, initial_indent=" " * indent, subsequent_indent=" " * (indent + 4))
 
 
+def role(dev):
+    """The firewall's HA role for its label row: active, passive, suspended... or standalone."""
+    return dev.get("ha_state") or "standalone"
+
+
 def device_rows(devices, indent):
     """Firewalls in aligned columns: serial, hostname, PAN-OS version."""
     widths = [max(len(d[k]) for d in devices) for k in ("serial", "hostname")]
@@ -191,7 +196,7 @@ def to_text(plan, verbose=False):
     for heading, devs in grouped_devices(plan):
         lines += ["", f"{heading} ({len(devs)})"]
         for dev in devs:
-            lines.append(f"  {dev['hostname']} ({dev['serial']}) {dev['model']} {dev['current_version']} -> {plan['target']}"
+            lines.append(f"  {dev['hostname']} ({dev['serial']}) ({role(dev)}) {dev['current_version']} -> {plan['target']}"
                          f"{' / ' + dev['skip_kind'].replace('_', ' ') if dev['skip_kind'] else ''}")
             shown, note = findings(dev, verbose)
             for r in shown:

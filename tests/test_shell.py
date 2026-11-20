@@ -1344,7 +1344,7 @@ class TheUpgradeScreen(ShellCase):
         ui = self.at_review()
         ui.press("enter")
         text = self.text(ui, 120, 40)
-        for needle in ("approve exactly this", "LIVE: this changes real firewalls", "fw-one (A1) active  10.2.1 -> 10.2.3", "fw-two (A2) passive",
+        for needle in ("approve exactly this", "LIVE: this changes real firewalls", "fw-one (A1) (active) 10.2.1 -> 10.2.3", "fw-two (A2) (passive)",
                        "1 HA failover(s)", "1. fw-two then fw-one", "units run at the same time", "Cautions that approving acknowledges", "[failover_band] fw-one: sessions may move",
                        "Type APPROVE to go ahead"):
             self.assertIn(needle, text)

@@ -926,6 +926,7 @@ class ChangeScreen(Screen):
             self.stage, self.note = "review", "That plan is now too old to approve. Read it again."
             return
         args, approve = self.args, self.approver()
+        self.shell.stops.append(bundle.stop)
         self.prepare_run_args(args)
         self.stage, self.note, self.offset, self.lines = "running", "", 0, []
         execute = getattr(self.shell, f"{self.verb}_execute")
@@ -1714,6 +1715,7 @@ class Shell:
         self.upgrade_execute = upgrade_execute or self._upgrade_execute
         self.message, self.note, self._armed, self.after_sign_in = "", "", None, None
         self._quit_armed, self._quit_key, self._pressed = False, "", ""
+        self.stops = []                                      # the stop switch of every real run started here: quitting throws them all
         self.jobs = []
         self.screens = {
             "home": HomeScreen(self),
@@ -1799,19 +1801,31 @@ class Shell:
 
     def _may_leave(self, how):
         """The way out from anywhere, but not by accident while firewalls are being changed: ask once, then do it on the same key again."""
-        if not self.changing():
+        if not self.changing() and how != "ctrl-c":
             return True
         if self._quit_armed == how:
-            return True
+            return self._quit()
         self._quit_armed, self._quit_key = how, self._pressed
+        if not self.changing():
+            self.message = "Quit panupgrade? Press Ctrl-C again or Y to quit, any other key to stay."
+            return False
         what = " and ".join(job.title.split(" (")[0] for job in self.changing())
-        self.message = (f"{what} is changing firewalls. Quitting now leaves a step unfinished (it is recorded; --resume continues it). "
-                        "Press the same key again to quit anyway.")
+        self.message = (f"QUIT? {what} is changing firewalls. Quitting starts nothing new and lets the steps in progress finish first (the window may "
+                        "look blank meanwhile); what was not reached is continued later with --resume. Press Ctrl-C again or Y to quit, any other key to stay.")
         return False
 
+    def _quit(self):
+        """Quitting must not leave the rest of a run going on its own: every run is told to start nothing new."""
+        for stop in self.stops:
+            stop.set()
+        return True
+
     def press(self, key):
+        confirming = self._quit_armed == "ctrl-c"
         self.message = ""
         self._pressed = key
+        if confirming and key in ("y", "Y"):
+            return "cancel" if self._quit() else None
         if key != self._quit_key:
             self._quit_armed = False                         # any other key withdraws the question
         if key == "ctrl-c":                                  # the way out from anywhere, even from a screen with unsaved changes

@@ -308,7 +308,19 @@ class LeavingWithCtrlC(ShellCase):
         for name in ("home", "report", "settings", "auth"):
             ui = self.make()
             ui.goto(name)
+            self.assertIsNone(ui.press("ctrl-c"), name)                       # it asks first
+            self.assertIn("Quit panupgrade?", ui.message)
             self.assertEqual(ui.press("ctrl-c"), "cancel", name)
+
+    def test_y_confirms_and_any_other_key_stays(self):
+        ui = self.make()
+        self.assertIsNone(ui.press("ctrl-c"))
+        self.assertEqual(ui.press("y"), "cancel")
+        ui = self.make()
+        self.assertIsNone(ui.press("ctrl-c"))
+        ui.press("n")
+        self.assertIsNone(ui.press("ctrl-c"))                                  # asks again
+        self.assertIsNone(ui.press("n"))
 
 
 class Hotkeys(ShellCase):
@@ -1225,7 +1237,20 @@ class ThePrepareScreen(ShellCase):
         ui.press("down")
         self.assertIsNone(ui.press("ctrl-c"))                     # asks again
         gate.set(); wait(ui)
-        self.assertEqual(ui.press("ctrl-c"), "cancel")            # nothing is changing any more
+        ui.press("down")
+        self.assertIsNone(ui.press("ctrl-c"))                     # nothing is changing any more: the plain question
+        self.assertIn("Quit panupgrade?", ui.message)
+        self.assertEqual(ui.press("ctrl-c"), "cancel")
+
+    def test_quitting_tells_every_run_to_start_nothing_new(self):
+        gate = threading.Event()
+        ui = self.at_review(execute=lambda a, b, c: gate.wait(3) and 0)
+        self.approve(ui)
+        self.assertTrue(ui.stops and not any(s.is_set() for s in ui.stops))
+        ui.press("ctrl-c")
+        self.assertEqual(ui.press("y"), "cancel")
+        self.assertTrue(all(s.is_set() for s in ui.stops))
+        gate.set(); wait(ui)
 
     def test_leaving_while_it_runs_is_safe_the_job_is_listed_and_it_finishes_on_its_own(self):
         gate = threading.Event()

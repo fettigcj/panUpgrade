@@ -190,7 +190,9 @@ RETIRED = {"failover_band": "pair_session_warn_band, pair_session_fail_band and 
            "post_upgrade_band": "pair_session_warn_band, pair_session_fail_band and pair_session_wait_s"}
 
 
-def from_dict(data):
+def from_dict(data, ignored=None, forgiven=()):
+    """``forgiven``: names that came out of a settings file. One of those that is not a setting (a typo, a hand edit, a flag from another version)
+    is left out and its name added to ``ignored``, never an error; a name typed on the command line that is not a setting still is one."""
     known = {f.name: f.type for f in fields(Settings)}
     kwargs = {}
     for name, value in data.items():
@@ -200,6 +202,9 @@ def from_dict(data):
         if name in RETIRED:
             raise SettingsError(f"{name} was replaced by {RETIRED[name]}: a warning band, a failure band and how long to wait (see `panupgrade settings`)")
         if name not in known:
+            if name in forgiven and ignored is not None:
+                ignored.append(name)
+                continue
             raise SettingsError(f"unknown setting {name!r}")
         kwargs[name] = _coerce(name, value, known[name])
     settings = Settings(**kwargs)
@@ -233,17 +238,19 @@ def from_dict(data):
     return settings
 
 
-def load(path=None, overrides=None):
+def load(path=None, overrides=None, ignored=None):
+    """``ignored``: a list that gets the name of every unrecognized flag in the file (which are skipped, not refused); see ``from_dict``."""
     data = {}
     if path:
         with open(path, "rb") as handle:
             data = tomllib.load(handle)
+    in_file = set(data)
     for item in overrides or []:
         if "=" not in item:
             raise SettingsError(f"--set expects name=value, got {item!r}")
         name, raw = item.split("=", 1)
         data[name.strip()] = _parse_override(name.strip(), raw.strip())
-    return from_dict(data)
+    return from_dict(data, ignored if ignored is not None else [], in_file - {item.split('=', 1)[0].strip() for item in overrides or [] if '=' in item})
 
 
 def _parse_override(name, raw):

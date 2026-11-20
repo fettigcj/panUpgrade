@@ -256,7 +256,8 @@ def _load_settings(args):
     found = ""
     if not args.settings and _ws(args, DEFAULT_SETTINGS).is_file():
         args.settings, found = str(_ws(args, DEFAULT_SETTINGS).resolve()), f" ({_found_in(args)})"     # the kit script then pins this exact file
-    settings = settings_mod.load(args.settings, args.set)
+    ignored = []
+    settings = settings_mod.load(args.settings, args.set, ignored)
     if _profile(args) and not os.path.isabs(settings.backup_dir):
         settings.backup_dir = str(_profile(args).path(settings.backup_dir))       # backups belong with the Panorama they came from
     if ("settings", args.settings) not in _SAID:
@@ -265,6 +266,8 @@ def _load_settings(args):
         origin = f"settings file {_tilde(args.settings)}{found}" if args.settings else "built-in default settings (no settings file given)"
         extra = f", with {len(args.set)} changed on the command line" if args.set else ""
         print(style.line("info", f"Using {origin}{extra}"))
+        for name in ignored:
+            print(style.line("warn", f"unrecognized flag {name!r} in the settings file is being ignored"))
     return settings
 
 
@@ -1112,8 +1115,10 @@ def _settings_form(args):
     from . import settingsform
     target = args.settings or str(_ws(args, DEFAULT_SETTINGS))
     file = args.settings or (target if Path(target).is_file() else None)
-    on_disk, current = settings_mod.load(file), settings_mod.load(file, args.set)
+    ignored = []
+    on_disk, current = settings_mod.load(file, None, ignored), settings_mod.load(file, args.set)
     notice = (f"Editing {_tilde(Path(target).resolve())}. Saving rewrites it with only the settings that differ from the defaults; comments are not kept."
+              + (f" Unrecognized flag{'s' if len(ignored) != 1 else ''} in the file, being ignored and removed by saving: {', '.join(ignored)}." if ignored else "")
               if Path(target).is_file() else
               f"No settings file yet: this starts from the built-in defaults and saves to {_tilde(Path(target).resolve())}.")
 

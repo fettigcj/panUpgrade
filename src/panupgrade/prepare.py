@@ -228,8 +228,16 @@ def build(source, settings, selection, target=None, rules=None):
     content_tasks = [t for t in content_tasks if t["serial"] not in in_units]        # a pair's own content step already covers its members
     serials = sorted({u["active"] for u in units} | {d["serial"] for d in downloads} | {t["serial"] for t in content_tasks}
                      | {d["serial"] for d in deletions})
+    worked = set(serials) | {s for u in units for s in (u["active"], u["passive"])}
+    pairs = {}                  # for the screen only: every firewall prepare touches that has an HA peer -> (peer serial, peer name), so a pair is always shown as one
+    for serial in worked:
+        ref = refs.get(serial)
+        peer = ref.peer_serial if ref is not None else None
+        if peer and peer in refs:
+            pairs[serial] = [peer, refs[peer].hostname]
+            pairs.setdefault(peer, [serial, ref.hostname])
     plan = {"kind": "prepare", "target": target, "mode": "nothing changed until an approved `prepare` run",
-            "units": units, "downloads": downloads, "deletions": deletions, "content_tasks": content_tasks, "serials": serials, "skipped": skipped, "notes": notes,
+            "pairs": pairs, "units": units, "downloads": downloads, "deletions": deletions, "content_tasks": content_tasks, "serials": serials, "skipped": skipped, "notes": notes,
             "content_report": content_report}
     plan["hash"] = hashlib.sha256(json.dumps({"units": units, "downloads": downloads, "deletions": deletions, "content_tasks": content_tasks, "target": target},
                                              sort_keys=True).encode()).hexdigest()
@@ -237,9 +245,10 @@ def build(source, settings, selection, target=None, rules=None):
 
 
 def work_groups(plan):
-    """What the screen sorts a run into: one entry per HA pair (its two members) or standalone firewall, each member a dict with its
-    serial, hostname and the (journal) step names this prepare will finish for it. The same grouping the run itself works in."""
+    """What the screen sorts a run into: one entry per HA pair (always both members, even when only one of them has work) or stand-alone
+    firewall, each member a dict with its serial, hostname and the (journal) step names this prepare will finish for it."""
     groups = {}
+    pairs = plan.get("pairs") or {}
 
     def member(key, serial, hostname):
         group = groups.setdefault(key, {})
@@ -250,6 +259,8 @@ def work_groups(plan):
         member(key, unit["passive"], unit["passive_name"])
         member(key, unit["active"], unit["active_name"])["expected"].append("sync to peer" if unit["sync_config"] else "content check")
     partner = {s: frozenset({u["active"], u["passive"]}) for u in plan["units"] for s in (u["active"], u["passive"])}
+    for serial, (peer, _name) in pairs.items():
+        partner.setdefault(serial, frozenset({serial, peer}))
     for task in plan.get("content_tasks", []):
         member(partner.get(task["serial"], frozenset({task["serial"]})), task["serial"], task["hostname"])["expected"].append(
             "update content (minimum for the target)")
@@ -257,6 +268,10 @@ def work_groups(plan):
         member(partner.get(task["serial"], frozenset({task["serial"]})), task["serial"], task["hostname"])["expected"].append(f"delete image {task['version']}")
     for task in plan["downloads"]:
         member(partner.get(task["serial"], frozenset({task["serial"]})), task["serial"], task["hostname"])["expected"].append(f"download {task['version']}")
+    for serial, (peer, peer_name) in pairs.items():           # the other member of a pair is listed too, even when all the work is on one of them
+        group = groups.get(partner[serial])
+        if group is not None:
+            group.setdefault(peer, {"serial": peer, "hostname": peer_name, "expected": []})
     return [list(group.values()) for group in groups.values()]
 
 

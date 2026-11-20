@@ -31,7 +31,7 @@ SECTIONS = [
     ("Panorama range", ["spread_limit", "panorama_compare"]),
     ("Failure handling", ["max_failures", "max_parallel", "api_rate_per_s", "pending_changes"]),
     ("Downgrades", ["allow_downgrade"]),
-    ("Images, disk and time", ["image_source", "delete_unneeded_images", "min_free_disk_mb", "download_timeout_s", "install_timeout_s", "reboot_timeout_s",
+    ("Images, disk and time", ["image_source", "delete_unneeded_images", "min_free_disk_mb", "download_timeout_s", "job_stall_s", "install_timeout_s", "reboot_timeout_s",
                                "poll_interval_s", "backup_dir", "approval_max_age_hours"]),
 ]
 # name -> (what it does, {choice or "true"/"false": what that value means})
@@ -178,6 +178,11 @@ INFO = {
                                 "false": "the default. Never delete an image"}),
     "min_free_disk_mb": ("Free disk space a firewall needs before an image is downloaded, in MB.", {}),
     "download_timeout_s": ("How long to wait for an image download, in seconds.", {}),
+    "job_stall_s": ("How long a download may show no progress at all (neither its status nor its percentage changes) before the tool gives up on it and "
+                    "moves on to the next firewall. Half-way to the limit the log says so. A job the firewall has queued behind others is not counted, and "
+                    "installs are not judged this way (an install can sit on one percentage for minutes): they have install_timeout_s. The job is not "
+                    "cancelled on the firewall. On a slow link 1% of an image can take a while: raise it there. 0 turns the check off, leaving only "
+                    "download_timeout_s.", {}),
     "install_timeout_s": ("How long to wait for an install, in seconds.", {}),
     "reboot_timeout_s": ("How long to wait for a firewall to come back after a reboot, in seconds (default 1920, 32 minutes). A reboot usually takes about 11 minutes; "
                          "the slowest seen, on an under-powered lab machine, took just over 30.", {}),
@@ -189,7 +194,7 @@ LIMITS = {
     "pair_session_warn_band": "a number above 0 and up to 1", "pair_session_fail_band": "a number above 0 and up to 1", "pair_session_wait_s": "whole seconds, 0 or more", "session_noise_floor": "whole sessions, 0 or more",
     "api_rate_per_s": "a number above 0", "spread_limit": "a whole number, 1 or more", "max_failures": "a whole number, 1 or more",
     "max_parallel": "a whole number, 1 or more", "sync_timeout_s": "whole seconds, 1 or more", "busy_wait_s": "whole seconds, 1 or more",
-    "poll_interval_s": "whole seconds, 1 or more", "lb_drain_wait_s": "whole seconds, 0 or more",
+    "poll_interval_s": "whole seconds, 1 or more", "job_stall_s": "whole seconds, 0 or more", "lb_drain_wait_s": "whole seconds, 0 or more",
     "group_session_warn_band": "a number above 0 and up to 1", "group_session_fail_band": "a number above 0 and up to 1", "group_session_wait_s": "whole seconds, 0 or more", "group_reboot_tolerance": "a whole number, 1 or more", "content_settle_s": "whole seconds, 0 or more",
     "settle_after_failover_s": "whole seconds, 0 or more", "settle_after_reboot_s": "whole seconds, 0 or more",
 }

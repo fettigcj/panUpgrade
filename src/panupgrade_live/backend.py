@@ -105,21 +105,28 @@ class LiveBackend(Backend):
                 return m.group(1)
         raise BackendError(f"no job id in the reply: {ET.tostring(root, encoding='unicode')[:200]}")
 
-    def _wait_job(self, serial, job, timeout_s, label):
+    def _wait_job(self, serial, job, timeout_s, label, stall_s=0):
+        """Wait for a firewall job to finish. ``stall_s`` (downloads only): give up when neither the status nor the percentage has moved for that long
+        (a job queued behind others is not stalled, it is waiting); half-way there the log says so."""
         start = self._clock()
         deadline, last = start + timeout_s, None
+        moved, warned = start, False
         while True:
             try:
                 reply = self.read.op_xml(f"<show><jobs><id>{job}</id></jobs></show>", target=serial)
             except SourceError as exc:
                 raise BackendError(f"{serial}: lost contact while waiting for {label}: {exc}") from None
             node = reply.find(".//job")
-            if node is not None and self.progress is not None:
+            if node is not None:
                 seen = (node.findtext("status") or "", node.findtext("result") or "", node.findtext("progress") or "")
-                if seen != last and seen[0] != "FIN":          # said when it changes; a finished job is reported by the step itself
+                if seen != last:
+                    moved, warned = self._clock(), False
+                    if self.progress is not None and seen[0] != "FIN":         # said when it changes; a finished job is reported by the step itself
+                        pct = f" {seen[2]}%" if seen[2].isdigit() else (f" {seen[2]}" if seen[2] else "")
+                        self.progress(serial, f"{label}: job {job} {seen[0] or 'status unknown'}{pct} (running for {int(self._clock() - start)}s of at most {timeout_s}s)")
                     last = seen
-                    pct = f" {seen[2]}%" if seen[2].isdigit() else (f" {seen[2]}" if seen[2] else "")
-                    self.progress(serial, f"{label}: job {job} {seen[0] or 'status unknown'}{pct} (running for {int(self._clock() - start)}s of at most {timeout_s}s)")
+                if (node.findtext("queued") or "").strip().upper() == "YES":
+                    moved = self._clock()                                      # waiting its turn behind other jobs is not a stall
             if node is not None and (node.findtext("status") or "") == "FIN":
                 if (node.findtext("result") or "") != "OK":
                     detail = " ".join(" ".join((l.text or "").split()) for l in node.iter("line"))
@@ -127,6 +134,15 @@ class LiveBackend(Backend):
                 return
             if self._clock() > deadline:
                 raise BackendError(f"{serial}: {label} job {job} did not finish within {timeout_s} s")
+            if stall_s and node is not None:
+                still = int(self._clock() - moved)
+                at = f"{node.findtext('status') or '?'}{' ' + node.findtext('progress') + '%' if (node.findtext('progress') or '').isdigit() else ''}"
+                if still >= stall_s:
+                    raise BackendError(f"{serial}: {label} job {job} made no progress for {still}s (stuck at {at}), so it was given up on "
+                                       f"(setting job_stall_s = {stall_s}). The job may still be running on the firewall; look with `show jobs id {job}`")
+                if still * 2 >= stall_s and not warned and self.progress is not None:
+                    warned = True
+                    self.progress(serial, f"{label}: job {job} has made no progress for {still}s (at {at}); it is given up on at {stall_s}s")
             self._sleep(self.settings.poll_interval_s)
 
     def _wait_until(self, serial, test, timeout_s, what):
@@ -196,7 +212,7 @@ class LiveBackend(Backend):
         else:
             raise BackendError(f"{serial}: {version} is not offered by the update server (it may not exist, or support is missing)")
         job = self._job_id(self._send(_version_xml("download", version), serial))
-        self._wait_job(serial, job, self.settings.download_timeout_s, f"download {version}")
+        self._wait_job(serial, job, self.settings.download_timeout_s, f"download {version}", self.settings.job_stall_s)
 
     def delete_image(self, serial, version):
         """Remove one downloaded image. Refused for the image that is running or flagged current; checked afterwards, never assumed."""
@@ -274,7 +290,7 @@ class LiveBackend(Backend):
         if self.content_versions(serial).get(key) == latest:
             return {"already_current": latest}
         job = self._job_id(self._send(f"<request><{root}><upgrade><download><latest/></download></upgrade></{root}></request>", serial))
-        self._wait_job(serial, job, self.settings.download_timeout_s, f"{family} download")
+        self._wait_job(serial, job, self.settings.download_timeout_s, f"{family} download", self.settings.job_stall_s)
         job = self._job_id(self._send(f"<request><{root}><upgrade><install><version>latest</version></install></upgrade></{root}></request>", serial))
         self._wait_job(serial, job, self.settings.install_timeout_s, f"{family} install")
         return {"installed": latest}

@@ -431,6 +431,19 @@ class ContentSyncBeforeConfigSync(unittest.TestCase):
         self.assertNotIn("sync to peer", [c[1] for c in sim.calls])            # never even tried
         self.assertFalse(sim.nodes["A2"].config_synced)
 
+    def test_a_pair_is_always_one_entry_in_the_screen_list_even_with_work_on_one_member_only(self):
+        d = pair("A1", "A2", ha_config_sync=True) + [device("S1")]
+        for x in d[:2]:
+            x["facts"]["content_versions"] = dict(self.OLD)
+        d[1]["facts"]["images_downloaded"] = [TARGET]                  # only A1 has anything to download: no content or config work for the pair
+        plan = prepare.build(FakeFleet(fleet_data(d)), settings.load(None, ["content_settle_s=0"]), Selection(accept_standalone_outage=True), TARGET, TEST_RULES)
+        self.assertEqual(plan["units"], [])
+        self.assertEqual([x["serial"] for x in plan["downloads"]], ["A1", "S1"])
+        groups = [sorted(m["serial"] for m in g) for g in prepare.work_groups(plan)]
+        self.assertIn(["A1", "A2"], groups)
+        self.assertIn(["S1"], groups)
+        self.assertEqual(len(groups), 2)
+
     def test_a_passive_member_worked_through_the_pair_is_in_the_outcome(self):
         data = self.data(self.NEW, self.OLD)
         for d in data["devices"]:

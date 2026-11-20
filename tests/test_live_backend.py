@@ -502,5 +502,39 @@ class LongJobProgress(unittest.TestCase):
         self.assertIn("did not finish within 60 s", str(caught.exception))
 
 
+class StalledJobs(unittest.TestCase):
+    def job(self, status="ACT", progress="19", queued="NO"):
+        return ok(f"<job><status>{status}</status><result>PEND</result><queued>{queued}</queued><progress>{progress}</progress></job>")
+
+    def wait(self, replies, stall=180, **opts):
+        b = backend(Scripted({JOBQ(5): replies}), **opts)
+        said = []
+        b.progress = lambda serial, message: said.append(message)
+        try:
+            b._wait_job("S1", "5", 1800, "download 11.1.13-h16", stall)
+            return None, said
+        except BackendError as exc:
+            return str(exc), said
+
+    def test_a_download_stuck_on_one_percentage_is_given_up_on_with_a_warning_halfway(self):
+        error, said = self.wait([self.job()] * 1000)
+        self.assertIn("no progress for 180s", error)
+        self.assertIn("stuck at ACT 19%", error)
+        self.assertIn("job_stall_s", error)
+        self.assertEqual(len([m for m in said if "no progress" in m]), 1)            # the notice at half the limit, once
+
+    def test_a_download_that_creeps_forward_is_never_given_up_on(self):
+        error, _ = self.wait([self.job(progress=str(n // 8 + 1)) for n in range(40)] + [ok("<job><status>FIN</status><result>OK</result></job>")])
+        self.assertIsNone(error)                                                     # 8 polls (120 s) per percent
+
+    def test_a_job_queued_behind_others_is_waiting_not_stalled(self):
+        error, _ = self.wait([self.job(progress="0", queued="YES")] * 30 + [ok("<job><status>FIN</status><result>OK</result></job>")])
+        self.assertIsNone(error)
+
+    def test_zero_turns_the_check_off(self):
+        error, _ = self.wait([self.job()] * 1000, stall=0)
+        self.assertIn("did not finish within 1800 s", error)
+
+
 if __name__ == "__main__":
     unittest.main()

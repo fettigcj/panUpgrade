@@ -121,7 +121,7 @@ class Settings:
     min_free_disk_mb: int = 4096
     download_timeout_s: int = 1800
     install_timeout_s: int = 1800
-    job_stall_s: int = 180             # a download whose status and percentage have not moved for this long is given up on (0 = never; a queued job is exempt)
+    job_stall_s: int = 300             # a download whose status and percentage have not moved for this long is given up on (0 = never; a queued job is exempt)
     reboot_timeout_s: int = 1920
     poll_interval_s: int = 15          # how often a long job or a rebooting firewall is checked
     backup_dir: str = "backups"        # where verified config backups are written

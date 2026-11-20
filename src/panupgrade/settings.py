@@ -119,8 +119,8 @@ class Settings:
     delete_unneeded_images: bool = False
     # Placeholders, conservative; tune them from your own first-batch evidence
     min_free_disk_mb: int = 4096
-    download_timeout_s: int = 3600
-    install_timeout_s: int = 3600
+    download_timeout_s: int = 1800
+    install_timeout_s: int = 1800
     reboot_timeout_s: int = 1920
     poll_interval_s: int = 15          # how often a long job or a rebooting firewall is checked
     backup_dir: str = "backups"        # where verified config backups are written

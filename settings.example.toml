@@ -36,8 +36,8 @@ allow_downgrade                = false   # install a release older than the one 
 # ---- Images, disk, time --------------------------------------------------------------------------------------
 image_source       = "firewall"  # who downloads the image: firewall (from the vendor) | panorama
 min_free_disk_mb   = 4096
-download_timeout_s = 3600
-install_timeout_s  = 3600
+download_timeout_s = 1800
+install_timeout_s  = 1800
 reboot_timeout_s   = 1920
 poll_interval_s    = 15          # how often a running job or a rebooting firewall is checked
 backup_dir         = "backups"   # verified config backups are written here before anything changes

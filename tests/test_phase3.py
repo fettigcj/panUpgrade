@@ -431,6 +431,16 @@ class ContentSyncBeforeConfigSync(unittest.TestCase):
         self.assertNotIn("sync to peer", [c[1] for c in sim.calls])            # never even tried
         self.assertFalse(sim.nodes["A2"].config_synced)
 
+    def test_a_passive_member_worked_through_the_pair_is_in_the_outcome(self):
+        data = self.data(self.NEW, self.OLD)
+        for d in data["devices"]:
+            d["facts"]["images_downloaded"] = [TARGET]                 # nothing to download: the passive member has no task of its own
+        plan, s = self.build(data)
+        self.assertEqual(plan["serials"], ["A1"])
+        result = prepare.run(plan, Approval(plan["hash"], plan["serials"]), SimBackend(data), self.journal(plan), s)
+        self.assertEqual(sorted(result["outcome"]), ["A1", "A2"])      # both firewalls count, not only the one the approval names
+        self.assertEqual(result["outcome"]["A2"][0], "done")
+
     def test_a_failed_content_install_gates_it_too(self):
         data = self.data(self.NEW, self.OLD)
         plan, s = self.build(data)

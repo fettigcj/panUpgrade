@@ -341,30 +341,37 @@ def run(plan, approval, backend, journal, settings=None, stop=None):
     def attempt(serial, step, detail_ok, fn, record_serial=None):
         """One journaled task. Returns False if it failed or needs attention."""
         who = record_serial or serial
+
+        def say(state_, text):
+            """The pair's owner (the active member) hears of every step; so does the member the step was done to, so a passive member
+            that has no task of its own still counts as a firewall that was worked on, in the outcome and the report."""
+            note(serial, state_, text)
+            if who != serial:
+                note(who, state_, text)
         if serial not in approval.serials:
-            note(serial, "not_approved", "not named in the approval")
+            say("not_approved", "not named in the approval")
             return False
         if journal.last_state(who, step) == "ok":
-            note(serial, "done", f"{step}: already done in this journal")
+            say("done", f"{step}: already done in this journal")
             return True
         if journal.last_state(who, step) == "started":
-            note(serial, "needs_attention", f"{step} was started and not finished; check the device before resuming")
+            say("needs_attention", f"{step} was started and not finished; check the device before resuming")
             return False
         with lock:
             over = len(failed) >= max_failures
             count = len(failed)
         if over or stop.is_set():
-            note(serial, "not_started", f"stopped after {count} failed task(s)" if over else "stopped by you before it started")
+            say("not_started", f"stopped after {count} failed task(s)" if over else "stopped by you before it started")
             return False
         try:
             journal.record(who, step, "started")
             detail = fn() or {}
             journal.record(who, step, "ok", detail)
-            note(serial, "done", detail_ok)
+            say("done", detail_ok)
             return True
         except Exception as exc:     # nothing a device does may pass unrecorded
             journal.record(who, step, "failed", {"error": str(exc), "type": type(exc).__name__})
-            note(serial, "failed", f"{step}: {exc}")
+            say("failed", f"{step}: {exc}")
             with lock:
                 failed.add(serial)
             return False

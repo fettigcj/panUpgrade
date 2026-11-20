@@ -323,8 +323,8 @@ flowchart TD
     d2_3{"not res.get('parsed_ok') or not res.get('sha256')"}
     d2_4(["raise f'backup was not verified: {res!r}'"])
     d2_5{"_baseline(journal, dev) is None"}
-    d2_6["source = serial if dev['ha_state'] not in ('passive', 'suspended') else dev['peer_s…"]
-    d2_7["journal.record(serial, 'baseline', 'ok', {'sessions': backend.state(source).get('se…"]
+    d2_6["count = backend.state(source).get('session_count')"]
+    d2_7["journal.record(serial, 'baseline', 'ok', {'sessions': count, 'taken_from': source, …"]
     d2_8(["return {'sha256': res['sha256'], 'bytes': res.get('bytes')}"])
     d2_1 --> d2_2
     d2_2 --> d2_3
@@ -342,13 +342,13 @@ flowchart TD
     class d2_1 entry
     class d2_2 api
     class d2_4 refuse
-    class d2_7 api
+    class d2_6 api
     class d2_8 done
 ```
 
 ### 'sync to peer'
 
-executor.py:440
+executor.py:442
 
 ```mermaid
 flowchart TD
@@ -386,7 +386,7 @@ flowchart TD
 
 ### "wait for the passive firewall's upgrade to finish" or "wait for the first member's upgrade to finish"
 
-executor.py:451
+executor.py:453
 
 ```mermaid
 flowchart TD
@@ -412,7 +412,7 @@ flowchart TD
 
 ### 'fail over'
 
-executor.py:458
+executor.py:460
 
 ```mermaid
 flowchart TD
@@ -464,7 +464,7 @@ flowchart TD
 
 ### 'hold suspended'
 
-executor.py:485
+executor.py:487
 
 ```mermaid
 flowchart TD
@@ -484,7 +484,7 @@ flowchart TD
 
 ### starts with 'install '
 
-executor.py:488
+executor.py:490
 
 ```mermaid
 flowchart TD
@@ -504,7 +504,7 @@ flowchart TD
 
 ### 'drain'
 
-executor.py:491
+executor.py:493
 
 ```mermaid
 flowchart TD
@@ -522,7 +522,7 @@ flowchart TD
 
 ### 'undrain'
 
-executor.py:494
+executor.py:496
 
 ```mermaid
 flowchart TD
@@ -540,7 +540,7 @@ flowchart TD
 
 ### 'check service'
 
-executor.py:497
+executor.py:499
 
 ```mermaid
 flowchart TD
@@ -558,7 +558,7 @@ flowchart TD
 
 ### 'reboot' or starts with 'reboot to activate '
 
-executor.py:499
+executor.py:501
 
 ```mermaid
 flowchart TD
@@ -579,7 +579,7 @@ flowchart TD
 
 ### 'verify'
 
-executor.py:503
+executor.py:505
 
 ```mermaid
 flowchart TD
@@ -612,7 +612,7 @@ flowchart TD
 
 ### 'go live'
 
-executor.py:511
+executor.py:513
 
 ```mermaid
 flowchart TD
@@ -630,7 +630,7 @@ flowchart TD
 
 ### 'verify HA'
 
-executor.py:513
+executor.py:515
 
 ```mermaid
 flowchart TD
@@ -725,7 +725,7 @@ flowchart TD
 
 ### 'restore roles'
 
-executor.py:557
+executor.py:559
 
 ```mermaid
 flowchart TD
@@ -746,7 +746,7 @@ flowchart TD
 
 ### anything else
 
-executor.py:562
+executor.py:564
 
 ```mermaid
 flowchart TD
@@ -772,8 +772,8 @@ Found by reading every decision in the code that looks at the config-sync or ses
 | prepare | `build` (prepare.py:146) | `steps and idle and (not (facts.session_count or 0) >= floor)` | prepare |
 | prepare | `build` (prepare.py:148) | `facts.session_count is None` | prepare |
 | prepare | `build` (prepare.py:189) | `facts.ha_config_sync is False` | prepare |
-| executor | `_do` (executor.py:447) | `after['ha_config_sync'] is not True` | upgrade |
-| executor | `_do` (executor.py:518) | `got['ha_session_sync'] is not True` | upgrade |
+| executor | `_do` (executor.py:449) | `after['ha_config_sync'] is not True` | upgrade |
+| executor | `_do` (executor.py:520) | `got['ha_session_sync'] is not True` | upgrade |
 | fleetreport | `_attention` (fleetreport.py:49) | `facts.get('ha_config_sync') is False and (not mixed)` | report |
 
 ## Helpers the charts call
@@ -803,7 +803,7 @@ Found by reading every decision in the code that looks at the config-sync or ses
 | `group_session_wait_s` | `600` |
 | `group_session_warn_band` | `0.35` |
 | `image_source` | `'firewall'` |
-| `install_timeout_s` | `3600` |
+| `install_timeout_s` | `1800` |
 | `lb_drain_probe_protocol` | `'ssh'` |
 | `lb_drain_profile` | `''` |
 | `lb_drain_wait_s` | `60` |
@@ -826,11 +826,11 @@ From `LiveBackend` ([backend.py](../../src/panupgrade_live/backend.py)). The sim
 | call | sends | then waits |
 |---|---|---|
 | `backend.preflight` | `the firewall's state (the queries listed in checks.md)` | - |
-| `backend.download` | `<request><system><software><check/></software></system></request>`<br>`<request><system><software><info/></software></system></request>`<br>`f'<request><system><software><{verb}><version>{version}</version></{verb}></software></system></request>'` | up to download_timeout_s (3600 s by default) for the job: f'download {version}' |
+| `backend.download` | `<request><system><software><check/></software></system></request>`<br>`<request><system><software><info/></software></system></request>`<br>`f'<request><system><software><{verb}><version>{version}</version></{verb}></software></system></request>'` | up to download_timeout_s (1800 s by default) for the job: f'download {version}' |
 | `backend.backup` | `<show><config><running/></config></show>` | - |
 | `backend.state` | `the firewall's state (the queries listed in checks.md)` | - |
 | `backend.sync_to_peer` | `<request><high-availability><sync-to-remote><running-config/></sync-to-remote></high-availability></request>` | up to sync_timeout_s (600 s by default) for the HA config sync reading synchronized |
 | `backend.suspend` | `<request><high-availability><state><suspend/></state></high-availability></request>` | up to 120 s for the member reading suspended |
 | `backend.functional` | `<request><high-availability><state><functional/></state></high-availability></request>` | up to 300 s for the member leaving the suspended state |
-| `backend.install` | `f'<request><system><software><{verb}><version>{version}</version></{verb}></software></system></request>'` | up to install_timeout_s (3600 s by default) for the job: f'install {version}' |
+| `backend.install` | `f'<request><system><software><{verb}><version>{version}</version></{verb}></software></system></request>'` | up to install_timeout_s (1800 s by default) for the job: f'install {version}' |
 | `backend.reboot_and_wait` | `<request><restart><system/></restart></request>` | up to timeout_s given by the caller for the firewall coming back from its reboot<br>up to 900 s for boot-time jobs (auto-commit) finishing |

@@ -863,7 +863,7 @@ def _upgrade_execute(args, style, bundle, approve=None):
         approval = approve(journal_path)
         if approval is None:
             return 3
-    journal = (Journal.resume if resuming else Journal.create)(journal_path, plan["hash"])
+    journal = Journal.resume(journal_path, plan["hash"]) if resuming else Journal.create(journal_path, plan["hash"], plan.get("settings"))
     print(style.line("info", f"journal: {journal_path}" + (" (continuing)" if resuming else "")))
     names = {d["serial"]: d["hostname"] for d in plan["devices"]}
     journal.listener, close_view = _listener(style, names, [s for unit in plan["order"] for s in unit], settings)
@@ -1021,7 +1021,7 @@ def _prepare_tasks(args, style, plan, names, backend, settings, label, approve=N
             return 3
     if args.approval or args.dry_run:
         journal_path, resuming = _choose_journal(args, plan, "prepare", style)
-    journal = (Journal.resume if resuming else Journal.create)(journal_path, plan["hash"])
+    journal = Journal.resume(journal_path, plan["hash"]) if resuming else Journal.create(journal_path, plan["hash"], plan.get("settings"))
     print(style.line("info", f"journal: {journal_path}" + (" (continuing)" if resuming else "")))
     journal.listener, close_view = _listener(style, names, sorted(names), settings)
     if record is not None:                      # the screen keeps every event too, so it can show them firewall by firewall

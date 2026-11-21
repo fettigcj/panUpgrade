@@ -26,12 +26,14 @@ class Journal:
         self._lock = threading.RLock()   # several workers write; one at a time keeps the file, the list and the screen in the same order
 
     @classmethod
-    def create(cls, path, plan_hash):
+    def create(cls, path, plan_hash, settings=None):
+        """``settings``: the full settings the plan was built with, written into the header so a run can be explained afterwards
+        (which flags were in force). They never hold a secret: the settings loader refuses any name that looks like one."""
         if os.path.exists(path):
             raise JournalError(f"{path} already exists: that run has already started. Add --resume to continue it "
                                f"(finished steps are skipped), or leave --journal out and a new file is named for you")
         journal = cls(path, plan_hash, [])
-        journal._write({"type": "header", "plan_hash": plan_hash})
+        journal._write({"type": "header", "plan_hash": plan_hash, **({"settings": settings} if settings else {})})
         return journal
 
     @classmethod

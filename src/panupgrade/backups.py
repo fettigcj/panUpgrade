@@ -3,8 +3,8 @@
 
 """The configuration backups the tool writes, and clearing out the old ones.
 
-Every backup step writes a new file named ``<hostname>_<serial>_<YYYYmmdd-HHMMSS>.xml`` into the profile's ``backups`` folder, so
-they pile up. ``backup_keep_days`` (default 14) is how long they are worth keeping; once, when the tool is started, the person is
+Every backup step writes two new files, ``<hostname>_<serial>_<YYYYmmdd-HHMMSS>.xml`` (the firewall's running configuration) and
+``...-merged.xml`` (with what Panorama pushed to it), into the profile's ``backups`` folder, so they pile up. ``backup_keep_days`` (default 14) is how long they are worth keeping; once, when the tool is started, the person is
 asked whether to delete the older ones. Nothing is deleted without that yes, and only files with exactly the tool's own naming
 are ever considered: anything else in the folder is left alone.
 """
@@ -13,7 +13,7 @@ import re
 import time
 from pathlib import Path
 
-OWN_NAME = re.compile(r"^.+_[0-9A-Za-z]+_\d{8}-\d{6}\.xml$")
+OWN_NAME = re.compile(r"^.+_[0-9A-Za-z]+_\d{8}-\d{6}(?:-merged)?\.xml$")
 
 
 def old_backups(directory, keep_days, now=None):

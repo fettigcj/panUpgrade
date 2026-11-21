@@ -432,13 +432,13 @@ def _do(action, index, dev, backend, journal, settings):
     elif action == "backup":
         res = backend.backup(serial)
         if not res.get("parsed_ok") or not res.get("sha256"):
-            raise StepFailed(f"backup was not verified: {res!r}")
+            raise StepFailed(f"backup was not verified: {res.get('problem') or res!r}")
         if _baseline(journal, dev) is None:
             source = serial if dev["ha_state"] not in ("passive", "suspended") else dev["peer_serial"]
             count = backend.state(source).get("session_count")
             journal.record(serial, "baseline", "ok", {"sessions": count, "taken_from": source, "floor": settings.session_noise_floor,
                                                       "below_floor": not count or count < _floor(settings)})
-        return {"sha256": res["sha256"], "bytes": res.get("bytes")}
+        return {k: res[k] for k in ("sha256", "bytes", "path", "merged_sha256", "merged_bytes", "merged_path") if res.get(k) is not None}
     elif action == "sync to peer":
         active = serial if dev["ha_state"] == "active" else dev["peer_serial"]
         passive = dev["peer_serial"] if active == serial else serial

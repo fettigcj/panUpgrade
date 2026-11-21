@@ -321,11 +321,11 @@ flowchart TD
     d2_1(["step: 'backup'"])
     d2_2["res = backend.backup(serial)"]
     d2_3{"not res.get('parsed_ok') or not res.get('sha256')"}
-    d2_4(["raise f'backup was not verified: {res!r}'"])
+    d2_4(["raise f'backup was not verified: {res.get('problem') or res!r}'"])
     d2_5{"_baseline(journal, dev) is None"}
     d2_6["count = backend.state(source).get('session_count')"]
     d2_7["journal.record(serial, 'baseline', 'ok', {'sessions': count, 'taken_from': source, …"]
-    d2_8(["return {'sha256': res['sha256'], 'bytes': res.get('bytes')}"])
+    d2_8(["return {k: res[k] for k in ('sha256', 'bytes', 'path', 'merged_sha256', 'merged_byt…"])
     d2_1 --> d2_2
     d2_2 --> d2_3
     d2_3 -->|yes| d2_4
@@ -827,7 +827,7 @@ From `LiveBackend` ([backend.py](../../src/panupgrade_live/backend.py)). The sim
 |---|---|---|
 | `backend.preflight` | `the firewall's state (the queries listed in checks.md)` | - |
 | `backend.download` | `<request><system><software><check/></software></system></request>`<br>`<request><system><software><info/></software></system></request>`<br>`f'<request><system><software><{verb}><version>{version}</version></{verb}></software></system></request>'` | up to download_timeout_s (1800 s by default) for the job: f'download {version}' |
-| `backend.backup` | `<show><config><running/></config></show>` | - |
+| `backend.backup` | `c` | - |
 | `backend.state` | `the firewall's state (the queries listed in checks.md)` | - |
 | `backend.sync_to_peer` | `<request><high-availability><sync-to-remote><running-config/></sync-to-remote></high-availability></request>` | up to sync_timeout_s (600 s by default) for the HA config sync reading synchronized |
 | `backend.suspend` | `<request><high-availability><state><suspend/></state></high-availability></request>` | up to 120 s for the member reading suspended |

@@ -26,7 +26,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import cli, credstore, profiles, progress, site
+from . import backups, cli, credstore, profiles, progress, site
 from .sources import SourceError
 from .versions import Version, VersionError
 
@@ -1738,6 +1738,7 @@ class Shell:
         self.upgrade_execute = upgrade_execute or self._upgrade_execute
         self.message, self.note, self._armed, self.after_sign_in = "", "", None, None
         self._quit_armed, self._quit_key, self._pressed = False, "", ""
+        self.cleanup = None                                  # (old backups, days, folder) while the start-up question about them is open
         self.stops = []                                      # the stop switch of every real run started here: quitting throws them all
         self.jobs = []
         self.screens = {
@@ -1837,6 +1838,21 @@ class Shell:
                         "look blank meanwhile); what was not reached is continued later with --resume. Press Ctrl-C again or Y to quit, any other key to stay.")
         return False
 
+    def offer_cleanup(self, found, days, directory):
+        """Once, at start-up: ask whether to delete the configuration backups older than ``backup_keep_days``. Y deletes; any other key keeps them."""
+        if found:
+            self.cleanup = (found, days, directory)
+            self.note = backups.question(found, days, directory) + " Y = delete, any other key = keep (asked again next time the tool starts)."
+
+    def _answer_cleanup(self, key):
+        found, days, directory = self.cleanup
+        self.cleanup, self.note = None, ""
+        if key not in ("y", "Y"):
+            self.message = "Kept the old backups."
+            return
+        gone, problems = backups.delete(found)
+        self.message = f"Deleted {gone} old backup{'s' if gone != 1 else ''}." + (f" Could not delete {len(problems)}: {problems[0]}" if problems else "")
+
     def _quit(self):
         """Quitting must not leave the rest of a run going on its own: every run is told to start nothing new."""
         for stop in self.stops:
@@ -1851,6 +1867,9 @@ class Shell:
             return "cancel" if self._quit() else None
         if key != self._quit_key:
             self._quit_armed = False                         # any other key withdraws the question
+        if self.cleanup is not None and key != "ctrl-c":
+            self._answer_cleanup(key)                        # the start-up question about old backups takes the first key
+            return None
         if key == "ctrl-c":                                  # the way out from anywhere, even from a screen with unsaved changes
             return "cancel" if self._may_leave("ctrl-c") else None
         if key.startswith("alt-"):

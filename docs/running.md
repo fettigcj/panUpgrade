@@ -216,7 +216,7 @@ If an `upgrade` of exactly the same plan did not finish, the tool says so and as
 - **CONTINUE**: carry on. Finished steps are skipped. A step that was started but not finished is reported for you to check and never repeated. A failed firewall is not retried automatically.
 - **NEW**: start a fresh run.
 
-Without a terminal, add `--resume` or `--fresh`. `--journal FILE` and `--runs-dir DIR` override the defaults. Config backups land in the `backup_dir` setting before any install or reboot. `prepare` is safe to repeat: it checks the firewalls themselves.
+Without a terminal, add `--resume` or `--fresh`. `--journal FILE` and `--runs-dir DIR` override the defaults. Config backups land in the `backup_dir` setting before any install or reboot; on start-up you are asked whether to delete those older than `backup_keep_days` (default 14 days, 0 = never ask). `prepare` is safe to repeat: it checks the firewalls themselves.
 
 ## Approving
 

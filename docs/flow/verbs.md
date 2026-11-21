@@ -618,7 +618,11 @@ Handler: `_shell`
 flowchart TD
     n_panupgrade_cli__shell["cli._shell<br/><i>The whole workflow on one screen (see ``shell``). Needs a terminal</i>"]
     n_panupgrade_cli__resolve_profile["cli._resolve_profile<br/><i>The Panorama profile this command works in (see ``profiles``), or None</i>"]
+    n_panupgrade_cli__old_backups["cli._old_backups<br/><i>(old backup files, days, folder) for the backup folder in use, or None</i>"]
+    n_panupgrade_backups_old_backups["backups.old_backups<br/><i>[(path, bytes)] of the tool's own backup files in ``directory`` last w</i>"]
     n_panupgrade_cli__shell --> n_panupgrade_cli__resolve_profile
+    n_panupgrade_cli__shell --> n_panupgrade_cli__old_backups
+    n_panupgrade_cli__old_backups --> n_panupgrade_backups_old_backups
 ```
 
 ## `panupgrade auth`

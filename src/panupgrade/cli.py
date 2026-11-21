@@ -4,7 +4,9 @@
 """Command line: ``select`` and ``plan`` (read-only), ``prepare`` and ``upgrade`` (real with a live source, a rehearsal with --dry-run or a fake source), ``settings``."""
 
 import argparse
+import contextlib
 import getpass
+import io
 import json
 import os
 import re
@@ -269,6 +271,38 @@ def _load_settings(args):
         for name in ignored:
             print(style.line("warn", f"unrecognized flag {name!r} in the settings file is being ignored"))
     return settings
+
+
+def _old_backups(args):
+    """(old backup files, days, folder) for the backup folder in use, or None when there are none or the question is off. Quiet: no output."""
+    from . import backups
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            settings = _load_settings(args)
+    except Exception:                  # a question about old files must never stop the tool from starting; a bad settings file is reported where it is used
+        return None
+    found = backups.old_backups(settings.backup_dir, settings.backup_keep_days)
+    return (found, settings.backup_keep_days, settings.backup_dir) if found else None
+
+
+def _offer_backup_cleanup(args, style, settings):
+    """The same question for a command run from a terminal (prepare, upgrade), once per start. The shell asks for itself."""
+    from . import backups
+    if getattr(args, "_in_shell", False) or ("backups", settings.backup_dir) in _SAID or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return
+    _SAID.add(("backups", settings.backup_dir))
+    found = backups.old_backups(settings.backup_dir, settings.backup_keep_days)
+    if not found:
+        return
+    try:
+        answer = input(f"{backups.question(found, settings.backup_keep_days, settings.backup_dir)} [y/N] ").strip().lower()
+    except EOFError:
+        return
+    if answer in ("y", "yes"):
+        gone, problems = backups.delete(found)
+        print(style.line("info", f"Deleted {gone} old backup{'s' if gone != 1 else ''}."))
+        for problem in problems:
+            print(style.line("warn", f"could not delete {problem}"))
 
 
 def _source(args):
@@ -773,6 +807,7 @@ def _backend_and_source(args):
             limiter = RateLimiter(settings.api_rate_per_s)           # one politeness budget for every worker, reads and writes
             read_api = PanoramaApi(address, _key_for(args, address, "reading"), limiter=limiter)
             work_api = write_api(address, limiter=limiter, key=_key_for(args, address, "changes"))
+            _offer_backup_cleanup(args, _style(args), settings)
             fleet = FakeFleet(data)
             fleet.kind = "op"
             return LiveBackend(read_api, work_api, settings, settings.backup_dir), fleet, label
@@ -1325,7 +1360,11 @@ def _shell(args):
     address = getattr(args, "panorama", None) or (profile.address if profile else remembered.get("panorama", ""))
     target = getattr(args, "target", None) or (profile.target if profile else remembered.get("target", ""))
     session = shell.Session(args, address, target, profile)
-    tui.show(shell.Shell(session), "panupgrade")
+    screen = shell.Shell(session)
+    found = _old_backups(args)
+    if found:
+        screen.offer_cleanup(*found)
+    tui.show(screen, "panupgrade")
     session.persist()
     if session.profile:
         profiles.remember(session.profile.name)

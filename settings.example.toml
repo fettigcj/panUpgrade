@@ -42,4 +42,5 @@ job_stall_s        = 300
 reboot_timeout_s   = 1920
 poll_interval_s    = 15          # how often a running job or a rebooting firewall is checked
 backup_dir         = "backups"   # verified config backups are written here before anything changes
+backup_keep_days   = 14          # at start-up, offer to delete backups older than this many days (0 = never ask)
 approval_max_age_hours = 168     # an approval is refused after this long (a week); 0 = never expires

@@ -32,7 +32,7 @@ SECTIONS = [
     ("Failure handling", ["max_failures", "max_parallel", "api_rate_per_s", "pending_changes"]),
     ("Downgrades", ["allow_downgrade"]),
     ("Images, disk and time", ["image_source", "delete_unneeded_images", "min_free_disk_mb", "download_timeout_s", "job_stall_s", "install_timeout_s", "reboot_timeout_s",
-                               "poll_interval_s", "backup_dir", "approval_max_age_hours"]),
+                               "poll_interval_s", "backup_dir", "backup_keep_days", "approval_max_age_hours"]),
 ]
 # name -> (what it does, {choice or "true"/"false": what that value means})
 INFO = {
@@ -188,13 +188,15 @@ INFO = {
                          "the slowest seen, on an under-powered lab machine, took just over 30.", {}),
     "poll_interval_s": ("How often a running job or a rebooting firewall is checked, in seconds.", {}),
     "backup_dir": ("Folder where verified configuration backups are written before anything changes.", {}),
+    "backup_keep_days": ("How many days to keep configuration backups. When the tool is started it counts the backups in the backup folder that are older "
+                         "than this and asks whether to delete them; nothing is deleted without your yes. 0 turns the question off and keeps everything.", {}),
     "approval_max_age_hours": ("An approval older than this is refused. 168 is a week; 0 means it never expires.", {}),
 }
 LIMITS = {
     "pair_session_warn_band": "a number above 0 and up to 1", "pair_session_fail_band": "a number above 0 and up to 1", "pair_session_wait_s": "whole seconds, 0 or more", "session_noise_floor": "whole sessions, 0 or more",
     "api_rate_per_s": "a number above 0", "spread_limit": "a whole number, 1 or more", "max_failures": "a whole number, 1 or more",
     "max_parallel": "a whole number, 1 or more", "sync_timeout_s": "whole seconds, 1 or more", "busy_wait_s": "whole seconds, 1 or more",
-    "poll_interval_s": "whole seconds, 1 or more", "job_stall_s": "whole seconds, 0 or more", "lb_drain_wait_s": "whole seconds, 0 or more",
+    "poll_interval_s": "whole seconds, 1 or more", "backup_keep_days": "whole days, 0 or more", "job_stall_s": "whole seconds, 0 or more", "lb_drain_wait_s": "whole seconds, 0 or more",
     "group_session_warn_band": "a number above 0 and up to 1", "group_session_fail_band": "a number above 0 and up to 1", "group_session_wait_s": "whole seconds, 0 or more", "group_reboot_tolerance": "a whole number, 1 or more", "content_settle_s": "whole seconds, 0 or more",
     "settle_after_failover_s": "whole seconds, 0 or more", "settle_after_reboot_s": "whole seconds, 0 or more",
 }

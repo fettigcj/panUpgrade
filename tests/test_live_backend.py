@@ -187,40 +187,21 @@ class Reboot(unittest.TestCase):
 
 class BackupAndSync(unittest.TestCase):
     CFG = ("xml", "<show><config><running/></config></show>", "S1")
-    MERGED = ("xml", "<show><config><merged/></config></show>", "S1")
     INFOQ = ("op", "show system info", "S1")
-    RUNNING = ok("<config version='10.2.0'><devices><entry name='localhost.localdomain'/></devices></config>")
-    BOTH = ok("<config version='10.2.0'><devices><entry name='localhost.localdomain'><vsys><entry name='vsys1'><zone><entry name='trust'/></zone></entry></vsys></entry></devices></config>")
 
-    def test_a_good_backup_is_two_files_each_written_parsed_back_and_hashed(self):
-        api = Scripted({self.CFG: [self.RUNNING], self.MERGED: [self.BOTH], self.INFOQ: [ok("<system><hostname>fw-a</hostname></system>")]})
+    def test_a_good_backup_is_written_parsed_back_and_hashed(self):
+        cfg = ok("<config version='10.2.0'><devices><entry name='localhost.localdomain'/></devices></config>")
+        api = Scripted({self.CFG: [cfg], self.INFOQ: [ok("<system><hostname>fw-a</hostname></system>")]})
         with tempfile.TemporaryDirectory() as tmp:
             result = backend(api, tmp=tmp).backup("S1")
-            data, merged = Path(result["path"]).read_bytes(), Path(result["merged_path"]).read_bytes()
+            data = Path(result["path"]).read_bytes()
         self.assertTrue(result["parsed_ok"])
         self.assertEqual(result["sha256"], hashlib.sha256(data).hexdigest())
-        self.assertEqual(result["merged_sha256"], hashlib.sha256(merged).hexdigest())
-        self.assertIn(b"zone", merged)                                    # what Panorama pushed is in the merged file ...
-        self.assertNotIn(b"zone", data)                                   # ... and not in the firewall's own running configuration
-        self.assertRegex(result["path"], r"fw-a_S1_\d{8}-\d{6}\.xml$")
-        self.assertRegex(result["merged_path"], r"fw-a_S1_\d{8}-\d{6}-merged\.xml$")
-
-    def test_both_names_are_the_tools_own_for_the_clean_up(self):
-        from panupgrade import backups
-        self.assertTrue(backups.OWN_NAME.match("fw-a_S1_20261121-101500.xml"))
-        self.assertTrue(backups.OWN_NAME.match("fw-a_S1_20261121-101500-merged.xml"))
+        self.assertIn("fw-a_S1_", result["path"])
 
     def test_a_reply_without_a_configuration_is_not_a_backup(self):
         api = Scripted({self.CFG: [ok("<something-else/>")]})
         self.assertFalse(backend(api).backup("S1")["parsed_ok"])
-
-    def test_a_merged_view_that_cannot_be_read_means_no_backup_and_nothing_is_written(self):
-        api = Scripted({self.CFG: [self.RUNNING], self.MERGED: [ok("<something-else/>")]})
-        with tempfile.TemporaryDirectory() as tmp:
-            result = backend(api, tmp=tmp).backup("S1")
-            self.assertEqual(list(Path(tmp).iterdir()), [])
-        self.assertFalse(result["parsed_ok"])
-        self.assertIn("merged", result["problem"])
 
     def test_sync_waits_for_the_config_sync_to_read_synchronized(self):
         api = Scripted({("write", "<request><high-availability><sync-to-remote><running-config/></sync-to-remote></high-availability></request>", "S1"): [ok("sent")]})

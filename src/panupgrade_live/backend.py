@@ -202,30 +202,23 @@ class LiveBackend(Backend):
                 "ha_problem": next((p for p in problems if p.startswith("high availability")), None)}
 
     def backup(self, serial):
-        """Two files per firewall: its own running configuration, and the MERGED one (the running configuration plus everything Panorama pushed:
-        template and device-group settings, zones, interfaces, policy). The running view alone leaves the pushed part out: on a lab firewall
-        it held 0 of the 18 zones the merged view shows (2026-11-21). Both are parsed back and checksummed; if either cannot be read, there is no backup."""
-        data = {}
-        for kind, command in (("running", "<show><config><running/></config></show>"), ("merged", "<show><config><merged/></config></show>")):
-            try:
-                reply = self._again(serial, lambda c=command: self.read.op_xml(c, target=serial))
-            except SourceError as exc:
-                raise BackendError(str(exc)) from None
-            config = reply.find("result/config")
-            if config is None or config.find("devices") is None:
-                return {"sha256": "", "bytes": 0, "parsed_ok": False, "problem": f"the {kind} configuration came back without a devices section"}
-            data[kind] = ET.tostring(config, encoding="utf-8")
-            ET.fromstring(data[kind])                # parse it back: a backup we cannot read is not a backup
+        try:
+            reply = self.read.op_xml("<show><config><running/></config></show>", target=serial)
+        except SourceError as exc:
+            raise BackendError(str(exc)) from None
+        config = reply.find("result/config")
+        if config is None or config.find("devices") is None:
+            return {"sha256": "", "bytes": 0, "parsed_ok": False}
+        data = ET.tostring(config, encoding="utf-8")
+        ET.fromstring(data)                          # parse it back: a backup we cannot read is not a backup
         info = self._info(serial)
-        stem = f"{(info.findtext('hostname') or serial)}_{serial}_{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        name = f"{(info.findtext('hostname') or serial)}_{serial}_{datetime.now().strftime('%Y%m%d-%H%M%S')}.xml"
         self.backup_dir.mkdir(parents=True, exist_ok=True)
-        paths = {"running": self.backup_dir / f"{stem}.xml", "merged": self.backup_dir / f"{stem}-merged.xml"}
-        for kind, path in paths.items():
-            path.write_bytes(data[kind])
-            if path.stat().st_size != len(data[kind]):
-                raise BackendError(f"{serial}: backup file {path} is not the size that was written")
-        return {"sha256": hashlib.sha256(data["running"]).hexdigest(), "bytes": len(data["running"]), "parsed_ok": True, "path": str(paths["running"]),
-                "merged_sha256": hashlib.sha256(data["merged"]).hexdigest(), "merged_bytes": len(data["merged"]), "merged_path": str(paths["merged"])}
+        path = self.backup_dir / name
+        path.write_bytes(data)
+        if path.stat().st_size != len(data):
+            raise BackendError(f"{serial}: backup file {path} is not the size that was written")
+        return {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "parsed_ok": True, "path": str(path)}
 
     def download(self, serial, version):
         # refresh the offered list, then skip if the image is already on the box

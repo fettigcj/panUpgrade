@@ -439,7 +439,7 @@ def _steps(dev, settings, devices=None):
     for p in _path_steps(dev):
         if p["download"]:
             add(f"download {p['version']}", note=f"image source: {settings.image_source}")
-    add("backup", note="running and merged (Panorama-pushed) configuration exported, parsed back and checksummed")
+    add("backup", note="running config exported, parsed back and checksummed")
     pos = dev.get("position")                     # "first" / "second" in a pair that is entirely in this run
     active_first = settings.upgrade_first == "active" and bool(pos)
     swaps = role == "active" or (active_first and pos == "second")    # this member is suspended so its peer can take over

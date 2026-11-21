@@ -276,7 +276,7 @@ flowchart TD
 
 ## 3. How each step is carried out
 
-`executor._do` ([executor.py:513]). Before any step that installs or reboots, a verified backup must be in the journal:
+`executor._do` ([executor.py:514]). Before any step that installs or reboots, a verified backup must be in the journal:
 
 ```mermaid
 flowchart TD
@@ -296,7 +296,7 @@ flowchart TD
 
 ### starts with 'download '
 
-executor.py:517
+executor.py:518
 
 ```mermaid
 flowchart TD
@@ -314,7 +314,7 @@ flowchart TD
 
 ### 'backup'
 
-executor.py:519
+executor.py:520
 
 ```mermaid
 flowchart TD
@@ -348,7 +348,7 @@ flowchart TD
 
 ### 'sync to peer'
 
-executor.py:529
+executor.py:530
 
 ```mermaid
 flowchart TD
@@ -386,7 +386,7 @@ flowchart TD
 
 ### "wait for the passive firewall's upgrade to finish" or "wait for the first member's upgrade to finish"
 
-executor.py:540
+executor.py:541
 
 ```mermaid
 flowchart TD
@@ -412,7 +412,7 @@ flowchart TD
 
 ### 'fail over'
 
-executor.py:547
+executor.py:548
 
 ```mermaid
 flowchart TD
@@ -421,39 +421,44 @@ flowchart TD
     d5_3{"now['ha_state'] != 'active'"}
     d5_4(["return {'skipped': f'member is {now['ha_state']} now, so there is no active role to…"])
     d5_5["before = now['session_count']"]
-    d5_6["backend.suspend(serial)"]
-    d5_7{"not before or before &lt; _floor(settings)"}
-    d5_8["detail = {'sessions_before': before, 'sessions_after': backend.state(peer)['session…"]
-    d5_9["level, after, _, best, waited = _watch_sessions(backend, journal, serial, _key(inde…"]
-    d5_10{"level in ('fail', 'unknown')"}
-    d5_11{"level == 'fail'"}
-    d5_12["limit = int(settings.pair_session_fail_band * 100)"]
-    d5_13["why = f'the new active node {peer} has {after} sessions vs {before} before: {round(…"]
-    d5_14["why = f'the new active node {peer}'s session count could not be read for {round(wai…"]
-    d5_15(["raise f'{why}; reverted: ' + _revert_failover(backend, journal, serial, peer, _key(…"])
-    d5_16{"level == 'warn'"}
-    d5_17["detail['warning'] = f'{words}; the upgrade goes on (warning above {int(settings.pai…"]
-    d5_18(["return {**detail, **_settle(journal, backend, serial, action, settings, settings.se…"])
+    d5_6{"before is None"}
+    d5_7["before = _baseline(journal, dev)"]
+    d5_8["backend.suspend(serial)"]
+    d5_9{"not before or before &lt; _floor(settings)"}
+    d5_10["detail = {'sessions_before': before, 'sessions_after': backend.state(peer)['session…"]
+    d5_11["level, after, _, best, waited = _watch_sessions(backend, journal, serial, _key(inde…"]
+    d5_12{"level in ('fail', 'unknown')"}
+    d5_13{"level == 'fail'"}
+    d5_14["limit = int(settings.pair_session_fail_band * 100)"]
+    d5_15["why = f'the new active node {peer} has {after} sessions vs {before} before: {round(…"]
+    d5_16["why = f'the new active node {peer}'s session count could not be read for {round(wai…"]
+    d5_17(["raise f'{why}; reverted: ' + _revert_failover(backend, journal, serial, peer, _key(…"])
+    d5_18{"level == 'warn'"}
+    d5_19["detail['warning'] = f'{words}; the upgrade goes on (warning above {int(settings.pai…"]
+    d5_20(["return {**detail, **_settle(journal, backend, serial, action, settings, settings.se…"])
     d5_1 --> d5_2
     d5_2 --> d5_3
     d5_3 -->|yes| d5_4
     d5_3 -->|no| d5_5
     d5_5 --> d5_6
-    d5_6 --> d5_7
-    d5_7 -->|yes| d5_8
-    d5_7 -->|no| d5_9
-    d5_9 --> d5_10
-    d5_10 -->|yes| d5_11
-    d5_11 -->|yes| d5_12
-    d5_12 --> d5_13
-    d5_11 -->|no| d5_14
-    d5_13 --> d5_15
+    d5_6 -->|yes| d5_7
+    d5_7 --> d5_8
+    d5_6 -->|no| d5_8
+    d5_8 --> d5_9
+    d5_9 -->|yes| d5_10
+    d5_9 -->|no| d5_11
+    d5_11 --> d5_12
+    d5_12 -->|yes| d5_13
+    d5_13 -->|yes| d5_14
     d5_14 --> d5_15
-    d5_10 -->|no| d5_16
-    d5_16 -->|yes| d5_17
-    d5_8 --> d5_18
-    d5_17 --> d5_18
-    d5_16 -->|no| d5_18
+    d5_13 -->|no| d5_16
+    d5_15 --> d5_17
+    d5_16 --> d5_17
+    d5_12 -->|no| d5_18
+    d5_18 -->|yes| d5_19
+    d5_10 --> d5_20
+    d5_19 --> d5_20
+    d5_18 -->|no| d5_20
     classDef api stroke:#2f6fed,stroke-width:3px
     classDef refuse stroke:#d64545,stroke-width:3px
     classDef done stroke:#2e9e5b,stroke-width:3px
@@ -462,15 +467,15 @@ flowchart TD
     class d5_1 entry
     class d5_2 api
     class d5_4 done
-    class d5_6 api
     class d5_8 api
-    class d5_15 refuse
-    class d5_18 done
+    class d5_10 api
+    class d5_17 refuse
+    class d5_20 done
 ```
 
 ### 'hold suspended'
 
-executor.py:581
+executor.py:586
 
 ```mermaid
 flowchart TD
@@ -490,7 +495,7 @@ flowchart TD
 
 ### starts with 'install '
 
-executor.py:584
+executor.py:589
 
 ```mermaid
 flowchart TD
@@ -510,7 +515,7 @@ flowchart TD
 
 ### 'drain'
 
-executor.py:587
+executor.py:592
 
 ```mermaid
 flowchart TD
@@ -528,7 +533,7 @@ flowchart TD
 
 ### 'undrain'
 
-executor.py:590
+executor.py:595
 
 ```mermaid
 flowchart TD
@@ -546,7 +551,7 @@ flowchart TD
 
 ### 'check service'
 
-executor.py:593
+executor.py:598
 
 ```mermaid
 flowchart TD
@@ -564,7 +569,7 @@ flowchart TD
 
 ### 'reboot' or starts with 'reboot to activate '
 
-executor.py:595
+executor.py:600
 
 ```mermaid
 flowchart TD
@@ -585,7 +590,7 @@ flowchart TD
 
 ### 'verify'
 
-executor.py:599
+executor.py:604
 
 ```mermaid
 flowchart TD
@@ -618,7 +623,7 @@ flowchart TD
 
 ### 'go live'
 
-executor.py:607
+executor.py:612
 
 ```mermaid
 flowchart TD
@@ -636,7 +641,7 @@ flowchart TD
 
 ### 'verify HA'
 
-executor.py:609
+executor.py:614
 
 ```mermaid
 flowchart TD
@@ -743,7 +748,7 @@ flowchart TD
 
 ### 'restore roles'
 
-executor.py:660
+executor.py:665
 
 ```mermaid
 flowchart TD
@@ -764,7 +769,7 @@ flowchart TD
 
 ### anything else
 
-executor.py:665
+executor.py:670
 
 ```mermaid
 flowchart TD
@@ -791,8 +796,8 @@ Found by reading every decision in the code that looks at the config-sync or ses
 | prepare | `build` (prepare.py:148) | `facts.session_count is None` | prepare |
 | prepare | `build` (prepare.py:189) | `facts.ha_config_sync is False` | prepare |
 | executor | `_sessions` (executor.py:472) | `hasattr(backend, 'session_count')` | upgrade |
-| executor | `_do` (executor.py:536) | `after['ha_config_sync'] is not True` | upgrade |
-| executor | `_do` (executor.py:614) | `got['ha_session_sync'] is not True` | upgrade |
+| executor | `_do` (executor.py:537) | `after['ha_config_sync'] is not True` | upgrade |
+| executor | `_do` (executor.py:619) | `got['ha_session_sync'] is not True` | upgrade |
 | fleetreport | `_attention` (fleetreport.py:49) | `facts.get('ha_config_sync') is False and (not mixed)` | report |
 
 ## Helpers the charts call

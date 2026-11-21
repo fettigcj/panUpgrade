@@ -198,7 +198,7 @@ def _run_steps(dev, backend, journal, settings, stop, gate, group, held):
                 return "held", why
             held.append(group)
             if not journal.detail(serial, "group_baseline"):                     # the count the member is judged against when it comes back
-                journal.record(serial, "group_baseline", "ok", {"sessions": _sessions(backend, serial) or 0})
+                journal.record(serial, "group_baseline", "ok", {"sessions": _sessions(backend, serial)})
         err = _step(journal, serial, key, lambda: _do(st["action"], index, dev, backend, journal, settings))
         if err:
             return "failed", f"{_standing(dev, journal, index)}; {st['action']} failed: {err}"
@@ -483,6 +483,7 @@ def _check_service(dev, backend, journal, settings, key):
     shortfall counts; a member that holds more is not a problem. A simulation does not wait: it is judged on one reading."""
     serial = dev["serial"]
     own = (journal.detail(serial, "group_baseline") or {}).get("sessions") or 0
+    unread = (journal.detail(serial, "group_baseline") or {}).get("sessions") is None          # the count before the drain could not be read: not "0"
     warn, fail = settings.group_session_warn_band, settings.group_session_fail_band
     seen, errors = {}, []
 
@@ -503,7 +504,7 @@ def _check_service(dev, backend, journal, settings, key):
     detail = {"sessions_before": own, "sessions_after": mine, "others_average": round(average), "waited_s": round(elapsed)}
     if level == "ok":
         return detail
-    words = (f"{mine} sessions against {own} before the drain and {round(average)} on the other members: {round((1 - best) * 100)}% short "
+    words = (f"{mine} sessions against {'an unreadable count' if unread else own} before the drain and {round(average)} on the other members: {round((1 - best) * 100)}% short "
              f"after {round(elapsed)}s")
     if level == "fail":
         raise StepFailed(f"the member is not carrying traffic again: {words} (failure at {int(fail * 100)}% or more)")
@@ -549,12 +550,16 @@ def _do(action, index, dev, backend, journal, settings):
         if now["ha_state"] != "active":
             return {"skipped": f"member is {now['ha_state']} now, so there is no active role to hand over"}
         before = now["session_count"]
+        if before is None:          # the read failed: that is not a small count. Use what was recorded when this unit started.
+            before = _baseline(journal, dev)
         backend.suspend(serial)
         peer = dev["peer_serial"]
         if not before or before < _floor(settings):      # the plan said so and the operator acknowledged "no_session_baseline": nothing to compare with
             detail = {"sessions_before": before, "sessions_after": backend.state(peer)["session_count"], "skipped": "no session baseline (acknowledged)",
-                      "warning": f"the active member had {before} sessions, below the noise floor of {settings.session_noise_floor}, so there is nothing to compare "
-                                 f"the new active node with: the session check is skipped"}
+                      "warning": (f"the active member's session count could not be read and none was recorded earlier, so there is nothing to compare "
+                                  f"the new active node with: the session check is skipped" if before is None else
+                                  f"the active member had {before} sessions, below the noise floor of {settings.session_noise_floor}, so there is nothing to compare "
+                                  f"the new active node with: the session check is skipped")}
         else:
             # Only the active member saw sessions built on it; the passive one holds a copy over HA2. So the count this member had is what the one that
             # took over must now show. A collapse puts this member back into service and fails the firewall; the message says what the pair is left on.

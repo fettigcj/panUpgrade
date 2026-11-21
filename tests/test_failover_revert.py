@@ -63,6 +63,22 @@ class WhenTheCountCannotBeRead(te.Base):
         self.assertNotIn(("A2", "suspend"), [c[:2] for c in sim.calls])
 
 
+class WhenTheOldActiveMembersOwnCountCannotBeReadAtTheFailOver(te.Base):
+    def test_the_count_recorded_when_the_unit_started_is_used_and_the_check_still_runs(self):
+        class Dim(SimBackend):
+            def state(self, serial):
+                got = super().state(serial)
+                if serial == "A1" and got["ha_state"] == "active" and got["version"] == "20.2.3" and ("A2", "reboot") in [c[:2] for c in self.calls]:
+                    got = dict(got, session_count=None)
+                return got
+        data = fleet_data(pair("A1", "A2"))
+        sim = Dim(data, takeover_ratio=0.1)
+        _, _, _, _, result = self.go(data, backend=sim)
+        why = result["outcome"]["A1"][1]
+        self.assertIn("90% short", why)                       # the check ran against the recorded baseline instead of being skipped
+        self.assertIn("reverted", why)
+
+
 class TheWatch(unittest.TestCase):
     class Journal:
         def __init__(self):

@@ -536,5 +536,60 @@ class StalledJobs(unittest.TestCase):
         self.assertIn("did not finish within 1800 s", error)
 
 
+class ReadsThatGetNoAnswer(unittest.TestCase):
+    """A read timing out is not an answer: the firewall may have just booted, or Panorama's link to it may be catching up."""
+    INFOQ = ("op", "show system info", "S1")
+    TIMEOUT = "10.0.0.1 via target S1: The read operation timed out"
+
+    def sysinfo(self, uptime, version="10.2.1"):
+        return ok(f"<system><uptime>{uptime}</uptime><sw-version>{version}</sw-version></system>")
+
+    def test_one_read_that_gets_no_answer_is_asked_again_before_it_counts(self):
+        api = Scripted({self.INFOQ: [SourceError(self.TIMEOUT), self.sysinfo("0 days, 0:01:10", "10.2.2")]})
+        b = backend(api)
+        said = []
+        b.progress = lambda serial, message: said.append(message)
+        self.assertEqual(b._info("S1").findtext("sw-version"), "10.2.2")
+        self.assertEqual(len([k for k in api.log if k == self.INFOQ]), 2)
+        self.assertTrue(any("asking again (2 of 3)" in m for m in said))
+
+    def test_three_reads_in_a_row_without_an_answer_fail_with_what_the_last_one_said(self):
+        api = Scripted({self.INFOQ: [SourceError(self.TIMEOUT)]})
+        with self.assertRaisesRegex(BackendError, "timed out"):
+            backend(api)._info("S1")
+        self.assertEqual(len(api.log), 3)
+
+    def test_a_look_that_fails_while_waiting_for_the_boot_jobs_is_just_not_yet(self):
+        api = Scripted({self.INFOQ: [self.sysinfo("0 days, 5:00:00"), self.sysinfo("0 days, 0:01:10", "10.2.2")],
+                        ("write", "<request><restart><system/></restart></request>", "S1"): [ok("restarting")]})
+        b = backend(api)
+        looks = iter([SourceError(self.TIMEOUT), {"running_jobs": 1}, {"running_jobs": 0}])
+
+        def state(serial):
+            item = next(looks)
+            if isinstance(item, Exception):
+                raise item
+            return item
+        b.state = state
+        self.assertEqual(b.reboot_and_wait("S1", 600), "10.2.2")
+        self.assertEqual(list(looks), [])
+
+    def test_when_the_time_runs_out_the_message_says_the_last_look_failed(self):
+        b = backend(Scripted({}))
+
+        def never():
+            raise SourceError(self.TIMEOUT)
+        with self.assertRaisesRegex(BackendError, r"did not happen within 30 s \(the last look failed: .*timed out"):
+            b._wait_until("S1", never, 30, "the thing")
+
+    def test_a_sync_that_never_reads_synchronized_says_what_the_firewall_said(self):
+        write = ("write", "<request><high-availability><sync-to-remote><running-config/></sync-to-remote></high-availability></request>", "S1")
+        for reading, words in ((False, "read False each time"), (None, "HA reply could not be read (high availability: no usable reply)")):
+            b = backend(Scripted({write: [ok("sent")]}), sync_timeout_s=30)
+            b.state = lambda serial, r=reading: {"ha_config_sync": r, "ha_problem": "high availability: no usable reply"}
+            with self.assertRaisesRegex(BackendError, "Last look: .*" + words.replace("(", r"\(").replace(")", r"\)")):
+                b.sync_to_peer("S1")
+
+
 if __name__ == "__main__":
     unittest.main()

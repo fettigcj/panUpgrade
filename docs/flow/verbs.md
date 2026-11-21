@@ -682,7 +682,7 @@ Handler: `_settings`
 flowchart TD
     n_panupgrade_cli__settings["cli._settings"]
     n_panupgrade_cli__wants_settings_form["cli._wants_settings_form<br/><i>The form opens when asked for (-i), and by itself when `settings` is t</i>"]
-    n_panupgrade_settings_load["settings.load"]
+    n_panupgrade_settings_load["settings.load<br/><i>``ignored``: a list that gets the name of every unrecognized flag in t</i>"]
     n_panupgrade_settings_Settings_loosening_warnings["settings.Settings.loosening_warnings<br/><i>Plain-language cautions for settings that make a run riskier. Never an</i>"]
     n_panupgrade_cli__settings_form["cli._settings_form<br/><i>The settings form, on the settings file in use (or the one it would cr</i>"]
     n_panupgrade_cli__settings --> n_panupgrade_cli__wants_settings_form

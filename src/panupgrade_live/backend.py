@@ -65,6 +65,9 @@ def uptime_seconds(text):
     return ((d * 24 + h) * 60 + mi) * 60 + s
 
 
+READ_ATTEMPTS = 3        # a read that failed (typically: timed out waiting for Panorama to hear back from the firewall) is asked again this many times in all
+
+
 class LiveBackend(Backend):
     def __init__(self, read_api, write_api, settings, backup_dir="backups", sleep=time.sleep, clock=time.monotonic):
         self.read, self.write, self.settings = read_api, write_api, settings
@@ -73,12 +76,25 @@ class LiveBackend(Backend):
 
     # ---- plumbing
 
+    def _again(self, serial, read):
+        """Run one read-only query; if it fails to get an answer (not: if the answer says no), wait a poll interval and ask again, up to
+        READ_ATTEMPTS times in all. A firewall that has just booted, or Panorama's link to it, often drops the first question."""
+        for attempt in range(1, READ_ATTEMPTS + 1):
+            try:
+                return read()
+            except SourceError as exc:
+                if attempt == READ_ATTEMPTS:
+                    raise
+                if self.progress is not None:
+                    self.progress(serial, f"a read got no answer ({exc}); asking again ({attempt + 1} of {READ_ATTEMPTS})")
+                self._sleep(self.settings.poll_interval_s)
+
     def _op(self, serial):
-        return lambda command: self.read.op(command, target=serial)
+        return lambda command: self._again(serial, lambda: self.read.op(command, target=serial))
 
     def _info(self, serial):
         try:
-            node = self.read.op("show system info", target=serial).find("result/system")
+            node = self._again(serial, lambda: self.read.op("show system info", target=serial)).find("result/system")
         except SourceError as exc:
             raise BackendError(str(exc)) from None
         if node is None:
@@ -113,7 +129,7 @@ class LiveBackend(Backend):
         moved, warned = start, False
         while True:
             try:
-                reply = self.read.op_xml(f"<show><jobs><id>{job}</id></jobs></show>", target=serial)
+                reply = self._again(serial, lambda: self.read.op_xml(f"<show><jobs><id>{job}</id></jobs></show>", target=serial))
             except SourceError as exc:
                 raise BackendError(f"{serial}: lost contact while waiting for {label}: {exc}") from None
             node = reply.find(".//job")
@@ -146,12 +162,18 @@ class LiveBackend(Backend):
             self._sleep(self.settings.poll_interval_s)
 
     def _wait_until(self, serial, test, timeout_s, what):
-        deadline = self._clock() + timeout_s
+        """Poll ``test`` until it is true. A look that gets no answer is the same as "not yet": it is tried again at the next poll, and only
+        the time limit ends the wait (the message then says the last look failed, so that is not mistaken for a "no")."""
+        deadline, failed = self._clock() + timeout_s, None
         while True:
-            if test():
-                return
+            try:
+                if test():
+                    return
+                failed = None
+            except (SourceError, BackendError) as exc:
+                failed = str(exc)
             if self._clock() > deadline:
-                raise BackendError(f"{serial}: {what} did not happen within {timeout_s} s")
+                raise BackendError(f"{serial}: {what} did not happen within {timeout_s} s" + (f" (the last look failed: {failed})" if failed else ""))
             self._sleep(self.settings.poll_interval_s)
 
     # ---- Backend interface
@@ -176,7 +198,8 @@ class LiveBackend(Backend):
             raise BackendError(f"{serial}: cannot read state: {'; '.join(problems)}")
         return {"version": facts.sw_version, "ha_state": facts.ha_state, "running_jobs": facts.running_jobs,
                 "ha_config_sync": facts.ha_config_sync, "ha_session_sync": facts.ha_session_sync,
-                "session_count": facts.session_count, "content_compat": facts.ha_content_compat}
+                "session_count": facts.session_count, "content_compat": facts.ha_content_compat,
+                "ha_problem": next((p for p in problems if p.startswith("high availability")), None)}
 
     def backup(self, serial):
         try:
@@ -297,8 +320,20 @@ class LiveBackend(Backend):
 
     def sync_to_peer(self, serial):
         self._send(SYNC, serial)
-        self._wait_until(serial, lambda: self.state(serial)["ha_config_sync"] is True, self.settings.sync_timeout_s,
-                         "the HA config sync reading synchronized")
+        seen = {}
+
+        def synced():
+            now = self.state(serial)
+            seen["sync"], seen["problem"] = now["ha_config_sync"], now.get("ha_problem")
+            return now["ha_config_sync"] is True
+        try:
+            self._wait_until(serial, synced, self.settings.sync_timeout_s, "the HA config sync reading synchronized")
+        except BackendError as exc:
+            if "sync" not in seen:
+                raise
+            said = (f"the firewall's HA reply could not be read ({seen['problem']})" if seen["sync"] is None
+                    else f"HA config sync read {seen['sync']!r} each time it was looked at")
+            raise BackendError(f"{exc}. Last look: {said}") from None
 
     def suspend(self, serial):
         self._send(HA_STATE["suspend"], serial)

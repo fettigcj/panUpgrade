@@ -1411,6 +1411,29 @@ class TheUpgradeScreen(ShellCase):
         self.assertIn("too old to approve", self.text(ui2))
         self.assertEqual(self.up_executed, [])
 
+    def test_a_plan_built_on_other_settings_than_the_ones_now_saved_cannot_be_approved(self):
+        # the settings were changed (Alt-S) after the plan was read: the plan still carries the old ones, so a step the new ones switch off would still run
+        ui = self.at_review()
+        ui.screens["upgrade"].bundle.plan["settings"] = {**ui.screens["upgrade"].bundle.plan["settings"], "sync_to_peer": "Disable"}      # the built-in default, which the file now gives, is Both
+        ui.press("enter")
+        self.assertIn("settings changed after this plan was read", self.text(ui))
+        self.assertIn("sync_to_peer: Disable -> Both", self.text(ui))
+        self.assertEqual(self.up_executed, [])
+        ui2 = self.at_review()
+        ui2.press("enter")
+        ui2.screens["upgrade"].bundle.plan["settings"] = {**ui2.screens["upgrade"].bundle.plan["settings"], "sync_to_peer": "Disable"}
+        for ch in "APPROVE":
+            ui2.press(ch)
+        ui2.press("enter")
+        self.assertIn("settings changed after this plan was read", self.text(ui2))
+        self.assertEqual(self.up_executed, [])
+
+    def test_a_plan_built_on_the_settings_still_saved_is_approved_as_before(self):
+        ui = self.at_review()
+        ui.screens["upgrade"].bundle.plan["settings"] = {**ui.screens["upgrade"].bundle.plan["settings"], "sync_to_peer": "Both"}
+        ui.press("enter")
+        self.assertNotIn("settings changed", self.text(ui))
+
     def test_an_unfinished_earlier_run_must_be_chosen_between_and_the_choice_is_passed_on(self):
         previous = ("C:/runs/upgrade-1.jsonl", "3 steps done, 0 failed, 1 started but not finished, 5 not reached")
         ui = self.at_review(up_review=lambda a: print("plan") or FakeUpgrade(previous=previous))

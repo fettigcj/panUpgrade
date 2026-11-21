@@ -18,6 +18,7 @@ the terminal.
 """
 
 import io
+import json
 import re
 import sys
 import threading
@@ -912,10 +913,24 @@ class ChangeScreen(Screen):
             self.stage, self.bundle = "review", job.value
         self.bar = 0
 
+    def settings_moved(self):
+        """What differs between the settings this plan was built with and the settings file as it is now (empty if nothing)."""
+        try:
+            now = json.loads(json.dumps(cli._load_settings(self.args).__dict__, default=list))
+        except Exception:                      # a file that cannot be read now is reported when the plan is read again; it must not stop this check
+            return []
+        then = json.loads(json.dumps(self.bundle.plan.get("settings") or {}, default=list))
+        return [f"{k}: {then.get(k)} -> {now.get(k)}" for k in sorted(then) if then.get(k) != now.get(k)]
+
     def begin_approval(self, mode=None):
         age = time.time() - self.bundle.created
         if age > PLAN_MAX_AGE:
             self.note = f"The plan was read {ago(age)[:-4]} ago and the fleet may have changed. Read it again before approving."
+            return
+        moved = self.settings_moved()
+        if moved:
+            self.stage, self.note = "review", ("The settings changed after this plan was read (" + "; ".join(moved[:3]) + (", ..." if len(moved) > 3 else "") +
+                                               "), so it still has the old ones. Read the plan again before approving.")
             return
         self.note, self.typed, self.stage, self.offset, self.mode = "", "", "approving", 0, mode
 
@@ -924,6 +939,9 @@ class ChangeScreen(Screen):
         bundle = self.bundle
         if time.time() - bundle.created > PLAN_MAX_AGE:
             self.stage, self.note = "review", "That plan is now too old to approve. Read it again."
+            return
+        if self.settings_moved():
+            self.stage, self.note = "review", "The settings changed after this plan was read, so it still has the old ones. Read the plan again."
             return
         args, approve = self.args, self.approver()
         self.shell.stops.append(bundle.stop)

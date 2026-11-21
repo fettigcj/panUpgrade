@@ -477,7 +477,7 @@ class HappyPath(Base):
         _, _, _, _, result = self.go(data, backend=sim, max_failures=5)
         self.assertEqual(result["outcome"]["A2"][0], "done")
         self.assertEqual(result["outcome"]["A1"][0], "failed")
-        self.assertIn("put back into service", result["outcome"]["A1"][1])
+        self.assertIn("reverted", result["outcome"]["A1"][1])
         self.assertIn("two versions", result["outcome"]["A1"][1])      # A2 (passive first) is already upgraded, A1 is not
         self.assertEqual(sim.nodes["A1"].version, "20.2.3")      # never upgraded
 

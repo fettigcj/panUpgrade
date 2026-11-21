@@ -559,6 +559,15 @@ class ReadsThatGetNoAnswer(unittest.TestCase):
             backend(api)._info("S1")
         self.assertEqual(len(api.log), 3)
 
+    def test_the_session_count_is_asked_for_once_so_that_a_wait_is_not_stretched(self):
+        q = ("op", "show session info", "S1")
+        api = Scripted({q: [SourceError(self.TIMEOUT)]})
+        with self.assertRaisesRegex(SourceError, "timed out"):
+            backend(api).session_count("S1")
+        self.assertEqual(len(api.log), 1)
+        api = Scripted({q: [ok("<num-active>1314</num-active>")]})
+        self.assertEqual(backend(api).session_count("S1"), 1314)
+
     def test_a_look_that_fails_while_waiting_for_the_boot_jobs_is_just_not_yet(self):
         api = Scripted({self.INFOQ: [self.sysinfo("0 days, 5:00:00"), self.sysinfo("0 days, 0:01:10", "10.2.2")],
                         ("write", "<request><restart><system/></restart></request>", "S1"): [ok("restarting")]})

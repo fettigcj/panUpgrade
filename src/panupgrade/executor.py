@@ -55,6 +55,10 @@ class Backend:
     def install(self, serial, version): raise NotImplementedError
     def reboot_and_wait(self, serial, timeout_s): raise NotImplementedError   # the version it came back on
     def state(self, serial): raise NotImplementedError              # {version, ha_state, running_jobs, ha_config_sync, ha_session_sync, session_count}
+
+    def session_count(self, serial):                                # the active session count, asked for on its own; raises when it cannot be read
+        return self.state(serial).get("session_count")
+
     def content_versions(self, serial): raise NotImplementedError   # {"app", "threat", "av", "wildfire", "url"} as installed now
     def refresh_updates(self, serial, families): raise NotImplementedError   # "check now" for content | antivirus | wildfire (read-only)
     def update_content(self, serial, family): raise NotImplementedError   # install the latest of: content | antivirus | wildfire
@@ -194,7 +198,7 @@ def _run_steps(dev, backend, journal, settings, stop, gate, group, held):
                 return "held", why
             held.append(group)
             if not journal.detail(serial, "group_baseline"):                     # the count the member is judged against when it comes back
-                journal.record(serial, "group_baseline", "ok", {"sessions": _sessions(backend, serial)})
+                journal.record(serial, "group_baseline", "ok", {"sessions": _sessions(backend, serial) or 0})
         err = _step(journal, serial, key, lambda: _do(st["action"], index, dev, backend, journal, settings))
         if err:
             return "failed", f"{_standing(dev, journal, index)}; {st['action']} failed: {err}"
@@ -346,19 +350,28 @@ def _baseline(journal, dev):
     return None
 
 
-def _watch_sessions(backend, journal, serial, key, observe, settings, warn, fail, wait_s, what):
+def _watch_sessions(backend, journal, serial, key, observe, settings, warn, fail, wait_s, what, errors=None):
     """Wait until a node's session table is back, and judge it. ``observe()`` gives (the node's count, [the counts it should match]); the best of
     those is what counts (a table is judged against what the node had, or what its neighbours hold, whichever it is closer to). Only a shortfall
     counts. Read again every ``poll_interval_s`` until no more than ``warn`` short or ``wait_s`` has passed; then ``fail`` or more short is a
-    failure and anything between is a warning. Returns (level, count, references, best, seconds waited); level is ok, warn, fail or none (nothing
-    to compare with). A simulation does not wait: it is judged on one reading."""
-    start, noted, real = time.monotonic(), False, getattr(backend, "real_time", True)
+    failure and anything between is a warning. A count that cannot be read is NOT zero: it is asked for again, and if it is still unreadable when
+    the wait is up the level is ``unknown`` (``errors`` collects what the reads said). Returns (level, count, references, best, seconds waited);
+    level is ok, warn, fail, unknown or none (nothing to compare with). A simulation does not wait: it is judged on one reading."""
+    start, noted, real, looks = time.monotonic(), False, getattr(backend, "real_time", True), 0
     while True:
         mine, references = observe()
+        looks += 1
         elapsed = time.monotonic() - start
         references = [r for r in references if r and r >= _floor(settings)]
         if not references:
             return "none", mine, references, None, elapsed
+        if mine is None:
+            journal.record(serial, key, "note", {"message": f"{what}: look {looks}: the session count could not be read"
+                                                            + (f" ({errors[-1]})" if errors else "")})
+            if not real or elapsed >= wait_s:
+                return "unknown", None, references, None, elapsed
+            time.sleep(settings.poll_interval_s)
+            continue
         best = max(mine / r for r in references)
         if best >= 1 - warn:
             return "ok", mine, references, best, elapsed
@@ -369,6 +382,74 @@ def _watch_sessions(backend, journal, serial, key, observe, settings, warn, fail
             journal.record(serial, key, "note", {"message": f"{what}: {mine} sessions, {round((1 - best) * 100)}% short of normal: waiting up to {wait_s}s "
                                                             f"for the table to come back"})
         time.sleep(settings.poll_interval_s)
+
+
+def _role(backend, serial):
+    try:
+        return backend.state(serial)["ha_state"]
+    except Exception:
+        return "unreadable"
+
+
+def _roles(backend, serial, peer):
+    return f"{serial} is {_role(backend, serial)}, {peer} is {_role(backend, peer)}"
+
+
+def _until_state(backend, serial, wanted, wait_s, settings):
+    """Read a member until it reports one of ``wanted`` (a simulation: once). Returns the state last read, or None if it could not be read."""
+    start, got = time.monotonic(), None
+    while True:
+        try:
+            got = backend.state(serial)["ha_state"]
+        except Exception:
+            got = None
+        if got in wanted or not getattr(backend, "real_time", True) or time.monotonic() - start >= wait_s:
+            return got
+        time.sleep(settings.poll_interval_s)
+
+
+REVERT_WAIT_S = 300       # the old active member is given this long to be ready to carry traffic again; the other member this long to hand it over
+
+
+def _revert_failover(backend, journal, serial, peer, key, settings):
+    """Put the traffic back where it was known to work: this member (the active one before the fail-over) active again, the peer out of the way.
+    Lifting the suspension alone is not enough (the peer keeps the active role unless preemption hands it back), so: make this member functional,
+    wait until it is ready, suspend the peer so this member takes over, wait for that, then make the peer functional again. Each step is journaled.
+    Returns a sentence saying what the pair is now; raises StepFailed saying who is active and who is suspended if a step cannot be completed."""
+    def say(message):
+        journal.record(serial, key, "note", {"message": f"revert: {message}"})
+
+    def stop(what):
+        raise StepFailed(f"{what}; the pair is now: {_roles(backend, serial, peer)}. Check it by hand.")
+    say("making this member functional again")
+    try:
+        backend.functional(serial)
+    except Exception as exc:
+        stop(f"could not make {serial} functional ({exc})")
+    now = _until_state(backend, serial, ("active", "passive"), REVERT_WAIT_S, settings)
+    if now is None:
+        stop(f"{serial}'s state could not be read after making it functional, so the peer was left alone")
+    if now == "passive":
+        say(f"{serial} is passive and ready; suspending {peer} so that {serial} takes the active role")
+        try:
+            backend.suspend(peer)
+        except Exception as exc:
+            stop(f"could not suspend {peer} ({exc})")
+        took = _until_state(backend, serial, ("active",), REVERT_WAIT_S, settings)
+        if took != "active":
+            try:
+                backend.functional(peer)
+            except Exception:
+                pass
+            stop(f"{serial} did not become active after {peer} was suspended (it reads {took or 'unreadable'}); {peer} was made functional again")
+        say(f"{serial} is active again; making {peer} functional")
+        try:
+            backend.functional(peer)
+        except Exception as exc:
+            stop(f"{serial} is active again but {peer} could not be made functional ({exc})")
+    elif now != "active":
+        stop(f"{serial} reads {now} after being made functional")
+    return f"{_roles(backend, serial, peer)}."
 
 
 def _versions_note(backend, serial, peer):
@@ -385,11 +466,14 @@ def _floor(settings):
     return max(settings.session_noise_floor, 1)
 
 
-def _sessions(backend, serial):
+def _sessions(backend, serial, errors=None):
+    """The active session count, or None when it cannot be read. None is not 0: a firewall that did not answer has not said its table is empty."""
     try:
-        return backend.state(serial).get("session_count") or 0
-    except Exception:           # a member that cannot be read has no count to compare with; that is not this member's failure
-        return 0
+        return backend.session_count(serial) if hasattr(backend, "session_count") else backend.state(serial).get("session_count")
+    except Exception as exc:
+        if errors is not None:
+            errors.append(str(exc))
+        return None
 
 
 def _check_service(dev, backend, journal, settings, key):
@@ -400,15 +484,18 @@ def _check_service(dev, backend, journal, settings, key):
     serial = dev["serial"]
     own = (journal.detail(serial, "group_baseline") or {}).get("sessions") or 0
     warn, fail = settings.group_session_warn_band, settings.group_session_fail_band
-    seen = {}
+    seen, errors = {}, []
 
     def observe():
         others = [n for n in (_sessions(backend, peer) for peer in dev.get("group_peers") or []) if n]
         seen["average"] = sum(others) / len(others) if others else 0
-        return _sessions(backend, serial), [own, seen["average"]]
+        return _sessions(backend, serial, errors), [own, seen["average"]]
     level, mine, references, best, elapsed = _watch_sessions(backend, journal, serial, key, observe, settings, warn, fail, settings.group_session_wait_s,
-                                                              "the member")
+                                                              "the member", errors)
     average = seen.get("average", 0)
+    if level == "unknown":
+        raise StepFailed(f"could not read this member's session count for {round(elapsed)}s, so it cannot be shown to be carrying traffic again"
+                         + (f" (last answer: {errors[-1]})" if errors else ""))
     if level == "none":
         return {"skipped": "no session count to compare with", "sessions_after": mine,
                 "warning": "this member's session count before it was drained, and the other members' average, are both below the noise floor "
@@ -471,14 +558,21 @@ def _do(action, index, dev, backend, journal, settings):
         else:
             # Only the active member saw sessions built on it; the passive one holds a copy over HA2. So the count this member had is what the one that
             # took over must now show. A collapse puts this member back into service and fails the firewall; the message says what the pair is left on.
-            level, after, _, best, waited = _watch_sessions(backend, journal, serial, _key(index, action), lambda: (_sessions(backend, peer), [before]),
+            errors = []
+            level, after, _, best, waited = _watch_sessions(backend, journal, serial, _key(index, action), lambda: (_sessions(backend, peer, errors), [before]),
                                                            settings, settings.pair_session_warn_band, settings.pair_session_fail_band,
-                                                           settings.pair_session_wait_s, "after the fail-over")
-            words = f"the new active node {peer} has {after} sessions vs {before} before: {round((1 - best) * 100) if best is not None else 0}% short after {round(waited)}s"
-            if level == "fail":
-                backend.functional(serial)
-                raise StepFailed(f"{words} (failure at {int(settings.pair_session_fail_band * 100)}% or more short); this member was put back into service."
+                                                           settings.pair_session_wait_s, "after the fail-over", errors)
+            if level in ("fail", "unknown"):
+                if level == "fail":
+                    limit = int(settings.pair_session_fail_band * 100)
+                    why = (f"the new active node {peer} has {after} sessions vs {before} before: {round((1 - best) * 100)}% short after {round(waited)}s "
+                           f"(failure at {limit}% or more short)")
+                else:
+                    why = (f"the new active node {peer}'s session count could not be read for {round(waited)}s"
+                           + (f" (last answer: {errors[-1]})" if errors else "") + f", so traffic moving to it cannot be confirmed (it had {before} before)")
+                raise StepFailed(f"{why}; reverted: " + _revert_failover(backend, journal, serial, peer, _key(index, action), settings)
                                  + _versions_note(backend, serial, peer))
+            words = f"the new active node {peer} has {after} sessions vs {before} before: {round((1 - best) * 100)}% short after {round(waited)}s"
             detail = {"sessions_before": before, "sessions_after": after, "waited_s": round(waited)}
             if level == "warn":
                 detail["warning"] = f"{words}; the upgrade goes on (warning above {int(settings.pair_session_warn_band * 100)}%)"
@@ -531,9 +625,12 @@ def _do(action, index, dev, backend, journal, settings):
                         "warning": f"the pair's baseline is {base} sessions, below the noise floor of {settings.session_noise_floor}, so the service check is skipped", **said}
             if not base:
                 raise StepFailed(f"active node has {got['session_count']} sessions and there is no baseline to compare with")
-            level, count, _, best, waited = _watch_sessions(backend, journal, serial, _key(index, action), lambda: (_sessions(backend, serial), [base]),
+            errors = []
+            level, count, _, best, waited = _watch_sessions(backend, journal, serial, _key(index, action), lambda: (_sessions(backend, serial, errors), [base]),
                                                             settings, settings.pair_session_warn_band, settings.pair_session_fail_band,
-                                                            settings.pair_session_wait_s, "the active node")
+                                                            settings.pair_session_wait_s, "the active node", errors)
+            if level == "unknown":
+                raise StepFailed(f"the active node's session count could not be read for {round(waited)}s" + (f" (last answer: {errors[-1]})" if errors else ""))
             words = f"active node has {count} sessions vs baseline {base}: {round((1 - best) * 100)}% short after {round(waited)}s"
             if level == "fail":
                 raise StepFailed(f"{words} (failure at {int(settings.pair_session_fail_band * 100)}% or more short)")
@@ -546,9 +643,13 @@ def _do(action, index, dev, backend, journal, settings):
             if theirs["ha_state"] == "active" and base is not None and base < _floor(settings):
                 said["warning"] = f"the pair's baseline is {base} sessions, below the noise floor of {settings.session_noise_floor}, so the service check is skipped"
             if theirs["ha_state"] == "active" and base and base >= _floor(settings):
-                level, count, _, best, waited = _watch_sessions(backend, journal, serial, _key(index, action), lambda: (_sessions(backend, peer), [base]),
+                errors = []
+                level, count, _, best, waited = _watch_sessions(backend, journal, serial, _key(index, action), lambda: (_sessions(backend, peer, errors), [base]),
                                                                 settings, settings.pair_session_warn_band, settings.pair_session_fail_band,
-                                                                settings.pair_session_wait_s, f"the active node {peer}")
+                                                                settings.pair_session_wait_s, f"the active node {peer}", errors)
+                if level == "unknown":
+                    raise StepFailed(f"the pair is upgraded but the active node {peer}'s session count could not be read for {round(waited)}s"
+                                     + (f" (last answer: {errors[-1]})" if errors else ""))
                 words = f"the pair is upgraded but the active node {peer} has {count} sessions vs baseline {base}: {round((1 - best) * 100)}% short after {round(waited)}s"
                 if level == "fail":
                     raise StepFailed(f"{words} (failure at {int(settings.pair_session_fail_band * 100)}% or more short)")

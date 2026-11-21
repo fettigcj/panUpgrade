@@ -30,9 +30,14 @@ class AtTheFailOver(te.Base):
         _, _, _, journal, result = self.go(data, backend=sim)
         state, why = result["outcome"]["A1"]
         self.assertEqual(state, "failed")
-        self.assertIn("put back into service", why)
+        self.assertIn("reverted", why)
         self.assertIn("two versions", why)                      # passive first: A2 is upgraded and A1 is not
         self.assertIn(("A1", "functional"), [c[:2] for c in sim.calls])
+        # lifting the suspension is not enough: the upgraded peer is suspended so that A1 carries the traffic again, then let back in
+        order = [c[:2] for c in sim.calls if c[:2] in (("A1", "functional"), ("A2", "suspend"), ("A2", "functional"))]
+        self.assertEqual(order[-3:], [("A1", "functional"), ("A2", "suspend"), ("A2", "functional")])
+        self.assertEqual((sim.nodes["A1"].state, sim.nodes["A2"].state), ("active", "passive"))
+        self.assertIn("A1 is active, A2 is passive", why)
 
     def test_the_active_first_order_leaves_both_on_the_old_version_when_it_collapses(self):
         data = fleet_data(pair("A1", "A2"))

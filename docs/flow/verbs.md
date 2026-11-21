@@ -279,7 +279,7 @@ flowchart TD
     n_panupgrade_executor__step["executor._step"]
     n_panupgrade_executor__preflight["executor._preflight"]
     n_panupgrade_executor__key["executor._key"]
-    n_panupgrade_executor__sessions["executor._sessions"]
+    n_panupgrade_executor__sessions["executor._sessions<br/><i>The active session count, or None when it cannot be read. None is not </i>"]
     n_panupgrade_executor__do["executor._do"]
     n_panupgrade_executor__standing["executor._standing<br/><i>Where a firewall stands when the step at ``index`` did not finish: whi</i>"]
     n_panupgrade_windows_Gate_leave["windows.Gate.leave"]

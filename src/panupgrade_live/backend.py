@@ -201,6 +201,11 @@ class LiveBackend(Backend):
                 "session_count": facts.session_count, "content_compat": facts.ha_content_compat,
                 "ha_problem": next((p for p in problems if p.startswith("high availability")), None)}
 
+    def session_count(self, serial):
+        """The active session count, asked for on its own with ONE question (no retry here: the caller's loop is the retry, and its deadline
+        must not be stretched by a read that waits a minute three times). Raises when Panorama or the firewall does not answer."""
+        return xmlops.parse_session_count(lambda command: self.read.op(command, target=serial))
+
     def backup(self, serial):
         try:
             reply = self.read.op_xml("<show><config><running/></config></show>", target=serial)

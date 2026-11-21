@@ -218,6 +218,18 @@ If an `upgrade` of exactly the same plan did not finish, the tool says so and as
 
 Without a terminal, add `--resume` or `--fresh`. `--journal FILE` and `--runs-dir DIR` override the defaults. Config backups land in the `backup_dir` setting before any install or reboot; on start-up you are asked whether to delete those older than `backup_keep_days` (default 14 days, 0 = never ask). `prepare` is safe to repeat: it checks the firewalls themselves.
 
+## Runs go on in the background
+
+A real `upgrade` is carried out by a background process of its own (the worker), started in its own session. Closing the window, losing an SSH connection or logging out does not reach it. The window you started it in becomes a viewer: it shows what the worker prints and passes on a stop. Close it (Ctrl-C in a terminal, Q in the screen) and the run keeps going.
+
+- `panupgrade watch` looks at the run again (the latest lines first, then live). Ctrl-C stops looking, never the run. In the screen, the Upgrade step offers **Watch the run in the background** while one is going.
+- `panupgrade stop` (or **Stop after the steps in progress** on the screen) asks the worker to start nothing new; the steps going finish. Quitting the screen does not stop a run that a worker carries.
+- Only one worker runs per folder of journals. A second start is refused and says which run is going.
+- `--foreground` keeps the old behaviour: the run is carried out in the window you started it in and ends when that window does. Rehearsals (`--dry-run`) always run in the window.
+- The worker leaves, beside the journal: `<journal>.out` (everything it prints), `<journal>.status.json` (its state, rewritten every couple of seconds) and `<journal>.approval.json`.
+- The `unattended` setting decides what the worker does while nobody is looking: `continue` (the default) carries on, so a coffee break is not a failure; `pause` makes it finish the steps going, start nothing new, and say so once nobody has looked for `unattended_pause_after_min` minutes. Looking again and running the same command with `--resume` continues it.
+- If a worker dies (the machine went down, the process was killed), there is no automatic pick-up: the firewalls are the truth, not the journal. The next `plan` or `upgrade` review says the earlier run ended abruptly and names the steps left in doubt, and a new run starts from the plan as the firewalls are now. Check any firewall named as in doubt; a member may have been left suspended.
+
 ## Approving
 
 One requirement: a person decided to go ahead knowing what will change and which cautions apply.

@@ -270,22 +270,31 @@ flowchart TD
     n_panupgrade_cli__has_steps["cli._has_steps<br/><i>True if the journal file records any step (not just its header line)</i>"]
     n_panupgrade_cli__unfinished_run["cli._unfinished_run<br/><i>The newest earlier run of exactly this plan that did not finish, as (J</i>"]
     n_panupgrade_cli__expected_steps["cli._expected_steps<br/><i>For each firewall the plan will change: every journal key a finished r</i>"]
+    n_panupgrade_cli__hand_to_worker["cli._hand_to_worker<br/><i>A real run is carried out by a background process of its own, so a clo</i>"]
+    n_panupgrade_worker_active["worker.active<br/><i>The lock of a worker that is running in this folder, or None</i>"]
+    n_panupgrade_cli__worker_argv["cli._worker_argv<br/><i>The command line that makes a new process do exactly what ``args`` say</i>"]
+    n_panupgrade_worker_python_command["worker.python_command"]
+    n_panupgrade_worker_sidecar["worker.sidecar"]
+    n_panupgrade_worker_child_env["worker.child_env<br/><i>The environment for the worker: this one, plus the folder the tool is </i>"]
+    n_panupgrade_cli__view["cli._view<br/><i>Show a worker's output until it ends; return its exit code. Ctrl-C (or</i>"]
+    n_panupgrade_worker_follow["worker.follow<br/><i>Watch a worker until it ends: pass on what it prints (``on_line``) and</i>"]
+    n_panupgrade_cli__upgrade_run["cli._upgrade_run<br/><i>The run itself, in this process</i>"]
     n_panupgrade_executor_run["executor.run<br/><i>Carry out the plan. Units (an HA pair, or a standalone firewall) run i</i>"]
     n_panupgrade_executor__failed_in_journal["executor._failed_in_journal"]
     n_panupgrade_windows_Windows_begin["windows.Windows.begin<br/><i>'' when every window the unit needs is open, else why it could not be </i>"]
     n_panupgrade_windows_Windows_end["windows.Windows.end"]
     n_panupgrade_executor__run_device["executor._run_device<br/><i>Run one firewall's steps. A member of a stand-alone group takes a slot</i>"]
     n_panupgrade_executor__run_steps["executor._run_steps"]
-    n_panupgrade_executor__step["executor._step"]
-    n_panupgrade_executor__preflight["executor._preflight"]
-    n_panupgrade_executor__key["executor._key"]
-    n_panupgrade_executor__sessions["executor._sessions<br/><i>The active session count, or None when it cannot be read. None is not </i>"]
-    n_panupgrade_executor__do["executor._do"]
-    n_panupgrade_executor__standing["executor._standing<br/><i>Where a firewall stands when the step at ``index`` did not finish: whi</i>"]
-    n_panupgrade_windows_Gate_leave["windows.Gate.leave"]
     n_panupgrade_windows_restore_lb["windows.restore_lb<br/><i>Put the profile back as the journal recorded it. '' when there was not</i>"]
     n_panupgrade_windows_Windows_close_all["windows.Windows.close_all"]
+    n_panupgrade_executor__standing["executor._standing<br/><i>Where a firewall stands when the step at ``index`` did not finish: whi</i>"]
+    n_panupgrade_executor__key["executor._key"]
     n_panupgrade_windows_lb_unrestored["windows.lb_unrestored<br/><i>Members whose drain was started and whose profile is not known to be b</i>"]
+    n_panupgrade_worker_acquire["worker.acquire<br/><i>Take the lock for this process, or raise WorkerBusy naming the run alr</i>"]
+    n_panupgrade_worker_install_signals["worker.install_signals<br/><i>A worker ignores a hangup. A termination request (kill, shutdown) asks</i>"]
+    n_panupgrade_worker_now_iso["worker.now_iso"]
+    n_panupgrade_worker_Heartbeat_finish["worker.Heartbeat.finish<br/><i>Called when the run is over, whatever way it ended: the last status sa</i>"]
+    n_panupgrade_worker_release["worker.release"]
     n_panupgrade_cli__upgrade_execute_from_file["from_file<br/><i>one of: FakeFleet</i>"]
     n_panupgrade_cli__upgrade_review["cli._upgrade_review<br/><i>Read the fleet and build the upgrade plan. Changes nothing. With ``sho</i>"]
     n_panupgrade_cli__build["cli._build"]
@@ -349,6 +358,7 @@ flowchart TD
     n_panupgrade_planner_build_plan_list_devices["list_devices<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_planner_build_plan_panorama_version["panorama_version<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_planner_build_plan_panorama_clock["panorama_clock<br/><i>one of: FakeFleet / OpSource / Source</i>"]
+    n_panupgrade_worker_dead_run["worker.dead_run<br/><i>If a worker died without finishing (its lock is still there, its proce</i>"]
     n_panupgrade_cli__upgrade --> n_panupgrade_cli__upgrade_execute
     n_panupgrade_cli__upgrade_execute --> n_panupgrade_cli_UpgradeBundle_ready
     n_panupgrade_cli__upgrade_execute --> n_panupgrade_cli_UpgradeBundle_acks
@@ -356,24 +366,31 @@ flowchart TD
     n_panupgrade_cli__choose_journal --> n_panupgrade_cli__has_steps
     n_panupgrade_cli__choose_journal --> n_panupgrade_cli__unfinished_run
     n_panupgrade_cli__unfinished_run --> n_panupgrade_cli__expected_steps
-    n_panupgrade_cli__upgrade_execute --> n_panupgrade_executor_run
+    n_panupgrade_cli__upgrade_execute --> n_panupgrade_cli__hand_to_worker
+    n_panupgrade_cli__hand_to_worker --> n_panupgrade_worker_active
+    n_panupgrade_cli__hand_to_worker --> n_panupgrade_cli__worker_argv
+    n_panupgrade_cli__worker_argv --> n_panupgrade_worker_python_command
+    n_panupgrade_cli__hand_to_worker --> n_panupgrade_worker_sidecar
+    n_panupgrade_cli__hand_to_worker --> n_panupgrade_worker_child_env
+    n_panupgrade_cli__hand_to_worker --> n_panupgrade_cli__view
+    n_panupgrade_cli__view --> n_panupgrade_worker_follow
+    n_panupgrade_cli__upgrade_execute --> n_panupgrade_cli__upgrade_run
+    n_panupgrade_cli__upgrade_run --> n_panupgrade_executor_run
     n_panupgrade_executor_run --> n_panupgrade_executor__failed_in_journal
     n_panupgrade_executor_run --> n_panupgrade_windows_Windows_begin
     n_panupgrade_executor_run --> n_panupgrade_windows_Windows_end
     n_panupgrade_executor_run --> n_panupgrade_executor__run_device
     n_panupgrade_executor__run_device --> n_panupgrade_executor__run_steps
-    n_panupgrade_executor__run_steps --> n_panupgrade_executor__failed_in_journal
-    n_panupgrade_executor__run_steps --> n_panupgrade_executor__step
-    n_panupgrade_executor__run_steps --> n_panupgrade_executor__preflight
-    n_panupgrade_executor__run_steps --> n_panupgrade_executor__key
-    n_panupgrade_executor__run_steps --> n_panupgrade_executor__sessions
-    n_panupgrade_executor__run_steps --> n_panupgrade_executor__do
-    n_panupgrade_executor__run_steps --> n_panupgrade_executor__standing
-    n_panupgrade_executor__run_steps --> n_panupgrade_windows_Gate_leave
     n_panupgrade_executor__run_device --> n_panupgrade_windows_restore_lb
     n_panupgrade_executor_run --> n_panupgrade_windows_Windows_close_all
     n_panupgrade_executor_run --> n_panupgrade_executor__standing
+    n_panupgrade_executor__standing --> n_panupgrade_executor__key
     n_panupgrade_executor_run --> n_panupgrade_windows_lb_unrestored
+    n_panupgrade_cli__upgrade_execute --> n_panupgrade_worker_acquire
+    n_panupgrade_cli__upgrade_execute --> n_panupgrade_worker_install_signals
+    n_panupgrade_cli__upgrade_execute --> n_panupgrade_worker_now_iso
+    n_panupgrade_cli__upgrade_execute --> n_panupgrade_worker_Heartbeat_finish
+    n_panupgrade_cli__upgrade_execute --> n_panupgrade_worker_release
     n_panupgrade_cli__upgrade_execute -.-> n_panupgrade_cli__upgrade_execute_from_file
     n_panupgrade_cli__upgrade --> n_panupgrade_cli__upgrade_review
     n_panupgrade_cli__upgrade_review --> n_panupgrade_cli__build
@@ -449,6 +466,59 @@ flowchart TD
     n_panupgrade_planner_build_plan -.-> n_panupgrade_planner_build_plan_panorama_version
     n_panupgrade_planner_build_plan -.-> n_panupgrade_planner_build_plan_panorama_clock
     n_panupgrade_cli__upgrade_review --> n_panupgrade_cli__unfinished_run
+    n_panupgrade_cli__upgrade_review --> n_panupgrade_worker_dead_run
+```
+
+## `panupgrade watch`
+
+look at a run that is going on in the background (or the last one): what it prints, as it prints it. Ctrl-C stops looking, never the run.
+
+Handler: `_watch`
+
+```mermaid
+flowchart TD
+    n_panupgrade_cli__watch["cli._watch"]
+    n_panupgrade_cli__which_run["cli._which_run<br/><i>(journal path, the lock if a worker is running or was left behind) of </i>"]
+    n_panupgrade_cli__run_directory["cli._run_directory"]
+    n_panupgrade_worker_active["worker.active<br/><i>The lock of a worker that is running in this folder, or None</i>"]
+    n_panupgrade_worker_left_behind["worker.left_behind<br/><i>The lock of a worker that is NOT running any more (it was killed, or t</i>"]
+    n_panupgrade_worker_sidecar["worker.sidecar"]
+    n_panupgrade_worker_Tail_lines["worker.Tail.lines"]
+    n_panupgrade_worker_status["worker.status"]
+    n_panupgrade_worker_in_doubt["worker.in_doubt<br/><i>The steps a journal shows as started and not finished: [(serial, step)</i>"]
+    n_panupgrade_cli__view["cli._view<br/><i>Show a worker's output until it ends; return its exit code. Ctrl-C (or</i>"]
+    n_panupgrade_worker_follow["worker.follow<br/><i>Watch a worker until it ends: pass on what it prints (``on_line``) and</i>"]
+    n_panupgrade_cli__watch --> n_panupgrade_cli__which_run
+    n_panupgrade_cli__which_run --> n_panupgrade_cli__run_directory
+    n_panupgrade_cli__which_run --> n_panupgrade_worker_active
+    n_panupgrade_cli__which_run --> n_panupgrade_worker_left_behind
+    n_panupgrade_cli__watch --> n_panupgrade_worker_sidecar
+    n_panupgrade_cli__watch --> n_panupgrade_worker_Tail_lines
+    n_panupgrade_cli__watch --> n_panupgrade_worker_status
+    n_panupgrade_cli__watch --> n_panupgrade_worker_in_doubt
+    n_panupgrade_cli__watch --> n_panupgrade_cli__view
+    n_panupgrade_cli__view --> n_panupgrade_worker_follow
+```
+
+## `panupgrade stop`
+
+ask the run going on in the background to start nothing new; the steps going finish.
+
+Handler: `_stop`
+
+```mermaid
+flowchart TD
+    n_panupgrade_cli__stop["cli._stop"]
+    n_panupgrade_cli__which_run["cli._which_run<br/><i>(journal path, the lock if a worker is running or was left behind) of </i>"]
+    n_panupgrade_cli__run_directory["cli._run_directory"]
+    n_panupgrade_worker_active["worker.active<br/><i>The lock of a worker that is running in this folder, or None</i>"]
+    n_panupgrade_worker_left_behind["worker.left_behind<br/><i>The lock of a worker that is NOT running any more (it was killed, or t</i>"]
+    n_panupgrade_worker_request_stop["worker.request_stop"]
+    n_panupgrade_cli__stop --> n_panupgrade_cli__which_run
+    n_panupgrade_cli__which_run --> n_panupgrade_cli__run_directory
+    n_panupgrade_cli__which_run --> n_panupgrade_worker_active
+    n_panupgrade_cli__which_run --> n_panupgrade_worker_left_behind
+    n_panupgrade_cli__stop --> n_panupgrade_worker_request_stop
 ```
 
 ## `panupgrade prepare`

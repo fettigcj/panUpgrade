@@ -32,10 +32,17 @@ class Aborted(BaseException):
     raised in work that changes firewalls (that stops at a step boundary instead), because it could land in the middle of a step."""
 
 
-def listen(callback, phase=None, finding=None):
-    """Send this thread's progress words to ``callback``, the names of its stages to ``phase`` and what it found to ``finding``
-    (or stop doing so, with None)."""
-    _local.callback, _local.phase, _local.finding = callback, phase, finding
+def listen(callback, phase=None, finding=None, detached=None):
+    """Send this thread's progress words to ``callback``, the names of its stages to ``phase``, what it found to ``finding`` and the news that
+    the work now runs in a background process of its own to ``detached`` (or stop doing so, with None)."""
+    _local.callback, _local.phase, _local.finding, _local.detached = callback, phase, finding, detached
+
+
+def detached(pid):
+    """The work is now carried out by a background process (``pid``): this thread only watches it, and closing the screen does not end it."""
+    callback = getattr(_local, "detached", None)
+    if callback is not None:
+        callback(pid)
 
 
 def finding(kind, text):

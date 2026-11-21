@@ -83,6 +83,7 @@ def write(out_dir, stamp, args, plan, approval, who, windows=None, project_dir=N
     header = [f"panupgrade upgrade kit for {args.target}, written {stamp} by {who}. Running this script IS the go-ahead.",
               f"This runs the REAL upgrade on {len(approval.serials)} firewall(s) listed in {serials_file.name}.",
               f"It is approved only while the plan is unchanged and for a limited time (see approval_max_age_hours); if it refuses, run `panupgrade prepare` again.",
+              f"The run goes on in the background: closing this window does not stop it. `panupgrade watch` looks at it again, `panupgrade stop` asks it to start nothing new.",
               f"Interrupted? Add --resume to the command to continue; finished steps are skipped."]
     if windows:
         body = ["@echo off"] + [f"rem {h}" for h in header] + [f'cd /d "{project}"', f'set "PYTHONPATH={project / "src"}"', command, "pause"]

@@ -54,6 +54,8 @@ flowchart LR
 | `report` | yes | no |
 | `plan` | yes | yes |
 | `upgrade` | yes | yes |
+| `watch` | no | no |
+| `stop` | no | no |
 | `prepare` | yes | yes |
 | `shell` | no | no |
 | `auth` | no | no |

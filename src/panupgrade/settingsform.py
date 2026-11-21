@@ -33,6 +33,7 @@ SECTIONS = [
     ("Downgrades", ["allow_downgrade"]),
     ("Images, disk and time", ["image_source", "delete_unneeded_images", "min_free_disk_mb", "download_timeout_s", "job_stall_s", "install_timeout_s", "reboot_timeout_s",
                                "poll_interval_s", "backup_dir", "backup_keep_days", "approval_max_age_hours"]),
+    ("Running in the background", ["unattended", "unattended_pause_after_min"]),
 ]
 # name -> (what it does, {choice or "true"/"false": what that value means})
 INFO = {
@@ -191,12 +192,18 @@ INFO = {
     "backup_keep_days": ("How many days to keep configuration backups. When the tool is started it counts the backups in the backup folder that are older "
                          "than this and asks whether to delete them; nothing is deleted without your yes. 0 turns the question off and keeps everything.", {}),
     "approval_max_age_hours": ("An approval older than this is refused. 168 is a week; 0 means it never expires.", {}),
+    "unattended": ("A real upgrade runs in a background process of its own, so closing the window or losing the connection does not stop it. "
+                   "This decides what the run does while nobody is looking at it (no screen open on it, no `panupgrade watch`).",
+                   {"continue": "the default. Carry on: stepping away for a coffee is not a failure. Every other rule still applies",
+                    "pause": "after unattended_pause_after_min minutes with nobody looking, finish the steps going (including any revert), start nothing "
+                             "new, and say so. Looking again and continuing the run (--resume) picks it up"}),
+    "unattended_pause_after_min": ("With unattended = pause: how many minutes without anyone looking before the run pauses.", {}),
 }
 LIMITS = {
     "pair_session_warn_band": "a number above 0 and up to 1", "pair_session_fail_band": "a number above 0 and up to 1", "pair_session_wait_s": "whole seconds, 0 or more", "session_noise_floor": "whole sessions, 0 or more",
     "api_rate_per_s": "a number above 0", "spread_limit": "a whole number, 1 or more", "max_failures": "a whole number, 1 or more",
     "max_parallel": "a whole number, 1 or more", "sync_timeout_s": "whole seconds, 1 or more", "busy_wait_s": "whole seconds, 1 or more",
-    "poll_interval_s": "whole seconds, 1 or more", "backup_keep_days": "whole days, 0 or more", "job_stall_s": "whole seconds, 0 or more", "lb_drain_wait_s": "whole seconds, 0 or more",
+    "unattended_pause_after_min": "whole minutes, 1 or more", "poll_interval_s": "whole seconds, 1 or more", "backup_keep_days": "whole days, 0 or more", "job_stall_s": "whole seconds, 0 or more", "lb_drain_wait_s": "whole seconds, 0 or more",
     "group_session_warn_band": "a number above 0 and up to 1", "group_session_fail_band": "a number above 0 and up to 1", "group_session_wait_s": "whole seconds, 0 or more", "group_reboot_tolerance": "a whole number, 1 or more", "content_settle_s": "whole seconds, 0 or more",
     "settle_after_failover_s": "whole seconds, 0 or more", "settle_after_reboot_s": "whole seconds, 0 or more",
 }

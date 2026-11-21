@@ -9,6 +9,7 @@ import getpass
 import io
 import json
 import os
+import platform
 import re
 import sys
 import threading
@@ -18,7 +19,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from . import (approval as approval_mod, fleetreport, console, executor, paths, prepare as prepare_mod, progress, releases as releases_mod, report,
-               runlog, settings as settings_mod, xlsxout)
+               runlog, settings as settings_mod, worker as worker_mod, xlsxout)
 from . import credstore, profiles, site, trust
 from .credstore import NeedsSignIn
 from .trust import CertificateProblem
@@ -835,13 +836,23 @@ class RunEvents:
             return list(self.events)
 
 
+class StopSwitch(threading.Event):
+    """The stop request of a real run. Once the run has been handed to a background worker, a viewer going away (quitting the screen) must NOT
+    stop it: only an explicit stop does."""
+    detached = False
+
+    def on_quit(self):
+        if not self.detached:
+            self.set()
+
+
 class UpgradeBundle(RunEvents):
     """What the review of an upgrade found, kept for the run that follows: the plan, the connection to carry it out, and any earlier run of
     this exact plan that did not finish. ``stop`` asks the run to start nothing new (steps already going finish)."""
 
     def __init__(self, plan, settings, backend, fleet, label, previous):
         self.plan, self.settings, self.backend, self.fleet, self.label, self.previous = plan, settings, backend, fleet, label, previous
-        self.created, self.stop = time.time(), threading.Event()
+        self.created, self.stop = time.time(), StopSwitch()
         self._start_events()
 
     def ready(self):
@@ -863,7 +874,12 @@ def _upgrade_review(args, style, show=False):
     progress.phase("Looking for an earlier run of this plan")
     runs = Path(args.runs_dir) if args.runs_dir else _ws(args, "runs")
     previous = None if args.dry_run else _unfinished_run(runs, "upgrade", plan)
+    dead = None if args.dry_run else worker_mod.dead_run(runs)
     if show:
+        if dead:
+            print(style.line("warn", f"an earlier run ended abruptly (its worker, process {dead['pid']}, is gone): journal {dead['journal']}, started {dead['started']}. "
+                                     f"Steps left in doubt: {dead['in_doubt'] or 'none'}. Check those firewalls (a member may be left suspended). "
+                                     "This plan was read from the firewalls as they are now."))
         sys.stdout.write(console.render_plan(plan, style))
         if previous is not None:
             print()
@@ -898,6 +914,178 @@ def _upgrade_execute(args, style, bundle, approve=None):
         approval = approve(journal_path)
         if approval is None:
             return 3
+    if label == "LIVE" and not args.foreground and not args.worker:
+        return _hand_to_worker(args, style, bundle, approval, journal_path, resuming)
+    if not args.worker:
+        return _upgrade_run(args, style, bundle, approval, journal_path, resuming)
+    folder = Path(journal_path).parent
+    try:
+        worker_mod.acquire(folder, {"journal": str(journal_path), "verb": "upgrade", "user": getpass.getuser(), "host": platform.node()})
+    except worker_mod.WorkerBusy as exc:
+        print(style.line("stop", str(exc)))
+        return 3
+    beat = worker_mod.Heartbeat(journal_path, bundle.stop, settings.unattended, settings.unattended_pause_after_min * 60, say=print)
+    worker_mod.install_signals(bundle.stop, print)
+    beat.write()
+    beat.start()
+    code = 2
+    try:
+        print(style.line("info", f"worker {os.getpid()} started {worker_mod.now_iso()}; unattended = {settings.unattended}"
+                         + (f" (pauses after {settings.unattended_pause_after_min} min unwatched)" if settings.unattended == "pause" else "")))
+        code = _upgrade_run(args, style, bundle, approval, journal_path, resuming)
+        return code
+    except executor.ExecutionRefused:
+        code = 3
+        raise
+    finally:
+        beat.finish(code)
+        worker_mod.release(folder)
+
+
+def _worker_argv(args, overrides):
+    """The command line that makes a new process do exactly what ``args`` says: every option that differs from its default, then ``overrides``
+    ({dest: value}). Built from the parsed arguments rather than from what was typed, because a screen changes them (resume, fresh) after parsing."""
+    sub = build_parser()._subparsers._group_actions[0].choices["upgrade"]
+    out, by_dest = [], {}
+    for action in sub._actions:
+        if not action.option_strings or action.dest in ("help", "source"):
+            continue
+        flag = max(action.option_strings, key=len)
+        by_dest[action.dest] = (action, flag)
+        if action.dest in overrides:
+            continue
+        value = getattr(args, action.dest, action.default)
+        if isinstance(action, argparse._StoreTrueAction):
+            if value:
+                out.append(flag)
+        elif isinstance(action, argparse._AppendAction):
+            for item in value or []:
+                out += [flag, str(item)]
+        elif isinstance(action, argparse.BooleanOptionalAction):
+            if value is not None and value != action.default:
+                out.append(flag if value else flag.replace("--", "--no-", 1))
+        elif value is not None and value != action.default:
+            out += [flag, str(value)]
+    for dest, value in overrides.items():
+        action, flag = by_dest[dest]
+        if isinstance(action, argparse._StoreTrueAction):
+            if value:
+                out.append(flag)
+        elif value is not None:
+            out += [flag, str(value)]
+    return worker_mod.python_command() + ["upgrade"] + out
+
+
+def _hand_to_worker(args, style, bundle, approval, journal_path, resuming):
+    """A real run is carried out by a background process of its own, so a closed window or a dropped connection cannot end it. This process
+    becomes the viewer: it shows what the worker prints, passes on a stop, and can be closed (Ctrl-C) without touching the run."""
+    folder = Path(journal_path).parent
+    busy = worker_mod.active(folder)
+    if busy:
+        raise ValueError(f"a run is already in progress here: journal {busy.get('journal')}, started {busy.get('started')}. "
+                         "Watch it with `panupgrade watch`, or stop it with `panupgrade stop`.")
+    approval_path = args.approval
+    if not approval_path:
+        approval_path = str(journal_path) + ".approval.json"
+        if not Path(approval_path).exists():
+            Path(approval_path).write_text(json.dumps(approval.to_dict(), indent=1) + "\n", encoding="utf-8")
+    argv = _worker_argv(args, {"approval": approval_path, "journal": str(journal_path), "resume": bool(resuming), "fresh": False,
+                               "worker": True, "foreground": False})
+    log = worker_mod.sidecar(journal_path, ".out")
+    before = log.stat().st_size if log.exists() else 0
+    Path(journal_path).parent.mkdir(parents=True, exist_ok=True)
+    from panupgrade_live import launch
+    proc = launch.spawn(argv, log, env=worker_mod.child_env())
+    if bundle is not None and hasattr(bundle.stop, "detached"):
+        bundle.stop.detached = True
+    progress.detached(proc.pid)
+    print(style.line("info", f"the run is going in the background (process {proc.pid}), journal {journal_path}"))
+    print(style.line("info", "closing this window does not stop it. `panupgrade watch` looks at it again; `panupgrade stop` asks it to start nothing new."))
+    return _view(journal_path, proc, bundle, before, style)
+
+
+def _view(journal_path, proc, bundle, out_from, style, pid=None, show=print):
+    """Show a worker's output until it ends; return its exit code. Ctrl-C (or a closed window) leaves the run going."""
+    try:
+        code = worker_mod.follow(journal_path, proc=proc, on_line=show,
+                                 on_record=(lambda rec: bundle.record(rec) if rec.get("type") != "header" else None) if bundle is not None else None,
+                                 want_stop=bundle.stop.is_set if bundle is not None else None, out_from=out_from, pid=pid)
+    except KeyboardInterrupt:
+        print()
+        print(style.line("info", "no longer watching. The run is still going; `panupgrade watch` looks at it again, `panupgrade stop` asks it to stop."))
+        return 0
+    if code is None:
+        print(style.line("stop", "the worker ended without leaving an exit code (it was killed?). The journal shows where it got to; "
+                                 "read the plan again to start from where the firewalls are now."))
+        return 1
+    return code
+
+
+def _run_directory(args):
+    return Path(args.runs_dir) if args.runs_dir else _ws(args, "runs")
+
+
+def _which_run(args):
+    """(journal path, the lock if a worker is running or was left behind) of the run to look at."""
+    folder = _run_directory(args)
+    if args.journal:
+        return Path(args.journal), worker_mod.active(Path(args.journal).parent)
+    found = worker_mod.active(folder) or worker_mod.left_behind(folder)
+    if found and found.get("journal"):
+        return Path(found["journal"]), worker_mod.active(folder)
+    candidates = sorted(folder.glob("*.status.json"), key=lambda path: path.stat().st_mtime) if folder.is_dir() else []
+    if not candidates:
+        return None, None
+    return Path(str(candidates[-1])[:-len(".status.json")]), None
+
+
+class WatchBundle(RunEvents):
+    """What a screen keeps of a run it is only looking at: the events it has seen and the switch that asks the worker to stop."""
+
+    def __init__(self):
+        self.stop, self.created = StopSwitch(), time.time()
+        self.stop.detached = True
+        self._start_events()
+
+
+def _watch(args, bundle=None):
+    style = _style(args)
+    journal, running = _which_run(args)
+    if journal is None:
+        print("There is no run to look at here (no worker has been started in this folder).")
+        return 1
+    log = worker_mod.sidecar(journal, ".out")
+    shown = worker_mod.Tail(log)
+    tail = shown.lines()[-max(args.lines, 0):] if args.lines else []
+    state = worker_mod.status(journal) or {}
+    print(style.line("info", f"{'running' if running else state.get('state', 'not running')}: journal {journal}"
+                     + (f", process {running.get('pid')}" if running else "")))
+    for line in tail:
+        print(line)
+    if not running:
+        if state.get("exit") is None:
+            print(style.line("warn", "this worker is no longer running and left no exit code: it was ended abruptly. "
+                                     f"Steps left in doubt: {worker_mod.in_doubt(journal) or 'none'}. Read the plan again to start from where the firewalls are now."))
+            return 1
+        return int(state["exit"])
+    progress.detached(running.get("pid"))
+    return _view(journal, None, bundle, shown.offset, style, pid=running.get("pid"))
+
+
+def _stop(args):
+    style = _style(args)
+    journal, running = _which_run(args)
+    if journal is None or not running:
+        print("No run is going on here.")
+        return 1
+    worker_mod.request_stop(journal)
+    print(style.line("info", f"asked the run ({journal}) to start nothing new. The steps going will finish; `panupgrade watch` shows it settle."))
+    return 0
+
+
+def _upgrade_run(args, style, bundle, approval, journal_path, resuming):
+    """The run itself, in this process."""
+    plan, settings, backend, label = bundle.plan, bundle.settings, bundle.backend, bundle.label
     journal = Journal.resume(journal_path, plan["hash"]) if resuming else Journal.create(journal_path, plan["hash"], plan.get("settings"))
     print(style.line("info", f"journal: {journal_path}" + (" (continuing)" if resuming else "")))
     names = {d["serial"]: d["hostname"] for d in plan["devices"]}
@@ -1420,6 +1608,8 @@ The usual order (everything but prepare and upgrade only reads):
   plan      what would an upgrade to a version do, and what blocks it?   panupgrade plan --panorama <address> --target 10.2.2
   prepare   get ready ahead of the window, then write the run script     panupgrade prepare --panorama <address> --target 10.2.2
   upgrade   carry out an approved upgrade (the script does this)         panupgrade upgrade --panorama <address> --approval FILE
+  watch     look at the run going on in the background                   panupgrade watch
+  stop      ask that run to start nothing new                            panupgrade stop
 
 Helpers:
   select    build a firewall list from filters, to check and edit (on a terminal it opens a fill-in form)
@@ -1472,6 +1662,15 @@ def _run_args(p, journal_required=False):
     p.add_argument("--sim-fail", action="append", help="inject a failure: serial:operation (e.g. SIMA0001:install)")
 
 
+def _watch_args(p):
+    p.add_argument("--profile", metavar="NAME", help="the Panorama profile whose runs to look at")
+    p.add_argument("--runs-dir", help="where the run journals are (default: runs, in the profile's workspace or the current folder)")
+    p.add_argument("--journal", help="the run to look at (default: the one going on, else the latest)")
+    p.add_argument("--lines", type=int, default=40, help="how many of the latest lines to show first (default 40)")
+    p.add_argument("--color", choices=["auto", "always", "never"], default="auto", help=argparse.SUPPRESS)
+    p.add_argument("--ascii", action="store_true", help=argparse.SUPPRESS)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="panupgrade", description="Upgrade Palo Alto firewalls through Panorama, safely. Run `panupgrade help` for the order to use the commands in.", epilog="Run `panupgrade help` for an overview.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1510,7 +1709,20 @@ def build_parser():
     _run_args(ex)
     ex.add_argument("--approval", help="approval JSON written by `prepare` (or by typing APPROVE); without it you are asked to type APPROVE. "
                                        "A --dry-run asks nothing.")
+    ex.add_argument("--foreground", action="store_true",
+                    help="carry out a real run in this window instead of in a background process of its own. The run then ends with this window "
+                         "(a closed terminal, a dropped connection), so use it only when you have a reason")
+    ex.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)       # set by the tool itself on the process it starts
     ex.set_defaults(func=_upgrade)
+
+    wt = sub.add_parser("watch", help="look at a run that is going on in the background (or the last one): what it prints, as it prints it. "
+                                      "Ctrl-C stops looking, never the run")
+    _watch_args(wt)
+    wt.set_defaults(func=_watch)
+
+    sp = sub.add_parser("stop", help="ask the run going on in the background to start nothing new; the steps going finish")
+    _watch_args(sp)
+    sp.set_defaults(func=_stop)
 
     prep = sub.add_parser("prepare", help="pre-maintenance: sync HA config, pre-download images, review the upgrade, and write its approval and run script")
     _selection_args(prep)

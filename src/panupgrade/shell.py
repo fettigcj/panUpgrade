@@ -139,6 +139,7 @@ class Job:
         self.phase_text = ""                              # the named stage it is in now ("Reading firewall 3 of 6: e2")
         self.findings = []                                # what it reported as a problem or a caution: [("fail" | "warn", words)]
         self.abort_requested = False
+        self.detached = False                             # the run has been handed to a background process; this job only watches it
         self._out, self._err = io.StringIO(), io.StringIO()
         self._fn = fn
         threading.Thread(target=self._run, daemon=True).start()
@@ -169,10 +170,13 @@ class Job:
     def _finding(self, kind, text):
         self.findings.append((kind, text))
 
+    def _detached(self, pid):
+        self.detached = True
+
     def _run(self):
         out, err = self._out, self._err
         _capture_start(out, err)
-        progress.listen(self._note, self._phase, self._finding)
+        progress.listen(self._note, self._phase, self._finding, self._detached)
         progress.set_output(out)
         try:
             self.value = self._fn()
@@ -254,7 +258,7 @@ class Session:
         argv = [command] + (["--profile", self.profile.name] if self.profile else [])
         argv += ["--panorama", self.address.strip()] if address and self.address.strip() else []
         argv += ["--color", "never", "--ascii", *extra]
-        if getattr(self.base, "creds_file", None):
+        if getattr(self.base, "creds_file", None) and command not in ("watch", "stop"):
             argv += ["--creds-file", self.base.creds_file]
         args = cli.parse_args(argv)
         args._in_shell = True
@@ -798,6 +802,7 @@ class ChangeScreen(Screen):
         self.stage, self.job, self.bundle, self.args, self.key_ = "idle", None, None, None, None
         self.lines, self.offset, self.bar, self.note, self.typed = [], 0, 0, "", ""
         self.finished, self.result, self.mode = None, None, None            # mode: how an unfinished earlier run is dealt with
+        self.watch_stop, self._background = None, (0.0, None)               # the stop switch of a run only being watched; the worker found last, and when
 
     # -- what differs
     def extra_args(self):
@@ -820,13 +825,40 @@ class ChangeScreen(Screen):
 
     def running_buttons(self):
         """A real run is stopped at a step boundary, never torn down in the middle of a step; a rehearsal can simply be aborted."""
-        if self.job is not None and self.job.changes and self.bundle is not None:
+        if self.job is not None and self.job.changes and (self.bundle is not None or self.watch_stop is not None):
             return [("Stop after the steps in progress", self.stop), ("Home (it keeps running)", None)]
         return [("Abort", self.abort), ("Home (it keeps running)", None)]
 
+    def background(self):
+        """The worker carrying out a run of this profile in the background, if there is one (looked for at most every two seconds)."""
+        if self.verb != "upgrade":
+            return None
+        when, found = self._background
+        if time.monotonic() - when > 2:
+            try:
+                found = cli.worker_mod.active(self.shell.session.ws("runs"))
+            except Exception:                              # a folder that cannot be read has no run to show
+                found = None
+            self._background = (time.monotonic(), found)
+        return found
+
+    def watch_background(self):
+        """Look at the run a background worker is carrying out (started here earlier, or from another window or a script)."""
+        found = self.background()
+        if not found:
+            self.note = "No run is going on in the background."
+            return
+        session = self.shell.session
+        args = session.args_for("watch", address=False)
+        bundle = cli.WatchBundle()
+        self.watch_stop, self.bundle = bundle.stop, None
+        self.stage, self.note, self.offset, self.lines = "running", "", 0, []
+        self.job = self.shell.start_job(f"{self.verb.capitalize()} (watching)", lambda: cli._watch(args, bundle), self._ran, changes=True)
+
     def stop(self):
-        if self.bundle is not None and self.stage == "running":
-            self.bundle.stop.set()
+        switch = self.bundle.stop if self.bundle is not None else self.watch_stop
+        if switch is not None and self.stage == "running":
+            switch.set()
             self.note = ("Stopping: steps already going will finish and nothing new starts. The journal records where it got to; "
                          "read the plan again later to continue it.")
 
@@ -964,7 +996,7 @@ class ChangeScreen(Screen):
             self.stage, self.lines, self.note = "idle", [], "Aborted. Nothing was changed."
             return
         self.stage, self.lines, self.offset, self.result, self.finished = "done", job.text.rstrip("\n").split("\n"), 0, job.code, time.time()
-        self.bundle, self.bar, self.mode = None, 0, None
+        self.bundle, self.bar, self.mode, self.watch_stop = None, 0, None, None
         for name in ("report", "plan", "prepare", "upgrade"):
             if self.shell.screens[name] is not self:
                 self.shell.screens[name].reset()           # the fleet has changed, so what was read before is out of date
@@ -978,7 +1010,8 @@ class ChangeScreen(Screen):
         if self.stage == "reading":
             return [("Abort", self.abort), ("Home (it keeps reading)", None)]
         if self.stage in ("done", "failed", "idle"):
-            return [("Read the plan again" if self.stage != "idle" else "Start: read the plan", self.read_plan), ("Home", None)]
+            watch = [("Watch the run in the background", self.watch_background)] if self.background() else []
+            return watch + [("Read the plan again" if self.stage != "idle" else "Start: read the plan", self.read_plan), ("Home", None)]
         return [("Home", None)]
 
     def body(self):
@@ -1821,7 +1854,11 @@ class Shell:
 
     def changing(self):
         """Background work that is altering real firewalls right now."""
-        return [job for job in self.jobs if job.running and job.changes]
+        return [job for job in self.jobs if job.running and job.changes and not job.detached]
+
+    def detached_runs(self):
+        """Runs this screen is only watching: a background worker carries them out, whatever happens to this window."""
+        return [job for job in self.jobs if job.running and job.changes and job.detached]
 
     def _may_leave(self, how):
         """The way out from anywhere, but not by accident while firewalls are being changed: ask once, then do it on the same key again."""
@@ -1831,7 +1868,8 @@ class Shell:
             return self._quit()
         self._quit_armed, self._quit_key = how, self._pressed
         if not self.changing():
-            self.message = "Quit panupgrade? Press Ctrl-C again or Y to quit, any other key to stay."
+            self.message = ("Quit panupgrade? Press Ctrl-C again or Y to quit, any other key to stay."
+                            + (" The run in the background keeps going; `panupgrade watch` looks at it again." if self.detached_runs() else ""))
             return False
         what = " and ".join(job.title.split(" (")[0] for job in self.changing())
         self.message = (f"QUIT? {what} is changing firewalls. Quitting starts nothing new and lets the steps in progress finish first (the window may "
@@ -1856,7 +1894,7 @@ class Shell:
     def _quit(self):
         """Quitting must not leave the rest of a run going on its own: every run is told to start nothing new."""
         for stop in self.stops:
-            stop.set()
+            getattr(stop, "on_quit", stop.set)()             # a run in a background worker is not stopped by its viewer leaving
         return True
 
     def press(self, key):

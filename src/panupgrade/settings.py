@@ -127,6 +127,8 @@ class Settings:
     backup_dir: str = "backups"        # where verified config backups are written
     backup_keep_days: int = 14         # backups older than this are offered for deletion once, when the tool is started (0 = never ask)
     approval_max_age_hours: int = 168  # an approval older than this (a week) is refused (0 = never expires)
+    unattended: str = "continue"       # a real run goes on when nobody is looking at it (continue) or starts nothing new until someone looks again (pause)
+    unattended_pause_after_min: int = 15   # with unattended = pause: how long without a viewer before the run pauses
 
     def loosening_warnings(self):
         """Plain-language cautions for settings that make a run riskier. Never an error."""
@@ -161,6 +163,7 @@ _CHOICES = {
     "panorama_compare": ("minor", "major"),
     "sync_to_peer": ("Disable", "Both", "UpgradeOnly"),
     "sync_content": ("never", "prepare"),
+    "unattended": ("continue", "pause"),
     "ha_config_unsynced": ("block", "warn"),
     "blocked_peer": ("block", "warn"),
     "lb_drain_probe_protocol": PROBE_CHOICES,
@@ -233,7 +236,8 @@ def from_dict(data, ignored=None, forgiven=()):
     for name in ("lb_drain_wait_s", "group_session_wait_s", "pair_session_wait_s", "session_noise_floor", "job_stall_s", "backup_keep_days"):
         if getattr(settings, name) < 0:
             raise SettingsError(f"{name} must not be negative")
-    for name in ("group_reboot_tolerance", "spread_limit", "max_failures", "max_parallel", "sync_timeout_s", "busy_wait_s", "poll_interval_s"):
+    for name in ("group_reboot_tolerance", "spread_limit", "max_failures", "max_parallel", "sync_timeout_s", "busy_wait_s", "poll_interval_s",
+                 "unattended_pause_after_min"):
         if getattr(settings, name) < 1:
             raise SettingsError(f"{name} must be at least 1")
     return settings

@@ -73,8 +73,9 @@ def write(out_dir, stamp, args, plan, approval, who, windows=None, project_dir=N
 
     names = {d["serial"]: d for d in plan["devices"]}
     lines = [f"# firewalls covered by {approval_file.name} (target {args.target}); one serial per line"]
-    lines += [f"{s}   # {names[s]['hostname']}  {names[s]['current_version']}  {names[s].get('ha_state') or 'standalone'}"
-              for s in approval.serials]
+    # a stand-alone group member keeps its group ("SERIAL, group"): without it the upgrade plans the firewall as a plain stand-alone one
+    lines += [f"{s}{', ' + names[s]['group'] if names[s].get('group') else ''}   # {names[s]['hostname']}  {names[s]['current_version']}  "
+              f"{names[s].get('ha_state') or 'standalone'}" for s in approval.serials]
     serials_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
     approval_file.write_text(json.dumps(approval.to_dict(), indent=1) + "\n", encoding="utf-8")
 

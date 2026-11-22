@@ -311,6 +311,16 @@ class Running(unittest.TestCase):
         self.assertTrue(any(c["code"] == "pending_changes" for c in plan["cautions"]))
         self.assertFalse(sim.nodes["S2"].pending)
 
+    def test_the_upgrade_kit_keeps_each_firewalls_group_so_the_run_plans_the_same_thing(self):
+        from panupgrade import kit
+        plan, s = plan_for(three(), GROUP)
+        approval = approve(plan)
+        args = cli.build_parser().parse_args(["upgrade", "--source", "fake:x", "--target", TARGET])
+        made = kit.write(Path(tempfile.mkdtemp()), "20260101-000000", args, plan, approval, "tester", windows=False)
+        text = made["serials"].read_text(encoding="utf-8")
+        self.assertIn("S1, edge", text)
+        self.assertEqual(cli._read_groups(str(made["serials"])), GROUP)
+
     def test_a_firewall_with_uncommitted_changes_is_refused_before_anything_is_changed(self):
         data = three()
         data["devices"][1]["facts"]["pending_changes"] = True

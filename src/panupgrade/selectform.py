@@ -32,7 +32,8 @@ COLUMNS = [
                         ("regex", "name_regex", TEXT, "--name-regex", "a regular expression, found anywhere in the name; ^ starts and $ ends it, . is any one character, e.g. ^site1-[ab]1$")],
            28, lambda r: r.hostname),
     Column("serial", [("contains", "serials", LIST, "--serial", "part of a serial number; separate several with commas")], 16, lambda r: r.serial),
-    Column("model", [("contains", "models", LIST, "--model", "part of a model name, e.g. VM or 850; add * yourself to anchor it, e.g. PA-8*")], 10, lambda r: r.model),
+    Column("model", [("contains", "models", LIST, "--model", "part of a model name, e.g. VM or 850; add * yourself to anchor it, e.g. PA-8*"),
+                     ("is", "models_is", LIST, "--model-is", "the whole model name, e.g. PA-850; separate several with commas")], 12, lambda r: r.model),
     Column("PAN-OS", [("is", "version_is", TEXT, "--version-is", "e.g. 10.2.1 or 10.2.*"),
                       ("older than", "version_older_than", TEXT, "--version-older-than", "e.g. 10.2.11   (running something below this)"),
                       ("newer than", "version_newer_than", TEXT, "--version-newer-than", "e.g. 10.2.2   (running something above this)")],
@@ -81,7 +82,7 @@ def _choices(refs):
         return sorted({v for v in values if v}, key=key)
     found = versions(r.sw_version for r in refs)
     return {"version_is": found, "version_older_than": found, "version_newer_than": found,
-            "ha_states": distinct((r.ha_state or "").lower() for r in refs), "ha_states_is": distinct((r.ha_state or "").lower() for r in refs),
+            "ha_states": distinct((r.ha_state or "").lower() for r in refs), "models_is": distinct(r.model for r in refs), "ha_states_is": distinct((r.ha_state or "").lower() for r in refs),
             "device_groups_is": distinct(r.device_group for r in refs), "models": distinct(r.model for r in refs),
             "device_groups": distinct(r.device_group for r in refs), "tags": distinct(t for r in refs for t in (r.tags or []))}
 

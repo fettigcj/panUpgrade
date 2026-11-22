@@ -135,6 +135,14 @@ class Filters(unittest.TestCase):
         self.assertEqual(len(self.form.included), 1)
         self.assertIn("Cleared 1 filter", self.form.message)
 
+    def test_model_has_an_is_mode_that_matches_the_whole_model_name(self):
+        self.assertTrue(Selection(models_is=["PA-VM"]).matches(REFS[0]))
+        self.assertFalse(Selection(models_is=["VM"]).matches(REFS[0]))
+        self.assertTrue(Selection(models=["*VM*"]).matches(REFS[0]))
+        self.assertIn("model is PA-VM", Selection(models_is=["PA-VM"]).describe())
+        modes = [m[0] for m in selectform.COLUMNS[[c.title for c in selectform.COLUMNS].index("model")].modes]
+        self.assertEqual(modes, ["contains", "is"])
+
     def test_down_from_the_filters_goes_into_the_tables_and_up_comes_back(self):
         keys(self.form, "down")
         self.assertEqual(self.form.zone, "available")

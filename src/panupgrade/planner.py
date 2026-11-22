@@ -154,8 +154,14 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
         verdict, kind = _verdict(results)
         devices[ref.serial] = _device(ref, verdict, results, skip_kind=kind, facts=facts)
 
+    sizes = {}
+    for name in selection.groups.values():
+        sizes[name] = sizes.get(name, 0) + 1
     for serial, name in selection.groups.items():
-        if serial in devices:
+        if serial in devices and sizes[name] < 2:           # a group of one is no group: it is treated exactly like any other stand-alone firewall
+            _add(devices[serial], CheckResult("standalone_group", INFO, f"it is the only firewall named in the group {name!r}, so it is treated as a "
+                                                                        f"stand-alone firewall, not as a group member"))
+        elif serial in devices:
             devices[serial]["group"] = name
             devices[serial]["group_peers"] = sorted(s for s, other in selection.groups.items() if other == name and s != serial)
     _apply_pending(devices, ctxs, by_serial, selection, target)

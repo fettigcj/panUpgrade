@@ -49,10 +49,20 @@ class Planning(unittest.TestCase):
         self.assertEqual({d["verdict"] for d in plan["devices"]}, {"skipped"})
 
     def test_an_ha_member_in_a_group_is_blocked_with_the_reason(self):
-        plan, _ = plan_for(fleet_data(pair("A1", "A2")), {"A1": "edge"})
+        plan, _ = plan_for(fleet_data(pair("A1", "A2")), {"A1": "edge", "A2": "edge"})
         a1 = next(d for d in plan["devices"] if d["serial"] == "A1")
         self.assertEqual(a1["verdict"], "blocked")
         self.assertIn("HA member", " ".join(r["reason"] for r in a1["results"]))
+
+    def test_a_group_of_one_is_treated_like_any_other_stand_alone_firewall(self):
+        plan, _ = plan_for(fleet_data(device("S1"), device("S2"), device("S3")), {"S1": "alone", "S2": "edge", "S3": "edge"})
+        one = next(d for d in plan["devices"] if d["serial"] == "S1")
+        self.assertEqual(one["verdict"], "skipped")                       # needs accept_standalone_outage, as a stand-alone firewall does
+        self.assertEqual(one["group"], "")
+        self.assertEqual(plan["groups"], {"edge": ["S2", "S3"]})
+        self.assertEqual([w["name"] for w in plan["asymmetry"]], ["edge"])
+        text = " ".join(r["reason"] for r in one["results"])
+        self.assertIn("only firewall named in the group", text)
 
     def test_the_window_is_in_the_plan_and_needs_an_acknowledgement_when_it_is_on(self):
         plan, _ = plan_for(three(), GROUP)

@@ -355,7 +355,8 @@ class Buttons(unittest.TestCase):
         text = screen(self.form)
         for label in ("[ Save ]", "[ Save & Exit ]", "[ Quit without saving ]", "unsaved changes"):
             self.assertIn(label, text)
-        focused = [t for s, t in self.form.render(110, 36)[-1] if s == "focus"]
+        row = next(l for l in self.form.render(110, 36) if any(t == "[ Save ]" for _s, t in l))
+        focused = [t for s, t in row if s == "focus"]
         self.assertEqual(focused, ["[ Save & Exit ]"])
 
     def test_save_writes_now_and_stays_open_and_clears_the_unsaved_marker(self):

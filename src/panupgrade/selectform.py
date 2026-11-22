@@ -47,12 +47,13 @@ COLUMNS = [
 VERSION_ATTRS = ("version_older_than", "version_newer_than")
 MIN_WIDTH = 8
 HELP = {
-    FILTER: "Tab: navigate among filters, filter modes, lists, and actions.   Up / Down: mode row, input row, tables   Left / Right: change mode or pick a known value",
-    AVAILABLE: "Space / Enter: add to Included   A: add all listed   Up / Down / PgUp / PgDn: move   Tab: navigate among filters, filter modes, lists, and actions.",
-    INCLUDED: "Space / Enter / D: take out   G: stand-alone group   C: clear the list   Up / Down / PgUp / PgDn: move   Tab: navigate among filters, filter modes, lists, and actions.",
+    FILTER: "Up / Down: mode row, input row, tables   Left / Right: change mode or pick a known value",
+    AVAILABLE: "Space / Enter: add to Included   A: add all listed   Up / Down / PgUp / PgDn: move",
+    INCLUDED: "Space / Enter / D: take out   G: stand-alone group   C: clear the list   Up / Down / PgUp / PgDn: move",
     SAVE: "Type the file name the list is saved to (empty: no file).   Enter: go to the buttons",
     BUTTONS: "Left / Right: choose a button   Enter or Space: press it   Up: back to the file name   (Deselect all empties the Included list)",
 }
+TAB_HELP = "Tab: navigate among filters, filter modes, lists, and actions."
 ALWAYS = "Shortcuts: Ctrl-D = Save & Exit   Esc = Quit without saving (asks first if there are unsaved changes)"
 
 
@@ -450,22 +451,19 @@ class Form:
         widths = self._widths(width)
         errors = self.errors()
         avail, incl = self.available(), self.included_refs()
-        lines = [[("bold", f" {title}".rstrip() or " panupgrade select")],
-                 [("", " " + HELP[self.zone])], [("", " " + ALWAYS)]]
+        lines = [[("bold", f" {title}".rstrip() or " panupgrade select")], []]
         status = self.message
         if self.editing is not None:
             status = (f"Group for {self._name(incl[self.cursor[INCLUDED]].serial)}: [{self.editing}_]   Enter keeps it, Esc leaves it, empty removes the group. "
                       f"Firewalls with the same name are upgraded together.")
-        if not status and self.zone == FILTER and self.frow == INPUT:
+        hint = ""                                                # what the filter under the cursor takes: shown under the filters
+        if self.zone == FILTER and self.frow == INPUT:
             label, attr, kind, _flag, example = COLUMNS[self.fcol].modes[self.mode[self.fcol]]
             known = self.choices.get(attr) or []
             more = ("   Right / Left: next / previous value; a comma starts another" if kind == LIST else "   Right / Left: next / previous value") if known else ""
-            status = (f"This fleet has: {', '.join(known)}{more}" if known else example)
-        if not status and self.zone == FILTER and self.frow == MODE:
-            status = "Left / Right changes the mode. Filters set in the other modes still apply: see 'Filters in effect' below."
-        lines.append([])                                         # a gap between the fixed help and the hint that changes with the cursor
-        lines.append([("error" if status.startswith("!") else "changed", " " + status.lstrip("!"))])
-        lines.append([])
+            hint = f"This fleet has: {', '.join(known)}{more}" if known else example
+        elif self.zone == FILTER and self.frow == MODE:
+            hint = "Left / Right changes the mode. Filters set in the other modes still apply: see 'Filters in effect' above."
 
         def cells(pieces, marker="", row=""):
             line = [(row, " " + marker.ljust(3))]
@@ -492,9 +490,10 @@ class Form:
         for attr, text in ((a, errors[a]) for a in errors):
             lines.append([("error", f"   {attr.replace('_', ' ')}: {text}")])
         lines.append(self._in_effect())
+        lines.append([("changed", " " + hint)] if hint else [])
         lines.append([])
 
-        fixed = len(lines) + 7                                   # two table headings, the gaps before the second table and the save line
+        fixed = len(lines) + 13                                   # two table headings, the gaps before the second table and the save line
         room = max(height - fixed, 6)
         top = max(3, (room + 1) // 2)
         bottom = max(3, room - top)
@@ -543,6 +542,9 @@ class Form:
         if self.dirty():
             buttons.append(("warn", "unsaved changes"))
         lines.append([(style, text) for style, text in buttons])
+        lines.append([("error" if status.startswith("!") else "changed", " " + status.lstrip("!"))] if status else [])     # what the last key did
+        lines.append([])
+        lines += [[("bold", " Navigation")], [("", "   " + TAB_HELP)], [("", "   " + HELP[self.zone])], [("", "   " + ALWAYS)]]
         return [self._cut(line, width - 1) for line in lines[:height]]
 
     def in_effect(self):

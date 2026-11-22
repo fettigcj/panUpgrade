@@ -122,6 +122,19 @@ class Filters(unittest.TestCase):
         form = selectform.Form(REFS)
         self.assertEqual(selectform._split("Branch Offices, lab"), ["Branch Offices", "lab"])
 
+    def test_delete_clears_the_filter_under_the_cursor_and_ctrl_r_resets_every_filter(self):
+        keys(self.form, *typing("site"), "tab", *typing("S1"))
+        self.assertTrue(self.form.values["name_glob"] and self.form.values["serials"])
+        keys(self.form, "delete")
+        self.assertEqual(self.form.values["serials"], "")
+        self.assertEqual(self.form.values["name_glob"], "site")
+        self.form.included = [self.form.refs[0].serial]
+        self.assertIsNone(self.form.press("ctrl-r"))
+        self.assertEqual([v for v in self.form.values.values() if v], [])
+        self.assertEqual(len(self.form.available()), 3)
+        self.assertEqual(len(self.form.included), 1)
+        self.assertIn("Cleared 1 filter", self.form.message)
+
     def test_down_from_the_filters_goes_into_the_tables_and_up_comes_back(self):
         keys(self.form, "down")
         self.assertEqual(self.form.zone, "available")

@@ -47,14 +47,14 @@ COLUMNS = [
 VERSION_ATTRS = ("version_older_than", "version_newer_than")
 MIN_WIDTH = 8
 HELP = {
-    FILTER: "Up / Down: mode row, input row, tables   Left / Right: change mode or pick a known value",
+    FILTER: "Up / Down: mode row, input row, tables   Left / Right: change mode or pick a known value   Ctrl-U or Delete: clear this filter",
     AVAILABLE: "Space / Enter: add to Included   A: add all listed   Up / Down / PgUp / PgDn: move",
     INCLUDED: "Space / Enter / D: take out   G: stand-alone group   C: clear the list   Up / Down / PgUp / PgDn: move",
     SAVE: "Type the file name the list is saved to (empty: no file).   Enter: go to the buttons",
     BUTTONS: "Left / Right: choose a button   Enter or Space: press it   Up: back to the file name   (Deselect all empties the Included list)",
 }
 TAB_HELP = "Tab: navigate among filters, filter modes, lists, and actions."
-ALWAYS = "Shortcuts: Ctrl-D = Save & Exit   Esc = Quit without saving (asks first if there are unsaved changes)"
+ALWAYS = "Shortcuts: Ctrl-D = Save & Exit   Ctrl-R = reset all filters   Esc = Quit without saving (asks first if there are unsaved changes)"
 
 
 def _wrap(term):
@@ -200,6 +200,9 @@ class Form:
             return "cancel"
         if key == "ctrl-d":
             return self._save_and_exit()
+        if key == "ctrl-r":
+            self.reset_filters()
+            return None
         if key in ("tab", "shift-tab"):
             self._step(1 if key == "tab" else -1)
         elif self.zone == FILTER:
@@ -211,6 +214,15 @@ class Form:
         else:
             self._table_key(key)
         return None
+
+    def reset_filters(self):
+        """Empty every filter box, in every mode. The Included list is not touched."""
+        filled = sum(1 for text in self.values.values() if text.strip())
+        for attr in self.values:
+            self.values[attr] = ""
+        self.message = (f"Cleared {filled} filter{'s' if filled != 1 else ''}: every firewall is listed again." if filled
+                        else "No filter had anything in it.")
+        self._clamp()
 
     def dirty(self):
         """True when the Included list differs from the last time it was saved (or from how it started)."""
@@ -324,7 +336,7 @@ class Form:
         elif self.frow == INPUT:
             if key == "backspace":
                 self.values[attr] = text[:-1]
-            elif key == "ctrl-u":
+            elif key in ("ctrl-u", "delete"):
                 self.values[attr] = ""
             elif len(key) == 1 and key.isprintable():
                 self.values[attr] = text + key

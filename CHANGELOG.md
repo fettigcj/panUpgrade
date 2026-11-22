@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- **Selection screen: Delete (or Ctrl-U) clears the filter under the cursor, and Ctrl-R resets every filter at once** (the Included list is kept). Both are listed in the Navigation help.
 - **Selection screen: the key help moved to the bottom, under the buttons, as a Navigation block (Tab, the keys for the section you are in, shortcuts); what a key just did is shown above it. The hint for the filter under the cursor ("This fleet has ...") now sits under the filters, above the Available list.**
 - **Selection screen: the arrow keys work the same way in every filter.** In a list filter (model, HA, device group, tags) Left / Right act on the last item: an empty item (nothing typed, or a comma just typed) takes the next known value, a partly typed one is completed, a known value steps to the next or previous one; a value already in the list is not offered again. Lists are separated by commas only, so a device group name may contain a space. The first help rows are no longer dim, and the Tab help now says what Tab does.
 - **The firewall selection screen's HA and device group filters have an `is` mode** beside `contains`: it matches the whole value (`active` no longer also finds `active-primary`). Written to the command line as `--ha-state-is` and `--device-group-is`.

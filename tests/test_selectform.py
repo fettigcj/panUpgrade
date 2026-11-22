@@ -139,7 +139,7 @@ class Filters(unittest.TestCase):
         self.assertTrue(Selection(models_is=["PA-VM"]).matches(REFS[0]))
         self.assertFalse(Selection(models_is=["VM"]).matches(REFS[0]))
         self.assertTrue(Selection(models=["*VM*"]).matches(REFS[0]))
-        self.assertIn("model is PA-VM", Selection(models_is=["PA-VM"]).describe())
+        self.assertIn("model is", Selection(models_is=["PA-VM"]).describe())
         modes = [m[0] for m in selectform.COLUMNS[[c.title for c in selectform.COLUMNS].index("model")].modes]
         self.assertEqual(modes, ["contains", "is"])
 

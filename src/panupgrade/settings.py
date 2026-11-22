@@ -133,7 +133,9 @@ class Settings:
     def loosening_warnings(self):
         """Plain-language cautions for settings that make a run riskier. Never an error."""
         out = []
-        if self.pending_changes != "block":
+        if self.pending_changes == "revert":
+            out.append("pending_changes=revert: uncommitted candidate configuration on a firewall the run touches will be DISCARDED (reverted to the running configuration).")
+        elif self.pending_changes != "block":
             out.append(f"pending_changes={self.pending_changes}: uncommitted candidate config will not stop an upgrade.")
         if self.pair_session_warn_band > 0.6 or self.pair_session_fail_band > 0.95 or self.group_session_warn_band > 0.6 or self.group_session_fail_band > 0.95:
             out.append("Session-count bands are very wide; a real traffic loss could pass unnoticed.")
@@ -156,7 +158,7 @@ class Settings:
 
 
 _CHOICES = {
-    "pending_changes": ("block", "warn", "ignore"),
+    "pending_changes": ("block", "warn", "ignore", "revert"),
     "restore_roles": ("leave", "restore"),
     "upgrade_first": ("passive", "active"),
     "image_source": ("firewall", "panorama"),

@@ -122,6 +122,7 @@ Then follow [docs/running.md](docs/running.md). Every setting and its default is
 
 - [docs/running.md](docs/running.md): the day-to-day workflow
 - [docs/execution.md](docs/execution.md): what the executor guarantees
+- [docs/scenarios.md](docs/scenarios.md): the four kinds of firewall (stand-alone, load-balanced group, Active/Passive, Active/Active) and how each is handled
 - [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md)
 
 ## Tests

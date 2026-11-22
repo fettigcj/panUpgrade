@@ -264,6 +264,53 @@ class Running(unittest.TestCase):
         s2_window = next(i for i, c in enumerate(sim.calls) if c[0] == "S2" and c[1] == "set asymmetry" and c[2:] == (False, "bypass", "no"))
         self.assertTrue(all(i > s2_window for i, s in reboots if s != "S2"))
 
+    def test_the_window_also_covers_the_rest_of_the_group_when_only_one_member_is_in_the_run(self):
+        data = three()
+        s = settings.load(None, [])
+        plan = build_plan(FakeFleet(data), TARGET, s, Selection(serials=["S1"], groups=GROUP), rules=TEST_RULES)
+        self.assertEqual(plan["asymmetry"], [{"kind": "group", "name": "edge", "serials": ["S1"], "support": ["S2", "S3"]}])
+        self.assertIn("2 more of the same group", [c["text"] for c in plan["cautions"] if c["code"] == "asymmetry_window"][0])
+        s.poll_interval_s, s.settle_after_failover_s, s.settle_after_reboot_s = 0, 0, 0
+        sim = SimBackend(data)
+        journal = Journal.create(self.jpath, plan["hash"])
+        result = executor.run(plan, approve(plan), sim, journal, s)
+        self.assertEqual(result["outcome"]["S1"][0], "done")
+        opened = sorted(c[0] for c in sim.calls if c[1] == "set asymmetry" and c[2:] == (False, "bypass", "no"))
+        self.assertEqual(opened, ["S1", "S2", "S3"])
+        self.assertEqual([c for c in sim.calls if c[0] in ("S2", "S3") and c[1] in ("install", "reboot")], [])   # touched only for the window
+        for serial in ("S1", "S2", "S3"):
+            self.assertEqual(sim.nodes[serial].asym, ORIGINAL)
+
+    def test_an_ha_member_is_refused_a_group_even_when_it_is_the_only_one_named(self):
+        plan, _ = plan_for(fleet_data(pair("A1", "A2")), {"A1": "edge"})
+        a1 = next(d for d in plan["devices"] if d["serial"] == "A1")
+        self.assertEqual(a1["verdict"], "blocked")
+
+    def test_uncommitted_candidate_config_is_never_committed_it_blocks_unless_the_user_chooses_revert(self):
+        data = three()
+        data["devices"][1]["facts"]["pending_changes"] = True
+        plan, _ = plan_for(data, GROUP)
+        s2 = next(d for d in plan["devices"] if d["serial"] == "S2")
+        self.assertEqual(s2["verdict"], "blocked")
+        self.assertIn("pending_changes=revert", " ".join(r["reason"] for r in s2["results"]))
+        _, sim, journal, result = self.go(data=data)                                    # the default: block; the window cannot open on S2 either
+        self.assertEqual([c for c in sim.calls if c[1] == "revert candidate"], [])
+        self.assertTrue(sim.nodes["S2"].pending)                                         # its candidate configuration was left exactly as it was
+        self.assertEqual({v[0] for v in result["outcome"].values()}, {"held"})
+        self.assertIn("pending_changes=revert", result["outcome"]["S1"][1])
+        for serial in ("S1", "S2", "S3"):
+            self.assertEqual(sim.nodes[serial].asym, ORIGINAL)
+
+    def test_with_revert_the_candidate_is_discarded_journaled_and_the_run_goes_on(self):
+        data = three()
+        data["devices"][1]["facts"]["pending_changes"] = True
+        plan, sim, journal, result = self.go(data=data, pending_changes="revert")
+        self.assertEqual({v[0] for v in result["outcome"].values()}, {"done"})
+        self.assertEqual([c[0] for c in sim.calls if c[1] == "revert candidate"], ["S2"])
+        self.assertEqual(journal.last_state("S2", "asymmetry revert candidate"), "ok")
+        self.assertTrue(any(c["code"] == "pending_changes" for c in plan["cautions"]))
+        self.assertFalse(sim.nodes["S2"].pending)
+
     def test_a_firewall_with_uncommitted_changes_is_refused_before_anything_is_changed(self):
         data = three()
         data["devices"][1]["facts"]["pending_changes"] = True

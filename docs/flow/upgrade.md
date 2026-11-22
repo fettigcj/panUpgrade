@@ -6,7 +6,7 @@ How it fits together: `plan` gives every firewall a list of steps (section 1). `
 
 ## 1. Which steps a firewall is given
 
-`planner._steps` ([planner.py:428]). The same function, run for a model firewall of each kind with default settings (`TARGET` is a version, `CURRENT` the one it runs now):
+`planner._steps` ([planner.py:441]). The same function, run for a model firewall of each kind with default settings (`TARGET` is a version, `CURRENT` the one it runs now):
 
 - **standalone**: `download TARGET` → `backup` → `install TARGET` → `reboot` → `verify`
 - **HA passive (its active peer is in the run)**: `download TARGET` → `backup` → `install TARGET` → `reboot` → `verify` → `verify HA`
@@ -158,40 +158,43 @@ flowchart TD
 
 ## 2. How a unit and a firewall are run
 
-`executor.run`, for each unit ([executor.py:79]). A member is run only when the one before it in the unit finished; a firewall that failed earlier in the journal is not retried.
+`executor.run`, for each unit ([executor.py:80]). A member is run only when the one before it in the unit finished; a firewall that failed earlier in the journal is not retried.
 
 ```mermaid
 flowchart TD
     u1(["executor.run: do_unit"])
     u2["refusal = windows.begin([s for s in unit if s in approval.serials])"]
     u3{"refusal"}
-    u4(["return {serial: ('held', refusal) for serial in unit}"])
-    u5["try"]
-    u6(["return run_unit(unit)"])
-    u7["windows.end([s for s in unit if s in approval.serials])"]
+    u4{"for serial in unit"}
+    u5(["return {serial: ('held', refusal) for serial in unit}"])
+    u6["try"]
+    u7(["return run_unit(unit)"])
+    u8["windows.end([s for s in unit if s in approval.serials])"]
     u1 --> u2
     u2 --> u3
     u3 -->|yes| u4
-    u3 -->|no| u5
-    u5 --> u6
+    u4 -->|each| u4
+    u4 -->|done| u5
+    u3 -->|no| u6
+    u6 --> u7
     classDef api stroke:#2f6fed,stroke-width:3px
     classDef refuse stroke:#d64545,stroke-width:3px
     classDef done stroke:#2e9e5b,stroke-width:3px
     classDef step stroke:#e0a020,stroke-width:3px
     classDef entry stroke-width:3px
     class u1 entry
-    class u4 done
-    class u6 done
+    class u5 done
+    class u7 done
 ```
 
-`executor._run_device` ([executor.py:159]): preflight, then each step in order. A step already marked done in the journal is skipped, and one that was started and never finished is never repeated: it needs a person to look at the firewall.
+`executor._run_device` ([executor.py:162]): preflight, then each step in order. A step already marked done in the journal is skipped, and one that was started and never finished is never repeated: it needs a person to look at the firewall.
 
 ```mermaid
 flowchart TD
     r1(["executor._run_device"])
     r2["held, result = ([], None)"]
     r3["try"]
-    r4["result = _run_steps(dev, backend, journal, settings, stop, gate, group, held)"]
+    r4["result = _run_steps(dev, backend, journal, settings, stop, gate, group, held, windo…"]
     r5(["return result"])
     r6{"result is None or result[0] in ('failed', 'stopped', 'held')"}
     r7["restore_lb(dev['serial'], backend, journal, settings)"]
@@ -212,31 +215,38 @@ flowchart TD
     class r5 done
 ```
 
-`executor._preflight` ([executor.py:312]): the plan is checked against the firewall again just before it is touched.
+`executor._preflight` ([executor.py:326]): the plan is checked against the firewall again just before it is touched.
 
 ```mermaid
 flowchart TD
     p1(["executor._preflight"])
     p2["seen = backend.preflight(dev['serial'])"]
-    p3{"seen.get('version') != dev['current_version']"}
-    p4(["raise f'plan is stale: device reports {seen.get('version')}, plan assumed {dev['cur…"])
-    p5{"seen.get('pending_changes') is not False and settings.pending_changes == 'block'"}
-    p6(["raise 'pending (uncommitted) configuration, or unknown; settings say block'"])
-    p7{"seen.get('running_jobs') != 0"}
-    p8(["raise f'jobs running or unknown: {seen.get('running_jobs')!r}'"])
-    p9{"seen.get('pending_reboot') is True and (not (dev.get('activate') and seen.get('pend…"}
-    p10(["raise f'{seen.get('pending_reboot_version') or 'an image'} is installed and waiting…"])
-    p11(["return {'version': seen['version']}"])
+    p3{"seen.get('pending_changes') is True and settings.pending_changes == 'revert'"}
+    p4["backend.revert_candidate(dev['serial'])"]
+    p5["seen, reverted = (backend.preflight(dev['serial']), True)"]
+    p6{"seen.get('version') != dev['current_version']"}
+    p7(["raise f'plan is stale: device reports {seen.get('version')}, plan assumed {dev['cur…"])
+    p8{"seen.get('pending_changes') is not False and settings.pending_changes == 'block'"}
+    p9(["raise 'pending (uncommitted) configuration, or unknown; settings say block'"])
+    p10{"seen.get('running_jobs') != 0"}
+    p11(["raise f'jobs running or unknown: {seen.get('running_jobs')!r}'"])
+    p12{"seen.get('pending_reboot') is True and (not (dev.get('activate') and seen.get('pend…"}
+    p13(["raise f'{seen.get('pending_reboot_version') or 'an image'} is installed and waiting…"])
+    p14(["return {'version': seen['version'], **({'reverted': 'the uncommitted candidate conf…"])
     p1 --> p2
     p2 --> p3
     p3 -->|yes| p4
-    p3 -->|no| p5
-    p5 -->|yes| p6
-    p5 -->|no| p7
-    p7 -->|yes| p8
-    p7 -->|no| p9
-    p9 -->|yes| p10
-    p9 -->|no| p11
+    p4 --> p5
+    p5 --> p6
+    p3 -->|no| p6
+    p6 -->|yes| p7
+    p6 -->|no| p8
+    p8 -->|yes| p9
+    p8 -->|no| p10
+    p10 -->|yes| p11
+    p10 -->|no| p12
+    p12 -->|yes| p13
+    p12 -->|no| p14
     classDef api stroke:#2f6fed,stroke-width:3px
     classDef refuse stroke:#d64545,stroke-width:3px
     classDef done stroke:#2e9e5b,stroke-width:3px
@@ -244,14 +254,16 @@ flowchart TD
     classDef entry stroke-width:3px
     class p1 entry
     class p2 api
-    class p4 refuse
-    class p6 refuse
-    class p8 refuse
-    class p10 refuse
-    class p11 done
+    class p4 api
+    class p5 api
+    class p7 refuse
+    class p9 refuse
+    class p11 refuse
+    class p13 refuse
+    class p14 done
 ```
 
-`executor._step` ([executor.py:301]) wraps every step: write `started`, run it, write `ok` or `failed`.
+`executor._step` ([executor.py:315]) wraps every step: write `started`, run it, write `ok` or `failed`.
 
 ```mermaid
 flowchart TD
@@ -276,7 +288,7 @@ flowchart TD
 
 ## 3. How each step is carried out
 
-`executor._do` ([executor.py:514]). Before any step that installs or reboots, a verified backup must be in the journal:
+`executor._do` ([executor.py:532]). Before any step that installs or reboots, a verified backup must be in the journal:
 
 ```mermaid
 flowchart TD
@@ -296,7 +308,7 @@ flowchart TD
 
 ### starts with 'download '
 
-executor.py:518
+executor.py:536
 
 ```mermaid
 flowchart TD
@@ -314,7 +326,7 @@ flowchart TD
 
 ### 'backup'
 
-executor.py:520
+executor.py:538
 
 ```mermaid
 flowchart TD
@@ -348,7 +360,7 @@ flowchart TD
 
 ### 'sync to peer'
 
-executor.py:530
+executor.py:548
 
 ```mermaid
 flowchart TD
@@ -386,7 +398,7 @@ flowchart TD
 
 ### "wait for the passive firewall's upgrade to finish" or "wait for the first member's upgrade to finish"
 
-executor.py:541
+executor.py:559
 
 ```mermaid
 flowchart TD
@@ -412,7 +424,7 @@ flowchart TD
 
 ### 'fail over'
 
-executor.py:548
+executor.py:566
 
 ```mermaid
 flowchart TD
@@ -475,7 +487,7 @@ flowchart TD
 
 ### 'hold suspended'
 
-executor.py:586
+executor.py:604
 
 ```mermaid
 flowchart TD
@@ -495,7 +507,7 @@ flowchart TD
 
 ### starts with 'install '
 
-executor.py:589
+executor.py:607
 
 ```mermaid
 flowchart TD
@@ -515,7 +527,7 @@ flowchart TD
 
 ### 'drain'
 
-executor.py:592
+executor.py:610
 
 ```mermaid
 flowchart TD
@@ -533,7 +545,7 @@ flowchart TD
 
 ### 'undrain'
 
-executor.py:595
+executor.py:613
 
 ```mermaid
 flowchart TD
@@ -551,7 +563,7 @@ flowchart TD
 
 ### 'check service'
 
-executor.py:598
+executor.py:616
 
 ```mermaid
 flowchart TD
@@ -569,7 +581,7 @@ flowchart TD
 
 ### 'reboot' or starts with 'reboot to activate '
 
-executor.py:600
+executor.py:618
 
 ```mermaid
 flowchart TD
@@ -590,7 +602,7 @@ flowchart TD
 
 ### 'verify'
 
-executor.py:604
+executor.py:622
 
 ```mermaid
 flowchart TD
@@ -623,7 +635,7 @@ flowchart TD
 
 ### 'go live'
 
-executor.py:612
+executor.py:630
 
 ```mermaid
 flowchart TD
@@ -641,7 +653,7 @@ flowchart TD
 
 ### 'verify HA'
 
-executor.py:614
+executor.py:632
 
 ```mermaid
 flowchart TD
@@ -748,7 +760,7 @@ flowchart TD
 
 ### 'restore roles'
 
-executor.py:665
+executor.py:683
 
 ```mermaid
 flowchart TD
@@ -769,7 +781,7 @@ flowchart TD
 
 ### anything else
 
-executor.py:670
+executor.py:688
 
 ```mermaid
 flowchart TD
@@ -795,30 +807,30 @@ Found by reading every decision in the code that looks at the config-sync or ses
 | prepare | `build` (prepare.py:146) | `steps and idle and (not (facts.session_count or 0) >= floor)` | prepare |
 | prepare | `build` (prepare.py:148) | `facts.session_count is None` | prepare |
 | prepare | `build` (prepare.py:189) | `facts.ha_config_sync is False` | prepare |
-| executor | `_sessions` (executor.py:472) | `hasattr(backend, 'session_count')` | upgrade |
-| executor | `_do` (executor.py:537) | `after['ha_config_sync'] is not True` | upgrade |
-| executor | `_do` (executor.py:619) | `got['ha_session_sync'] is not True` | upgrade |
+| executor | `_sessions` (executor.py:490) | `hasattr(backend, 'session_count')` | upgrade |
+| executor | `_do` (executor.py:555) | `after['ha_config_sync'] is not True` | upgrade |
+| executor | `_do` (executor.py:637) | `got['ha_session_sync'] is not True` | upgrade |
 | fleetreport | `_attention` (fleetreport.py:49) | `facts.get('ha_config_sync') is False and (not mixed)` | report |
 
 ## Helpers the charts call
 
 | function | what it does |
 |---|---|
-| `_backup_verified` (executor.py:326) | return any((st['action'] == 'backup' and journal.last_state(serial, _key(i, 'backup')) == 'ok' for i, st in enumerate(steps))) |
-| `_baseline` (executor.py:344) | The pair's session baseline: the count on the node that was active before the unit started. |
-| `_check_service` (executor.py:479) | A group member is back (upgraded, undrained): wait until its session table is within ``group_session_warn_band`` of what it was before it |
-| `_expected_version` (executor.py:336) | see the source |
-| `_floor` (executor.py:464) | return max(settings.session_noise_floor, 1) |
-| `_key` (executor.py:155) | return f'{index}:{action}' |
-| `_retry_while_busy` (executor.py:283) | Run a command the firewall may refuse because it is busy. The jobs list showed nothing a moment ago, but a commit can be queued |
-| `_revert_failover` (executor.py:414) | Put the traffic back where it was known to work: this member (the active one before the fail-over) active again, the peer out of the way. |
-| `_run_steps` (executor.py:175) | see the source |
-| `_sessions` (executor.py:469) | try: return backend.session_count(serial) if hasattr(backend, 'session_count') else backend.state(serial).get('session_count') except Exception as ex… |
-| `_settle` (executor.py:246) | Wait ``seconds``, then until the firewall has no unfinished job, before the next step touches it. |
-| `_target_version` (executor.py:331) | return _expected_version(steps, len(steps)) |
-| `_versions_note` (executor.py:455) | What the pair is left running, for a failure that cannot be undone: 'A runs x, B runs y'. Empty when it cannot be read. |
-| `_wait_for_quiet` (executor.py:268) | A config sync, an HA state change or a boot queues a commit on the firewall, and the install is refused while that is still in the |
-| `_watch_sessions` (executor.py:353) | Wait until a node's session table is back, and judge it. ``observe()`` gives (the node's count, [the counts it should match]); the best of |
+| `_backup_verified` (executor.py:344) | return any((st['action'] == 'backup' and journal.last_state(serial, _key(i, 'backup')) == 'ok' for i, st in enumerate(steps))) |
+| `_baseline` (executor.py:362) | The pair's session baseline: the count on the node that was active before the unit started. |
+| `_check_service` (executor.py:497) | A group member is back (upgraded, undrained): wait until its session table is within ``group_session_warn_band`` of what it was before it |
+| `_expected_version` (executor.py:354) | see the source |
+| `_floor` (executor.py:482) | return max(settings.session_noise_floor, 1) |
+| `_key` (executor.py:158) | return f'{index}:{action}' |
+| `_retry_while_busy` (executor.py:297) | Run a command the firewall may refuse because it is busy. The jobs list showed nothing a moment ago, but a commit can be queued |
+| `_revert_failover` (executor.py:432) | Put the traffic back where it was known to work: this member (the active one before the fail-over) active again, the peer out of the way. |
+| `_run_steps` (executor.py:178) | see the source |
+| `_sessions` (executor.py:487) | try: return backend.session_count(serial) if hasattr(backend, 'session_count') else backend.state(serial).get('session_count') except Exception as ex… |
+| `_settle` (executor.py:260) | Wait ``seconds``, then until the firewall has no unfinished job, before the next step touches it. |
+| `_target_version` (executor.py:349) | return _expected_version(steps, len(steps)) |
+| `_versions_note` (executor.py:473) | What the pair is left running, for a failure that cannot be undone: 'A runs x, B runs y'. Empty when it cannot be read. |
+| `_wait_for_quiet` (executor.py:282) | A config sync, an HA state change or a boot queues a commit on the firewall, and the install is refused while that is still in the |
+| `_watch_sessions` (executor.py:371) | Wait until a node's session table is back, and judge it. ``observe()`` gives (the node's count, [the counts it should match]); the best of |
 
 ## Settings the charts read
 
@@ -851,6 +863,7 @@ From `LiveBackend` ([backend.py](../../src/panupgrade_live/backend.py)). The sim
 | call | sends | then waits |
 |---|---|---|
 | `backend.preflight` | `the firewall's state (the queries listed in checks.md)` | - |
+| `backend.revert_candidate` | `<revert><config/></revert>` | - |
 | `backend.download` | `<request><system><software><check/></software></system></request>`<br>`<request><system><software><info/></software></system></request>`<br>`f'<request><system><software><{verb}><version>{version}</version></{verb}></software></system></request>'` | up to download_timeout_s (1800 s by default) for the job: f'download {version}' |
 | `backend.backup` | `<show><config><running/></config></show>` | - |
 | `backend.state` | `the firewall's state (the queries listed in checks.md)` | - |

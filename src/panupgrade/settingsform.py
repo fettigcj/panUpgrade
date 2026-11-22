@@ -163,7 +163,8 @@ INFO = {
                      "As soon as a unit finishes, the next one starts.", {}),
     "api_rate_per_s": ("A polite ceiling on requests per second to Panorama, shared by every worker.", {}),
     "pending_changes": ("A firewall with uncommitted candidate configuration.",
-                        {"block": "do not upgrade it", "warn": "upgrade it, with a warning", "ignore": "upgrade it without comment"}),
+                        {"block": "do not upgrade it; commit it yourself or choose revert", "warn": "upgrade it, with a warning", "ignore": "upgrade it without comment",
+                         "revert": "discard it (revert to the running configuration), then upgrade. The tool never commits what it cannot vouch for"}),
     "allow_downgrade": ("Install a release older than the one running, to reach the target. Each firewall needs an acknowledgement. "
                         "Going down across a feature release follows the same skip rule as going up (10.1 or later, at most three "
                         "releases skipped), and the newer release's configuration may not load on the older one, so have a saved "

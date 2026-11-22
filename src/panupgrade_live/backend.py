@@ -374,6 +374,12 @@ class LiveBackend(Backend):
             values[key] = value
         return {"reject_non_syn": word in ("true", "yes"), **values}
 
+    def revert_candidate(self, serial):
+        """Discard the uncommitted candidate configuration (revert to running), then make sure the firewall no longer reports pending changes."""
+        self._send("<revert><config/></revert>", serial)
+        if self.preflight(serial).get("pending_changes"):
+            raise BackendError(f"{serial}: it still reports uncommitted changes after the revert; look at its candidate configuration by hand")
+
     def set_tcp_asymmetry(self, serial, reject_non_syn, reject_non_syn_config, asymmetric_path):
         """Both configuration nodes (None deletes the node: back to "not set"), one commit on the firewall, and only then the in-force flag,
         because an operational `set session tcp-reject-non-syn` does not survive a commit."""

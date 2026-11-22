@@ -48,6 +48,7 @@ class Backend:
     def running_jobs(self, serial):                                 # how many jobs are not finished; one cheap look where the backend can
         return self.state(serial).get("running_jobs")
 
+    def revert_candidate(self, serial): raise NotImplementedError    # discard the uncommitted candidate configuration (revert to running)
     def preflight(self, serial): raise NotImplementedError          # {version, pending_changes, running_jobs}
     def backup(self, serial): raise NotImplementedError             # {sha256, bytes, parsed_ok}
     def download(self, serial, version): raise NotImplementedError
@@ -324,6 +325,10 @@ def _step(journal, serial, key, fn):
 
 def _preflight(dev, backend, settings):
     seen = backend.preflight(dev["serial"])
+    reverted = False
+    if seen.get("pending_changes") is True and settings.pending_changes == "revert":
+        backend.revert_candidate(dev["serial"])
+        seen, reverted = backend.preflight(dev["serial"]), True
     if seen.get("version") != dev["current_version"]:
         raise StepFailed(f"plan is stale: device reports {seen.get('version')}, plan assumed {dev['current_version']}")
     if seen.get("pending_changes") is not False and settings.pending_changes == "block":
@@ -333,7 +338,7 @@ def _preflight(dev, backend, settings):
     if seen.get("pending_reboot") is True and not (dev.get("activate") and seen.get("pending_reboot_version") == dev["activate"]["version"]):
         raise StepFailed(f"{seen.get('pending_reboot_version') or 'an image'} is installed and waiting for a reboot, and the firewall refuses to commit "
                          f"until it has been rebooted; reboot it first")
-    return {"version": seen["version"]}
+    return {"version": seen["version"], **({"reverted": "the uncommitted candidate configuration was discarded (reverted to running)"} if reverted else {})}
 
 
 def _backup_verified(journal, serial, steps):

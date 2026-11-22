@@ -135,6 +135,9 @@ class SimBackend(Backend):
     def remove_lb_override(self, serial, profile):
         self._enter(serial, "remove profile copy", profile).profiles.pop(profile, None)
 
+    def revert_candidate(self, serial):
+        self._enter(serial, "revert candidate").pending = False
+
     def tcp_asymmetry(self, serial):
         return dict(self._enter(serial, "read asymmetry").asym)
 

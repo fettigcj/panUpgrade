@@ -72,12 +72,13 @@ class Windows:
         # members, which are the ones that must tolerate them. So its own window is opened after its activation reboot (see after_activation).
         self.deferred = {d["serial"] for d in plan.get("devices") or [] if d.get("activate")}
         for spec in plan.get("asymmetry") or []:
-            serials = [s for s in spec["serials"] if s in approved]
-            if not serials:
+            planned = [s for s in spec["serials"] if s in approved]
+            if not planned:
                 continue
-            units = [u for u in plan["order"] if any(s in serials for s in u)]
-            window = {"name": f"{spec['kind']} {spec['name']}", "serials": serials, "left": len(units), "state": "new", "reason": "",
-                      "lock": threading.Lock(), "opened": [], "unrestored": []}
+            serials = planned + [s for s in spec.get("support") or [] if s not in planned]        # the rest of a group takes the drained sessions too
+            units = [u for u in plan["order"] if any(s in planned for s in u)]
+            window = {"name": f"{spec['kind']} {spec['name']}", "serials": serials, "planned": len(planned), "left": len(units), "state": "new",
+                      "reason": "", "lock": threading.Lock(), "opened": [], "unrestored": []}
             self.windows.append(window)
             for s in serials:
                 self.by_serial[s] = window
@@ -133,7 +134,7 @@ class Windows:
     def _open_after_activation(self, serial):
         """"" when nothing was needed or the window is now open on this firewall; else why it could not be opened (the firewall's step then fails)."""
         window = self.by_serial.get(serial)
-        if window is None or serial not in self.deferred or len(window["serials"]) < 2:      # alone in its window: nobody else's drain to tolerate
+        if window is None or serial not in self.deferred or window["planned"] < 2:      # the only member going down: nobody else's drain to tolerate
             return ""
         with window["lock"]:
             if window["state"] != "open" or any(s == serial for s, _o in window["opened"]):
@@ -179,10 +180,7 @@ class Windows:
             window["opened"].append((serial, left))
             self.say(f"{serial}: the asymmetry window was already open from an earlier run; keeping the values recorded then")
             return
-        pre = self.backend.preflight(serial)
-        if pre.get("pending_changes"):
-            raise BackendError(f"{serial}: it has uncommitted candidate configuration, and the commit that sets asymmetric-path would commit it too; "
-                               f"commit or discard that first")
+        clear_candidate(self.backend, self.journal, serial, self.settings, "the commit that sets asymmetric-path")
         original = self.backend.tcp_asymmetry(serial)
         self.journal.record(serial, OPEN, "started", {"original": original, "setting": TOLERANT, "window": window["name"]})
         window["opened"].append((serial, original))                 # from here on a restore is attempted, even if the change below fails half way
@@ -246,6 +244,26 @@ def unrestored_in_journal(journal, serials):
     return found
 
 
+REVERT = "asymmetry revert candidate"
+
+
+def clear_candidate(backend, journal, serial, settings, why):
+    """A commit on the firewall commits EVERYTHING in its candidate configuration, and the tool cannot know whether what is there is legitimate. So it
+    never commits it: with pending_changes=revert it discards the candidate (revert to the running configuration), journaled; otherwise it stops and says so."""
+    if not backend.preflight(serial).get("pending_changes"):
+        return
+    if settings is None or settings.pending_changes != "revert":
+        raise BackendError(f"{serial}: it has uncommitted candidate configuration, and {why} would commit it too. Commit it yourself if it is wanted, or "
+                           f"set pending_changes=revert to have the tool discard it (revert to the running configuration) first")
+    journal.record(serial, REVERT, "started", {"why": why})
+    try:
+        backend.revert_candidate(serial)
+    except BackendError as exc:
+        journal.record(serial, REVERT, "failed", {"error": str(exc)})
+        raise
+    journal.record(serial, REVERT, "ok", {"why": why, "message": "the uncommitted candidate configuration was discarded (reverted to running)"})
+
+
 # ---------------------------------------------------------------- the load-balancer drain of one group member
 def _protocols(settings):
     return [p for p in settings.lb_drain_probe_protocol.split("+") if p]
@@ -255,9 +273,7 @@ def drain(serial, backend, journal, settings):
     """Take the probe's protocols (ssh, http, ...) out of the interface management profile the load balancer's probe relies on, so the balancer sees the
     probe fail and drains this member gracefully, then wait lb_drain_wait_s. The original values are journaled BEFORE the change."""
     profile, protocols = settings.lb_drain_profile, _protocols(settings)
-    if backend.preflight(serial).get("pending_changes"):
-        raise BackendError(f"{serial}: it has uncommitted candidate configuration, and the commit that changes the profile would commit it too; "
-                           f"commit or discard that first")
+    clear_candidate(backend, journal, serial, settings, "the commit that changes the profile")
     found = backend.lb_profile(serial, profile, protocols)
     if not found["exists"]:
         raise BackendError(f"{serial}: the interface management profile {profile!r} is not on this firewall, so there is nothing to drain with")

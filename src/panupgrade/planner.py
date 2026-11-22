@@ -158,7 +158,9 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
     for name in selection.groups.values():
         sizes[name] = sizes.get(name, 0) + 1
     for serial, name in selection.groups.items():
-        if serial in devices and sizes[name] < 2:           # a group of one is no group: it is treated exactly like any other stand-alone firewall
+        seen = ctxs[serial].facts if serial in ctxs else None
+        ha_member = bool(seen and seen.ha_mode not in (None, "none"))       # a firewall in an HA pair is refused a group (below), however many are named
+        if serial in devices and sizes[name] < 2 and not ha_member:           # a group of one is no group: it is treated exactly like any other stand-alone firewall
             _add(devices[serial], CheckResult("standalone_group", INFO, f"it is the only firewall named in the group {name!r}, so it is treated as a "
                                                                         f"stand-alone firewall, not as a group member"))
         elif serial in devices:
@@ -178,7 +180,7 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
     order = _order(devices, by_serial, settings)
 
     groups = _groups_planned(devices)
-    windows = _asymmetry_windows(devices, order, groups, settings)
+    windows = _asymmetry_windows(devices, order, groups, settings, selection, by_serial)
     cautions = _cautions(devices, fleet)
     placed = sorted(d["hostname"] for d in devices.values() if d.get("position") == "first" and settings.upgrade_first == "active")
     if placed:
@@ -544,7 +546,7 @@ def _groups_planned(devices):
     return found
 
 
-def _asymmetry_windows(devices, order, groups, settings):
+def _asymmetry_windows(devices, order, groups, settings, selection=None, by_serial=None):
     """Each place the tool will let a pair or group accept traffic that looks asymmetric: recorded first, restored when the whole pair / group is done."""
     windows = []
     if settings.pair_tolerate_asymmetry:
@@ -552,12 +554,25 @@ def _asymmetry_windows(devices, order, groups, settings):
             if devices[unit[0]]["ha_mode"] not in (None, "none") and not devices[unit[0]]["group"]:
                 windows.append({"kind": "pair", "name": " / ".join(devices[s]["hostname"] for s in unit), "serials": list(unit)})
     if settings.group_tolerate_asymmetry:
-        windows += [{"kind": "group", "name": name, "serials": list(members)} for name, members in sorted(groups.items())]
+        for name, members in sorted(groups.items()):
+            spec = {"kind": "group", "name": name, "serials": list(members)}
+            # The sessions a member drops land on the REST of its group, whether or not those firewalls are in this run: they get the window too.
+            named = [s for s, other in (selection.groups.items() if selection else []) if other == name and s not in members]
+            support = [s for s in named if by_serial and s in by_serial and by_serial[s].connected]
+            away = [s for s in named if by_serial and s in by_serial and not by_serial[s].connected]
+            if support:
+                spec["support"] = support
+            if away:
+                spec["unreachable"] = away
+            windows.append(spec)
     return windows
 
 
 def _window_words(windows):
-    where = "; ".join(f"{w['kind']} {w['name']} ({len(w['serials'])} firewall{'s' if len(w['serials']) != 1 else ''})" for w in windows)
+    def _how_many(w):
+        n, more = len(w["serials"]), len(w.get("support") or [])
+        return f"{n} firewall{'s' if n != 1 else ''}" + (f" in this run and {more} more of the same group that are not" if more else "")
+    where = "; ".join(f"{w['kind']} {w['name']} ({_how_many(w)})" for w in windows)
     return ("Accepting asymmetric return traffic during the upgrade window changes the live configuration of these firewalls: " + where + ". Before the "
             "first member is touched each firewall's tcp-reject-non-syn and asymmetric-path values are recorded, then tcp-reject-non-syn is set to no and "
             "asymmetric-path to bypass (committed on the firewall); both are put back when the pair or group is finished, whether it succeeded or not. "

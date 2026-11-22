@@ -255,7 +255,11 @@ def pending_changes(ctx):
         return CheckResult("pending_changes", PASS, "no uncommitted candidate config")
     msg = "uncommitted candidate config exists and is not part of the running config"
     if mode == "block":
-        return CheckResult("pending_changes", FAIL, msg + " (setting pending_changes=block)")
+        return CheckResult("pending_changes", FAIL, msg + " (setting pending_changes=block). The tool will not commit it, since it cannot know whether it is "
+                           "legitimate: commit it yourself, or set pending_changes=revert to have the tool discard it (revert to the running configuration)")
+    if mode == "revert":
+        return CheckResult("pending_changes", WARN, msg + " (setting pending_changes=revert): it will be DISCARDED (reverted to the running configuration) "
+                           "before this firewall is touched", ack="pending_changes")
     if mode == "warn":
         return CheckResult("pending_changes", WARN, msg + " (setting pending_changes=warn)", ack="pending_changes")
     return CheckResult("pending_changes", INFO, msg + " (setting pending_changes=ignore)")

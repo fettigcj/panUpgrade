@@ -431,7 +431,8 @@ class Form:
             status = (f"This fleet has: {', '.join(known)}" if known else example)
         if not status and self.zone == FILTER and self.frow == MODE:
             status = "Left / Right changes the mode. Filters set in the other modes still apply: see 'Filters in effect' below."
-        lines.append([("error" if status.startswith("!") else "dim", " " + status.lstrip("!"))])
+        lines.append([])                                         # a gap between the fixed help and the hint that changes with the cursor
+        lines.append([("error" if status.startswith("!") else "changed", " " + status.lstrip("!"))])
         lines.append([])
 
         def cells(pieces, marker="", row=""):

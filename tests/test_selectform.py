@@ -143,6 +143,15 @@ class Filters(unittest.TestCase):
         modes = [m[0] for m in selectform.COLUMNS[[c.title for c in selectform.COLUMNS].index("model")].modes]
         self.assertEqual(modes, ["contains", "is"])
 
+    def test_a_long_message_wraps_instead_of_running_off_the_screen(self):
+        form = selectform.Form(REFS)
+        keys(form, "down", " ", "tab", "g")
+        self.assertIsNotNone(form.editing)
+        lines = selectform.plain(form.render(80, 40, "t")).splitlines()
+        self.assertTrue(all(len(l) <= 80 for l in lines))
+        text = " ".join(l.strip() for l in lines)
+        self.assertIn("Firewalls with the same name are upgraded together.", text)
+
     def test_down_from_the_filters_goes_into_the_tables_and_up_comes_back(self):
         keys(self.form, "down")
         self.assertEqual(self.form.zone, "available")

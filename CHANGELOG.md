@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- **Selection screen: a long message (such as the group-name prompt) wraps onto more lines instead of being cut off at the edge of the screen.**
 - **The selection screen's model filter has an `is` mode** (the whole model name), like HA and device group. Written to the command line as `--model-is`.
 - **Selection screen: Delete (or Ctrl-U) clears the filter under the cursor, and Ctrl-R resets every filter at once** (the Included list is kept). Both are listed in the Navigation help.
 - **Selection screen: the key help moved to the bottom, under the buttons, as a Navigation block (Tab, the keys for the section you are in, shortcuts); what a key just did is shown above it. The hint for the filter under the cursor ("This fleet has ...") now sits under the filters, above the Available list.**

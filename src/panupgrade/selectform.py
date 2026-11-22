@@ -8,6 +8,8 @@
 on a real terminal.
 """
 
+import textwrap
+
 from .planner import Selection
 from .tui import plain, run, show, translate_windows_key  # noqa: F401 - re-exported: the form and its tests use them from here
 from .versions import Version, VersionError
@@ -506,7 +508,8 @@ class Form:
         lines.append([("changed", " " + hint)] if hint else [])
         lines.append([])
 
-        fixed = len(lines) + 13                                   # two table headings, the gaps before the second table and the save line
+        said = textwrap.wrap(status.lstrip("!"), max(width - 4, 20)) if status else []        # a long message goes on more than one line
+        fixed = len(lines) + 12 + max(len(said), 1)                                   # two table headings, the gaps before the second table and the save line
         room = max(height - fixed, 6)
         top = max(3, (room + 1) // 2)
         bottom = max(3, room - top)
@@ -555,7 +558,7 @@ class Form:
         if self.dirty():
             buttons.append(("warn", "unsaved changes"))
         lines.append([(style, text) for style, text in buttons])
-        lines.append([("error" if status.startswith("!") else "changed", " " + status.lstrip("!"))] if status else [])     # what the last key did
+        lines += [[("error" if status.startswith("!") else "changed", " " + part)] for part in said] or [[]]     # what the last key did
         lines.append([])
         lines += [[("bold", " Navigation")], [("", "   " + TAB_HELP)], [("", "   " + HELP[self.zone])], [("", "   " + ALWAYS)]]
         return [self._cut(line, width - 1) for line in lines[:height]]

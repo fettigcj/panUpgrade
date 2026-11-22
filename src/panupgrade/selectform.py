@@ -57,6 +57,11 @@ HELP = {
     BUTTONS: "Left / Right: choose a button   Enter or Space: press it   Up: back to the file name   (Deselect all empties the Included list)",
 }
 SAVE_NOTE = "A list file replaces --serial in plan, prepare and upgrade."
+# What gives way, in this order, when the window is short: (blank lines kept, long Navigation block kept, fewest rows per table).
+# The buttons, the message line and the filters are never given up; below the last step the screen says the window is too small.
+LAYOUTS = [(True, True, 3), (True, False, 3), (False, False, 3), (False, False, 2)]
+MIN_COLUMNS = 60
+SHORT_NAVIGATION = "Tab: next area   Arrows / Space: choose   Ctrl-D: save & exit   Ctrl-R: reset filters   Esc: quit"
 TAB_HELP = "Tab: navigate among filters, filter modes, lists, and actions."
 ALWAYS = "Shortcuts: Ctrl-D = Save & Exit   Ctrl-R = reset all filters   Esc = Quit without saving (asks first if there are unsaved changes)"
 
@@ -467,7 +472,7 @@ class Form:
         widths = self._widths(width)
         errors = self.errors()
         avail, incl = self.available(), self.included_refs()
-        lines = [[("bold", f" {title}".rstrip() or " panupgrade select")], []]
+        lines = []
         status = self.message
         if self.editing is not None:
             status = (f"Group for {self._name(incl[self.cursor[INCLUDED]].serial)}: [{self.editing}_]   Enter keeps it, Esc leaves it, empty removes the group. "
@@ -507,20 +512,36 @@ class Form:
             lines.append([("error", f"   {attr.replace('_', ' ')}: {text}")])
         lines.append(self._in_effect())
         lines.append([("changed", " " + hint)] if hint else [])
-        lines.append([])
 
         said = textwrap.wrap(status.lstrip("!"), max(width - 4, 20)) if status else []        # a long message goes on more than one line
         box = f"[{self.out}{'_' if self.zone == SAVE else ''}".ljust(32) + "]"
         beside = 21 + len(box) + 2 + len(SAVE_NOTE) < width        # the note shares the row with the box when it fits, else it takes a row of its own
-        fixed = len(lines) + 12 + max(len(said), 1) + (0 if beside else 1)                                   # two table headings, the gaps before the second table and the save line
-        room = max(height - fixed, 6)
-        top = max(3, (room + 1) // 2)
-        bottom = max(3, room - top)
+
+        def rows_needed(layout):
+            """Every row of the screen except the table rows, for one layout."""
+            gaps, long_nav, _least = layout
+            return (1 + gaps + 4 + len(errors) + 1 + 1 + gaps        # title, filters, what is in effect, the hint
+                    + 2 + gaps + gaps + 1 + (0 if beside else 1) + 1  # table headings, save row and its note, buttons
+                    + max(len(said), 1) + (5 if long_nav else 1))    # the message, the navigation help
+        layout = next((l for l in LAYOUTS if height - rows_needed(l) >= 2 * l[2]), None)
+        if layout is None or width < MIN_COLUMNS:
+            rows = rows_needed(LAYOUTS[-1]) + 2 * LAYOUTS[-1][2]
+            return [self._cut(line, width - 1) for line in
+                    [[("bold", " This window is too small for the selection screen.")],
+                     [("", f" Make it at least {MIN_COLUMNS} columns by {rows} rows (now {width} by {height}), or press Ctrl-D to save and exit, Esc to quit.")]][:height]]
+        gaps, long_nav, least = layout
+        room = height - rows_needed(layout)
+        top = max(least, (room + 1) // 2)
+        bottom = max(least, room - top)
         self.page = max(top - 1, 1)
+        head = [[("bold", f" {title}".rstrip() or " panupgrade select")]] + ([[]] if gaps else [])
+        lines[:0] = head
+        if gaps:
+            lines.append([])
 
         def table(zone, rows, shown, heading, note, empty):
             self._clamp()
-            if zone == INCLUDED:
+            if zone == INCLUDED and gaps:
                 lines.append([])
             here = self.zone == zone
             cursor, off = self.cursor[zone], self.offset[zone]
@@ -548,12 +569,14 @@ class Form:
         table(INCLUDED, incl, bottom, "INCLUDED", f"{len(incl)} firewall{'s' if len(incl) != 1 else ''} for the batch",
               "Empty. Move firewalls here from Available with Space.")
         here = self.zone == SAVE
-        lines.append([])
+        if gaps:
+            lines.append([])
         lines.append([("focus" if here else "bold", f" {'>' if here else ' '} Save the list to "), ("focus" if here else "", box)]
                      + ([("", "  " + SAVE_NOTE)] if beside else []))
         if not beside:
             lines.append([("", "     " + SAVE_NOTE)])
-        lines.append([])
+        if gaps:
+            lines.append([])
         buttons = [("", "   ")]
         for n, label in enumerate(BUTTON_LABELS):
             on = self.zone == BUTTONS and self.button == n
@@ -562,8 +585,11 @@ class Form:
             buttons.append(("warn", "unsaved changes"))
         lines.append([(style, text) for style, text in buttons])
         lines += [[("error" if status.startswith("!") else "changed", " " + part)] for part in said] or [[]]     # what the last key did
-        lines.append([])
-        lines += [[("bold", " Navigation")], [("", "   " + TAB_HELP)], [("", "   " + HELP[self.zone])], [("", "   " + ALWAYS)]]
+        if long_nav:
+            lines.append([])
+            lines += [[("bold", " Navigation")], [("", "   " + TAB_HELP)], [("", "   " + HELP[self.zone])], [("", "   " + ALWAYS)]]
+        else:
+            lines.append([("", " " + SHORT_NAVIGATION)])
         return [self._cut(line, width - 1) for line in lines[:height]]
 
     def in_effect(self):

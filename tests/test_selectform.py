@@ -163,6 +163,20 @@ class Filters(unittest.TestCase):
         self.assertIn(selectform.SAVE_NOTE, narrow[at + 1])
         self.assertTrue(any("[ Save ]" in l for l in narrow))
 
+    def test_a_short_window_gives_up_the_long_help_and_blank_lines_before_the_buttons_and_says_when_it_is_too_small(self):
+        form = selectform.Form(REFS)
+        for height in (40, 30, 24, 20, 18):
+            lines = selectform.plain(form.render(100, height, "t")).splitlines()
+            self.assertLessEqual(len(lines), height, height)
+            self.assertTrue(any("[ Save ]" in l for l in lines), height)
+            self.assertTrue(any("AVAILABLE" in l for l in lines) and any("INCLUDED" in l for l in lines), height)
+        self.assertIn("Navigation", selectform.plain(form.render(100, 40, "t")))
+        self.assertNotIn("Navigation", selectform.plain(form.render(100, 24, "t")))
+        self.assertIn("Ctrl-D", selectform.plain(form.render(100, 24, "t")))
+        small = selectform.plain(form.render(100, 12, "t"))
+        self.assertIn("too small", small)
+        self.assertIn("too small", selectform.plain(form.render(40, 40, "t")))
+
     def test_down_from_the_filters_goes_into_the_tables_and_up_comes_back(self):
         keys(self.form, "down")
         self.assertEqual(self.form.zone, "available")

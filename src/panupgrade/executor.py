@@ -95,6 +95,8 @@ def run(plan, approval, backend, journal, settings, stop=None):
     def do_unit(unit):
         refusal = windows.begin([s for s in unit if s in approval.serials])
         if refusal:
+            for serial in unit:
+                windows.resolve(serial)
             return {serial: ("held", refusal) for serial in unit}
         try:
             return run_unit(unit)
@@ -118,7 +120,7 @@ def run(plan, approval, backend, journal, settings, stop=None):
                 local[serial] = ("not_started", f"stopped after {failures} failed device(s)")
             else:
                 was_failed = _failed_in_journal(journal, serial)
-                result = _run_device(devices[serial], backend, journal, settings, stop, gate)
+                result = _run_device(devices[serial], backend, journal, settings, stop, gate, windows)
                 local[serial] = result
                 with lock:
                     if result[0] == "failed" and not was_failed:
@@ -156,13 +158,13 @@ def _key(index, action):
     return f"{index}:{action}"
 
 
-def _run_device(dev, backend, journal, settings, stop=None, gate=None):
+def _run_device(dev, backend, journal, settings, stop=None, gate=None, windows=None):
     """Run one firewall's steps. A member of a stand-alone group takes a slot of its group from its reboot to the end of its verification;
     leaving this function while still holding the slot (a failure, a stop) closes the group, because that firewall may still be down."""
     group = dev.get("group") if gate is not None else ""
     held, result = [], None
     try:
-        result = _run_steps(dev, backend, journal, settings, stop, gate, group, held)
+        result = _run_steps(dev, backend, journal, settings, stop, gate, group, held, windows)
         return result
     finally:
         if result is None or result[0] in ("failed", "stopped", "held"):      # undo what was edited for the load balancer, as far as it can be undone
@@ -172,7 +174,7 @@ def _run_device(dev, backend, journal, settings, stop=None, gate=None):
             gate.close(group, dev["hostname"])
 
 
-def _run_steps(dev, backend, journal, settings, stop, gate, group, held):
+def _run_steps(dev, backend, journal, settings, stop, gate, group, held, windows=None):
     serial = dev["serial"]
     if _failed_in_journal(journal, serial):
         return "failed", "failed earlier in this journal; not retried automatically"
@@ -187,12 +189,19 @@ def _run_steps(dev, backend, journal, settings, stop, gate, group, held):
         key = _key(index, st["action"])
         last = journal.last_state(serial, key)
         if last == "ok":
+            if windows is not None and st["action"].startswith("reboot to activate "):
+                why = windows.after_activation(serial)               # idempotent: also covers a resumed run
+                if why:
+                    return "failed", why
             continue
         if stop is not None and stop.is_set():
             return "stopped", f"stopped by you before {st['action']}"
         if last == "started":
             return "needs_attention", f"{st['action']} was started and not finished; check the device before resuming"
         if group and (st["action"] in ("drain", "reboot", "verify") or st["action"].startswith("reboot to activate ")) and not held:
+            wait = windows.wait_for_deferred(serial, stop) if windows is not None else ""
+            if wait:
+                return "held", wait
             why = gate.enter(group, stop)
             if why:
                 return "held", why
@@ -202,6 +211,10 @@ def _run_steps(dev, backend, journal, settings, stop, gate, group, held):
         err = _step(journal, serial, key, lambda: _do(st["action"], index, dev, backend, journal, settings))
         if err:
             return "failed", f"{_standing(dev, journal, index)}; {st['action']} failed: {err}"
+        if windows is not None and st["action"].startswith("reboot to activate "):
+            why = windows.after_activation(serial)                   # it has rebooted and takes commits again: its own window can open now
+            if why:
+                return "failed", why
         # A group member keeps its slot until its LAST step that matters: the service check when there is one (the next member is not drained
         # until this one carries traffic again), else the undrain, else its last verify. A path of several installs, or an activation reboot
         # followed by an install, has several verifies; the first of them is not the end.

@@ -318,15 +318,11 @@ def _apply_pending(devices, ctxs, by_serial, selection, target):
             continue
         window = ((dev["group"] and ctx.settings.group_tolerate_asymmetry)
                   or (not dev["group"] and ctx.facts.ha_mode != "none" and ctx.settings.pair_tolerate_asymmetry))
-        if window:
-            _swap(dev, CheckResult("pending_reboot", FAIL,
-                                   f"{shown} is installed and waiting for a reboot. The plan would reboot it first, but the Allow Asymmetric Return window "
-                                   f"has to commit on this firewall and it refuses commits until it has been rebooted. Reboot it yourself first, or turn the "
-                                   f"window off (pair_tolerate_asymmetry / group_tolerate_asymmetry) for this run"))
-            continue
         dev["activate"] = {"version": str(pend), "case": case}
         words = ("it is the target version, so the upgrade is only the reboot that makes it live" if case == "finish" else
                  "its HA peer or the rest of its group already runs it: the plan reboots into it first so they are on one version, then goes on to the target")
+        if window:        # it refuses commits until it has rebooted, and a firewall that is about to reboot has no use for the window anyway
+            words += ("; the asymmetry window is opened on this firewall after that reboot (the others take the sessions it drains, and they get the window first)")
         _swap(dev, CheckResult("pending_reboot", WARN, f"{shown} is installed and waiting for a reboot; {words}", ack="pending_reboot"))
 
 
@@ -528,6 +524,9 @@ def _order(devices, by_serial, settings=None):
         members.sort(key=lambda s: (devices[s]["position"] != "first" if placed else devices[s]["ha_state"] not in ("passive", "suspended"), s))
         seen.update(members)
         units.append(members)
+    # A stand-alone group member with an image waiting for its reboot goes first: it cannot take the asymmetry window until it has rebooted, so the
+    # rest of its group must not start (and hand it their sessions) before it is back.
+    units.sort(key=lambda unit: 0 if any(devices[m].get("activate") and devices[m]["group"] for m in unit) else 1)
     return units
 
 

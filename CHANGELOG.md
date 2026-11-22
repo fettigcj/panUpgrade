@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- **A stand-alone group member (or pair member) with an image waiting for its reboot no longer blocks the plan when the asymmetry window is on.** The firewall refuses commits until it has rebooted, and it is about to go down anyway, so the window is opened on the OTHER members first (they take the sessions it drops), the member is rebooted first, and its own window is opened once it is back. The rest of its group waits for that, whatever `group_reboot_tolerance` is. A member alone in its group gets no window. Not yet exercised on real firewalls.
 - **Selection screen on a short window:** when the window has too few rows, the long Navigation help gives way to a one-line version, then the blank lines go, then each table shrinks to two rows; the filters, buttons and message line are always kept. Below that (under about 18 rows or 60 columns) the screen says the window is too small and how big it needs to be; Ctrl-D and Esc still work.
 - **Selection screen: one short note by the "Save the list to" box ("A list file replaces --serial in plan, prepare and upgrade."), on the same row when it fits and on its own row when it does not, instead of two long notes cut off at the edge.**
 - **Selection screen: a long message (such as the group-name prompt) wraps onto more lines instead of being cut off at the edge of the screen.**

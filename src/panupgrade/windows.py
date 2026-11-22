@@ -68,6 +68,9 @@ class Windows:
         self.backend, self.journal, self.say, self.settings = backend, journal, say, settings
         self.lb_serials = [s for members in (plan.get("groups") or {}).values() for s in members if s in approved]
         self.windows, self.by_serial = [], {}
+        # A firewall with an image waiting for its reboot refuses commits, and it is about to go down anyway: the sessions it drains land on the OTHER
+        # members, which are the ones that must tolerate them. So its own window is opened after its activation reboot (see after_activation).
+        self.deferred = {d["serial"] for d in plan.get("devices") or [] if d.get("activate")}
         for spec in plan.get("asymmetry") or []:
             serials = [s for s in spec["serials"] if s in approved]
             if not serials:
@@ -79,6 +82,29 @@ class Windows:
             for s in serials:
                 self.by_serial[s] = window
         self.unrestored = []
+        # The other members of a window wait (before they drain or reboot) until every member that has to reboot first has done so and its own window
+        # is open: the sessions the next member drains must find tolerant firewalls, and a member that is still down cannot take them.
+        self._cond = threading.Condition()
+        self.awaiting = {w["name"]: {s for s in w["serials"] if s in self.deferred} for w in self.windows if len(w["serials"]) > 1}
+
+    def wait_for_deferred(self, serial, stop=None):
+        """Block while a member of this firewall's window that must reboot first has not yet done so. "" when it may go on, else why it must not."""
+        window = self.by_serial.get(serial)
+        if window is None or serial in self.deferred:
+            return ""
+        with self._cond:
+            while self.awaiting.get(window["name"]):
+                if stop is not None and stop.is_set():
+                    return "stopped by you while waiting for the member with a pending reboot to come back"
+                self._cond.wait(1.0)
+        return ""
+
+    def resolve(self, serial):
+        """This firewall no longer holds up the others of its window: its window is open, or it will not be started."""
+        with self._cond:
+            for waiting in self.awaiting.values():
+                waiting.discard(serial)
+            self._cond.notify_all()
 
     def _of(self, unit):
         found = []
@@ -98,7 +124,29 @@ class Windows:
                     return f"could not open the asymmetry window for {window['name']}: {window['reason']}"
         return ""
 
+    def after_activation(self, serial):
+        try:
+            return self._open_after_activation(serial)
+        finally:
+            self.resolve(serial)
+
+    def _open_after_activation(self, serial):
+        """"" when nothing was needed or the window is now open on this firewall; else why it could not be opened (the firewall's step then fails)."""
+        window = self.by_serial.get(serial)
+        if window is None or serial not in self.deferred or len(window["serials"]) < 2:      # alone in its window: nobody else's drain to tolerate
+            return ""
+        with window["lock"]:
+            if window["state"] != "open" or any(s == serial for s, _o in window["opened"]):
+                return ""
+            try:
+                self._open_one(serial, window)
+            except BackendError as exc:
+                return f"could not open the asymmetry window on it after its reboot: {exc}"
+        return ""
+
     def end(self, unit):
+        for serial in unit:
+            self.resolve(serial)
         for window in self._of(unit):
             with window["lock"]:
                 window["left"] -= 1
@@ -117,7 +165,8 @@ class Windows:
     def _open(self, window):
         try:
             for serial in window["serials"]:
-                self._open_one(serial, window)
+                if serial not in self.deferred:
+                    self._open_one(serial, window)
         except BackendError as exc:
             reason = str(exc)
             self._close(window)                                     # put back whatever was already changed

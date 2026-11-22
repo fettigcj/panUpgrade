@@ -192,6 +192,68 @@ class Running(unittest.TestCase):
         for serial in ("S1", "S2", "S3"):
             self.assertEqual(sim.nodes[serial].asym, ORIGINAL)
 
+    def test_a_member_waiting_for_its_reboot_is_rebooted_first_without_a_window_and_gets_its_window_after_it_is_back(self):
+        from tests.support import facts
+        data = three()
+        data["devices"][1]["facts"] = facts(pending_reboot=True, pending_reboot_version=TARGET)
+
+        class Refuses(SimBackend):
+            rebooted = set()
+
+            def preflight(self, serial):
+                seen = super().preflight(serial)
+                return {**seen, "pending_reboot": True, "pending_reboot_version": TARGET} if serial == "S2" and "S2" not in self.rebooted else seen
+
+            def reboot_and_wait(self, serial, timeout_s):
+                self.rebooted.add(serial)
+                if serial == "S2":
+                    self.nodes[serial].version = TARGET                       # the image that was waiting is now the running one
+                return super().reboot_and_wait(serial, timeout_s)
+
+            def set_tcp_asymmetry(self, serial, reject_non_syn, reject_non_syn_config, asymmetric_path):
+                if serial == "S2" and "S2" not in self.rebooted:
+                    raise executor.CommitRefused("S2: the firewall refused the commit: please reboot")
+                super().set_tcp_asymmetry(serial, reject_non_syn, reject_non_syn_config, asymmetric_path)
+        Refuses.rebooted = set()
+        plan, sim, journal, result = self.go(Refuses, data=data)
+        self.assertEqual(plan["order"][0], ["S2"])
+        self.assertEqual(result["asymmetry_unrestored"], [])
+        opens = [i for i, c in enumerate(sim.calls) if c[1] == "set asymmetry" and c[2:] == (False, "bypass", "no")]
+        reboots = [(i, c[0]) for i, c in enumerate(sim.calls) if c[1] == "reboot"]
+        first_reboot = reboots[0][0]
+        self.assertEqual(reboots[0][1], "S2")
+        self.assertEqual(sorted(sim.calls[i][0] for i in opens if i < first_reboot), ["S1", "S3"])    # the others are ready before S2 goes down
+        self.assertIn("S2", [sim.calls[i][0] for i in opens if i > first_reboot])                       # S2 is tolerant once it is back
+        later = [i for i in opens if sim.calls[i][0] == "S2"][0]
+        self.assertLess(later, [i for i, s in reboots if s == "S1"][0])                                 # and before the next member goes down
+        for serial in ("S1", "S2", "S3"):
+            self.assertEqual(sim.nodes[serial].asym, ORIGINAL)
+
+    def test_with_a_tolerance_of_two_the_others_wait_until_the_rebooted_member_has_its_window(self):
+        from tests.support import facts
+        data = three()
+        data["devices"][1]["facts"] = facts(pending_reboot=True, pending_reboot_version=TARGET)
+
+        class Pending(SimBackend):
+            done = set()
+
+            def preflight(self, serial):
+                seen = super().preflight(serial)
+                return {**seen, "pending_reboot": True, "pending_reboot_version": TARGET} if serial == "S2" and "S2" not in self.done else seen
+
+            def reboot_and_wait(self, serial, timeout_s):
+                self.done.add(serial)
+                if serial == "S2":
+                    self.nodes[serial].version = TARGET
+                return super().reboot_and_wait(serial, timeout_s)
+        Pending.done = set()
+        _, sim, _, result = self.go(Pending, data=data, group_reboot_tolerance="2", max_parallel="3")
+        self.assertEqual({v[0] for v in result["outcome"].values()}, {"done"})
+        reboots = [(i, c[0]) for i, c in enumerate(sim.calls) if c[1] == "reboot"]
+        self.assertEqual(reboots[0][1], "S2")
+        s2_window = next(i for i, c in enumerate(sim.calls) if c[0] == "S2" and c[1] == "set asymmetry" and c[2:] == (False, "bypass", "no"))
+        self.assertTrue(all(i > s2_window for i, s in reboots if s != "S2"))
+
     def test_a_firewall_with_uncommitted_changes_is_refused_before_anything_is_changed(self):
         data = three()
         data["devices"][1]["facts"]["pending_changes"] = True

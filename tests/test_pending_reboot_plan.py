@@ -70,12 +70,18 @@ class PendingReboot(unittest.TestCase):
         self.assertEqual(d["verdict"], "blocked")
         self.assertIn("the rest of its group", " ".join(r["reason"] for r in d["results"] if r["check"] == "pending_reboot"))
 
-    def test_the_asymmetry_window_cannot_open_on_a_firewall_that_refuses_commits(self):
+    def test_the_asymmetry_window_does_not_block_a_pending_firewall_it_opens_there_after_the_reboot(self):
         data = fleet_data(pending("A", "20.2.3", TARGET), device("B", version="20.2.3"))
         p = plan(data, groups={"A": "g", "B": "g"})                          # group_tolerate_asymmetry is on by default
         d = dev(p, "A")
-        self.assertEqual(d["verdict"], "blocked")
-        self.assertIn("Allow Asymmetric Return", " ".join(r["reason"] for r in d["results"] if r["check"] == "pending_reboot"))
+        self.assertEqual(d["verdict"], "caution")
+        self.assertEqual(d["activate"]["case"], "finish")
+        self.assertIn("after that reboot", " ".join(r["reason"] for r in d["results"] if r["check"] == "pending_reboot"))
+
+    def test_a_group_member_waiting_for_its_reboot_goes_first(self):
+        data = fleet_data(device("B", version="20.2.3"), pending("A", "20.2.3", TARGET), device("C", version="20.2.3"))
+        p = plan(data, groups={"A": "g", "B": "g", "C": "g"})
+        self.assertEqual(p["order"][0], ["A"])
 
     def test_a_firewall_with_nothing_pending_is_planned_as_before(self):
         d = dev(plan(fleet_data(device("A", version="20.2.3"))), "A")

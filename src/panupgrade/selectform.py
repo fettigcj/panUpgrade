@@ -56,6 +56,7 @@ HELP = {
     SAVE: "Type the file name the list is saved to (empty: no file).   Enter: go to the buttons",
     BUTTONS: "Left / Right: choose a button   Enter or Space: press it   Up: back to the file name   (Deselect all empties the Included list)",
 }
+SAVE_NOTE = "A list file replaces --serial in plan, prepare and upgrade."
 TAB_HELP = "Tab: navigate among filters, filter modes, lists, and actions."
 ALWAYS = "Shortcuts: Ctrl-D = Save & Exit   Ctrl-R = reset all filters   Esc = Quit without saving (asks first if there are unsaved changes)"
 
@@ -509,7 +510,9 @@ class Form:
         lines.append([])
 
         said = textwrap.wrap(status.lstrip("!"), max(width - 4, 20)) if status else []        # a long message goes on more than one line
-        fixed = len(lines) + 12 + max(len(said), 1)                                   # two table headings, the gaps before the second table and the save line
+        box = f"[{self.out}{'_' if self.zone == SAVE else ''}".ljust(32) + "]"
+        beside = 21 + len(box) + 2 + len(SAVE_NOTE) < width        # the note shares the row with the box when it fits, else it takes a row of its own
+        fixed = len(lines) + 12 + max(len(said), 1) + (0 if beside else 1)                                   # two table headings, the gaps before the second table and the save line
         room = max(height - fixed, 6)
         top = max(3, (room + 1) // 2)
         bottom = max(3, room - top)
@@ -546,10 +549,10 @@ class Form:
               "Empty. Move firewalls here from Available with Space.")
         here = self.zone == SAVE
         lines.append([])
-        lines.append([("focus" if here else "bold", f" {'>' if here else ' '} Save the list to "),
-                      ("focus" if here else "", f"[{self.out}{'_' if here else ''}".ljust(32) + "]"),
-                      ("dim", "  plan, prepare and upgrade use this file when you don't name firewalls" if self.out.strip()
-                       else "  not saved: later commands will need --serial or --serials-file")])
+        lines.append([("focus" if here else "bold", f" {'>' if here else ' '} Save the list to "), ("focus" if here else "", box)]
+                     + ([("", "  " + SAVE_NOTE)] if beside else []))
+        if not beside:
+            lines.append([("", "     " + SAVE_NOTE)])
         lines.append([])
         buttons = [("", "   ")]
         for n, label in enumerate(BUTTON_LABELS):

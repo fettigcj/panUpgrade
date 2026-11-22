@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- **Selection screen: one short note by the "Save the list to" box ("A list file replaces --serial in plan, prepare and upgrade."), on the same row when it fits and on its own row when it does not, instead of two long notes cut off at the edge.**
 - **Selection screen: a long message (such as the group-name prompt) wraps onto more lines instead of being cut off at the edge of the screen.**
 - **The selection screen's model filter has an `is` mode** (the whole model name), like HA and device group. Written to the command line as `--model-is`.
 - **Selection screen: Delete (or Ctrl-U) clears the filter under the cursor, and Ctrl-R resets every filter at once** (the Included list is kept). Both are listed in the Navigation help.

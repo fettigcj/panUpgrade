@@ -152,6 +152,17 @@ class Filters(unittest.TestCase):
         text = " ".join(l.strip() for l in lines)
         self.assertIn("Firewalls with the same name are upgraded together.", text)
 
+    def test_the_list_file_note_shares_the_save_row_when_it_fits_and_takes_its_own_row_when_not(self):
+        form = selectform.Form(REFS)
+        wide = selectform.plain(form.render(140, 40, "t")).splitlines()
+        row = next(l for l in wide if "Save the list to" in l)
+        self.assertIn(selectform.SAVE_NOTE, row)
+        narrow = selectform.plain(form.render(80, 40, "t")).splitlines()
+        at = next(i for i, l in enumerate(narrow) if "Save the list to" in l)
+        self.assertNotIn(selectform.SAVE_NOTE, narrow[at])
+        self.assertIn(selectform.SAVE_NOTE, narrow[at + 1])
+        self.assertTrue(any("[ Save ]" in l for l in narrow))
+
     def test_down_from_the_filters_goes_into_the_tables_and_up_comes_back(self):
         keys(self.form, "down")
         self.assertEqual(self.form.zone, "available")

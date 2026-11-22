@@ -98,13 +98,29 @@ class Filters(unittest.TestCase):
         keys(self.form, "right")
         self.assertEqual(self.form.values["version_is"], "")
 
-    def test_arrows_add_and_remove_values_in_a_list_filter(self):
-        keys(self.form, *["tab"] * 4, "right", "right")
-        self.assertEqual(self.form.values["ha_states"], "active, passive")
+    def test_arrows_act_on_the_last_item_of_a_list_filter(self):
+        keys(self.form, *["tab"] * 4, "right")
+        self.assertEqual(self.form.values["ha_states"], "active")
+        keys(self.form, "right")                                  # steps the item to the next known value
+        self.assertEqual(self.form.values["ha_states"], "passive")
+        keys(self.form, "right")                                  # off the end: an empty item
+        self.assertEqual(self.form.values["ha_states"], "")
+        keys(self.form, "right", ",")                             # a comma starts another item
+        self.assertEqual(self.form.values["ha_states"], "active,")
         keys(self.form, "right")
         self.assertEqual(self.form.values["ha_states"], "active, passive")
-        keys(self.form, "left")
+        keys(self.form, "right")                                  # active is already in the list: it is never offered twice
+        self.assertEqual(self.form.values["ha_states"], "active, ")
+        keys(self.form, "left")                                   # Left on an empty item takes the dangling comma away
         self.assertEqual(self.form.values["ha_states"], "active")
+
+    def test_a_partly_typed_item_is_completed_by_right_arrow(self):
+        keys(self.form, *["tab"] * 4, *typing("pas"), "right")
+        self.assertEqual(self.form.values["ha_states"], "passive")
+
+    def test_a_comma_list_is_split_on_commas_only(self):
+        form = selectform.Form(REFS)
+        self.assertEqual(selectform._split("Branch Offices, lab"), ["Branch Offices", "lab"])
 
     def test_down_from_the_filters_goes_into_the_tables_and_up_comes_back(self):
         keys(self.form, "down")

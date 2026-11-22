@@ -47,9 +47,9 @@ COLUMNS = [
 VERSION_ATTRS = ("version_older_than", "version_newer_than")
 MIN_WIDTH = 8
 HELP = {
-    FILTER: "Tab: next filter   Up / Down: mode row, input row, tables   Left / Right: change mode or pick a known value",
-    AVAILABLE: "Space / Enter: add to Included   A: add all listed   Up / Down / PgUp / PgDn: move   Tab: next section",
-    INCLUDED: "Space / Enter / D: take out   G: stand-alone group   C: clear the list   Up / Down / PgUp / PgDn: move   Tab: next section",
+    FILTER: "Tab: navigate among filters, filter modes, lists, and actions.   Up / Down: mode row, input row, tables   Left / Right: change mode or pick a known value",
+    AVAILABLE: "Space / Enter: add to Included   A: add all listed   Up / Down / PgUp / PgDn: move   Tab: navigate among filters, filter modes, lists, and actions.",
+    INCLUDED: "Space / Enter / D: take out   G: stand-alone group   C: clear the list   Up / Down / PgUp / PgDn: move   Tab: navigate among filters, filter modes, lists, and actions.",
     SAVE: "Type the file name the list is saved to (empty: no file).   Enter: go to the buttons",
     BUTTONS: "Left / Right: choose a button   Enter or Space: press it   Up: back to the file name   (Deselect all empties the Included list)",
 }
@@ -62,7 +62,8 @@ def _wrap(term):
 
 
 def _split(text):
-    return [part for part in text.replace(",", " ").split() if part]
+    """The items of a comma list. Only a comma separates them: a device group may have a space in its name."""
+    return [part.strip() for part in text.split(",") if part.strip()]
 
 
 def _choices(refs):
@@ -333,14 +334,40 @@ class Form:
         if not known:
             return text
         if kind == LIST:
-            have = _split(text)
-            if step < 0:
-                return ", ".join(have[:-1])
-            remaining = [k for k in known if k not in have]
-            return ", ".join(have + remaining[:1]) if remaining else text
+            return self._pick_item(known, text, step)
         cycle = [""] + known
         at = cycle.index(text.strip()) if text.strip() in cycle else 0
         return cycle[(at + step) % len(cycle)]
+
+    @staticmethod
+    def _pick_item(known, text, step):
+        """Arrows act on the last item of a comma list. An empty item (nothing typed, or a comma just typed) takes the first known value not used
+        earlier in the list; a partly typed item is completed; a known value steps to the next or previous one, through an empty item at the ends.
+        A value already earlier in the list is never offered again."""
+        parts = [p.strip() for p in text.split(",")]
+        last = parts.pop()
+        done = [p for p in parts if p]
+        taken = {d.lower() for d in done}
+        free = [k for k in known if k.lower() not in taken]
+
+        def built(item):
+            if item:
+                return ", ".join(done + [item])
+            return (", ".join(done) + ", ") if done else ""
+        if not last:
+            if step > 0:
+                return built(free[0]) if free else text
+            if done:                                    # Left on an empty item takes the dangling comma away
+                return ", ".join(done)
+            return built(free[-1]) if free else text
+        lowered = [k.lower() for k in free]
+        if last.lower() in lowered:
+            at = lowered.index(last.lower()) + step
+            return built(free[at]) if 0 <= at < len(free) else built("")
+        if step > 0:
+            match = next((k for k in free if k.lower().startswith(last.lower())), None)
+            return built(match) if match else text
+        return text
 
     def _rows(self, zone):
         return self.available() if zone == AVAILABLE else self.included_refs()
@@ -424,7 +451,7 @@ class Form:
         errors = self.errors()
         avail, incl = self.available(), self.included_refs()
         lines = [[("bold", f" {title}".rstrip() or " panupgrade select")],
-                 [("dim", " " + HELP[self.zone])], [("dim", " " + ALWAYS)]]
+                 [("", " " + HELP[self.zone])], [("", " " + ALWAYS)]]
         status = self.message
         if self.editing is not None:
             status = (f"Group for {self._name(incl[self.cursor[INCLUDED]].serial)}: [{self.editing}_]   Enter keeps it, Esc leaves it, empty removes the group. "
@@ -432,7 +459,8 @@ class Form:
         if not status and self.zone == FILTER and self.frow == INPUT:
             label, attr, kind, _flag, example = COLUMNS[self.fcol].modes[self.mode[self.fcol]]
             known = self.choices.get(attr) or []
-            status = (f"This fleet has: {', '.join(known)}" if known else example)
+            more = ("   Right / Left: next / previous value; a comma starts another" if kind == LIST else "   Right / Left: next / previous value") if known else ""
+            status = (f"This fleet has: {', '.join(known)}{more}" if known else example)
         if not status and self.zone == FILTER and self.frow == MODE:
             status = "Left / Right changes the mode. Filters set in the other modes still apply: see 'Filters in effect' below."
         lines.append([])                                         # a gap between the fixed help and the hint that changes with the cursor

@@ -81,13 +81,14 @@ class Filters(unittest.TestCase):
         self.assertEqual(self.form.values["version_older_than"], "10.2.11")
         self.assertEqual([r.serial for r in self.form.available()], ["S1", "S2"])
 
-    def test_a_bad_version_is_flagged_blocks_done_and_does_not_break_the_tables(self):
+    def test_a_bad_version_is_flagged_but_does_not_block_saving_the_included_list(self):
         keys(self.form, "tab", "tab", "tab", "up", "right", "down", *typing("banana"))
         self.assertIn("version_older_than", self.form.errors())
         self.assertEqual(len(self.form.available()), 4)
+        self.form.included = [self.form.refs[0].serial]
         keys(self.form, "tab")
-        self.assertIsNone(self.form.press("ctrl-d"))
-        self.assertIn("red filter", self.form.message)
+        self.assertEqual(self.form.press("ctrl-d"), "accept")
+        self.assertNotIn("red filter", self.form.message)
 
     def test_arrows_step_a_single_value_filter_through_what_the_fleet_has_in_release_order(self):
         keys(self.form, "tab", "tab", "tab", "right")

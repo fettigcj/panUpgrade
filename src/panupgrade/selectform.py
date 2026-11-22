@@ -236,8 +236,7 @@ class Form:
         return next((r.hostname for r in self.refs if r.serial == serial), serial)
 
     def _problem(self):
-        if self.errors():
-            return "Fix the red filter first."
+        # A filter that cannot be read only affects what the Available list shows; the Included list is what gets saved.
         if not self.included:
             return "The Included list is empty. Move firewalls into it from Available (Space), or press A to add all of them."
         return ""

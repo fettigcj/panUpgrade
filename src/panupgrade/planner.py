@@ -49,6 +49,8 @@ class Selection:
     version_older_than: str = ""
     version_newer_than: str = ""
     ha_states: list = field(default_factory=list)   # active | passive | ...
+    ha_states_is: list = field(default_factory=list)         # the same, from the form's "is" mode (no wildcard is added for the reader)
+    device_groups_is: list = field(default_factory=list)
     accept_standalone_outage: bool = False
     groups: dict = field(default_factory=dict)      # serial -> stand-alone group name (from the firewall list file: 'SERIAL, group')
 
@@ -69,9 +71,13 @@ class Selection:
             return False
         if self.device_groups and not _glob_any(self.device_groups, ref.device_group):
             return False
+        if self.device_groups_is and not _glob_any(self.device_groups_is, ref.device_group):
+            return False
         if self.tags and not any(_glob_any(self.tags, tag) for tag in ref.tags):
             return False
         if self.ha_states and not _glob_any(self.ha_states, ref.ha_state):
+            return False
+        if self.ha_states_is and not _glob_any(self.ha_states_is, ref.ha_state):
             return False
         if self.version_is and not fnmatch.fnmatch(ref.sw_version or "", self.version_is):
             return False
@@ -98,8 +104,8 @@ class Selection:
     def describe(self):
         parts = []
         for label, value in (("serial in", self.serials), ("hostname like", self.name_glob), ("hostname contains", self.name_contains), ("hostname matches regex", self.name_regex),
-                             ("model in", self.models), ("device group in", self.device_groups), ("tag in", self.tags),
-                             ("HA state in", self.ha_states), ("version is", self.version_is),
+                             ("model in", self.models), ("device group in", self.device_groups), ("device group is", self.device_groups_is), ("tag in", self.tags),
+                             ("HA state in", self.ha_states), ("HA state is", self.ha_states_is), ("version is", self.version_is),
                              ("version older than", self.version_older_than), ("version newer than", self.version_newer_than)):
             if value:
                 parts.append(f"{label} {value}")

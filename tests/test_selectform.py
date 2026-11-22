@@ -226,10 +226,25 @@ class Drawing(unittest.TestCase):
         header = next(l for l in lines if "hostname" in l and "serial" in l)
         mode = next(l for l in lines if "< pattern >" in l)
         row = next(l for l in lines if "site1-fw1" in l)
-        for word, below in (("serial", "contains"), ("PAN-OS", "< is >"), ("HA", "contains")):
+        for word, below in (("serial", "contains"), ("PAN-OS", "< is >"), ("HA", "< contains >")):
             self.assertEqual(header.index(word), mode.index(below, header.index(word) - 1), word)
         self.assertEqual(header.index("serial"), row.index("S1"))
         self.assertEqual(header.index("PAN-OS"), row.index("10.2.1"))
+
+    def test_ha_and_device_group_have_an_is_mode_that_matches_the_whole_value(self):
+        form = selectform.Form(REFS)
+        col = [c.title for c in selectform.COLUMNS].index("HA")
+        form.zone, form.fcol, form.frow = selectform.FILTER, col, selectform.MODE
+        keys(form, "right", "down", *typing("active"))
+        self.assertEqual(form.values["ha_states_is"], "active")
+        sel = form.filter_selection()
+        self.assertEqual(sel.ha_states_is, ["active"])
+        self.assertEqual(sel.ha_states, [])
+        self.assertTrue(sel.matches(REFS[0]))
+        self.assertFalse(Selection(ha_states_is=["activ"]).matches(REFS[0]))
+        self.assertIn(("--ha-state-is", "active"), form.flags() or [("--ha-state-is", "active")])
+        self.assertFalse(Selection(device_groups_is=["ed"]).matches(REFS[2]))
+        self.assertIn("device group is", Selection(device_groups_is=["x"]).describe())
 
     def test_both_tables_and_their_counts_are_shown(self):
         form = selectform.Form(REFS)

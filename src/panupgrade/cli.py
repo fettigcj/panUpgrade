@@ -382,6 +382,7 @@ def _selection(args):
         raise SystemExit(f"--name-regex {args.name_regex!r}: {Selection.regex_problem(args.name_regex)}")
     return Selection(serials=_serials(args), name_glob=args.name or "", name_contains=args.name_contains or "", name_regex=args.name_regex or "",
                      models=args.model or [], device_groups=args.device_group or [], tags=args.tag or [],
+                     ha_states_is=getattr(args, "ha_state_is", None) or [], device_groups_is=getattr(args, "device_group_is", None) or [],
                      version_is=args.version_is or "", version_older_than=args.version_older_than or "",
                      version_newer_than=args.version_newer_than or "", ha_states=args.ha_state or [],
                      accept_standalone_outage=getattr(args, "accept_standalone_outage", False), groups=_groups(args))
@@ -454,7 +455,7 @@ def _plan(args):
 
 
 _FILTERS = ("serial", "serials_file", "name", "name_contains", "name_regex", "model", "device_group", "tag",
-            "version_is", "version_older_than", "version_newer_than", "ha_state")
+            "version_is", "version_older_than", "version_newer_than", "ha_state", "ha_state_is", "device_group_is")
 
 
 def _wants_form(args):
@@ -1593,8 +1594,10 @@ def _selection_args(p):
     pick.add_argument("--version-older-than", help="running version is older than this")
     pick.add_argument("--version-newer-than", help="running version is newer than this")
     pick.add_argument("--ha-state", action="append", help="HA state as Panorama reports it: active, passive, ... (repeatable)")
+    pick.add_argument("--ha-state-is", action="append", help=argparse.SUPPRESS)       # written by the selection form's "is" mode
     pick.add_argument("--model", action="append")
     pick.add_argument("--device-group", action="append")
+    pick.add_argument("--device-group-is", action="append", help=argparse.SUPPRESS)
     pick.add_argument("--tag", action="append")
     look = p.add_argument_group("how it looks")
     look.add_argument("--color", choices=["auto", "always", "never"], default="auto", help="ANSI colour (NO_COLOR is honoured)")

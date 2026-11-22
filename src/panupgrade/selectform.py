@@ -37,8 +37,11 @@ COLUMNS = [
                       ("older than", "version_older_than", TEXT, "--version-older-than", "e.g. 10.2.11   (running something below this)"),
                       ("newer than", "version_newer_than", TEXT, "--version-newer-than", "e.g. 10.2.2   (running something above this)")],
            14, lambda r: r.sw_version or "-"),
-    Column("HA", [("contains", "ha_states", LIST, "--ha-state", "e.g. active, passive   (\"active\" also finds active-primary)")], 9, lambda r: r.ha_state or "-"),
-    Column("device group", [("contains", "device_groups", LIST, "--device-group", "part of a device group name")], 16, lambda r: r.device_group or "-"),
+    Column("HA", [("contains", "ha_states", LIST, "--ha-state", "e.g. active, passive   (\"active\" also finds active-primary)"),
+                  ("is", "ha_states_is", LIST, "--ha-state-is", "the whole state, e.g. active   (does not find active-primary)")], 12, lambda r: r.ha_state or "-"),
+    Column("device group", [("contains", "device_groups", LIST, "--device-group", "part of a device group name"),
+                            ("is", "device_groups_is", LIST, "--device-group-is", "the whole device group name; separate several with commas")], 16,
+           lambda r: r.device_group or "-"),
     Column("tags", [("contains", "tags", LIST, "--tag", "part of a tag name")], 14, lambda r: ", ".join(r.tags or []) or "-"),
 ]
 VERSION_ATTRS = ("version_older_than", "version_newer_than")
@@ -76,7 +79,8 @@ def _choices(refs):
         return sorted({v for v in values if v}, key=key)
     found = versions(r.sw_version for r in refs)
     return {"version_is": found, "version_older_than": found, "version_newer_than": found,
-            "ha_states": distinct((r.ha_state or "").lower() for r in refs), "models": distinct(r.model for r in refs),
+            "ha_states": distinct((r.ha_state or "").lower() for r in refs), "ha_states_is": distinct((r.ha_state or "").lower() for r in refs),
+            "device_groups_is": distinct(r.device_group for r in refs), "models": distinct(r.model for r in refs),
             "device_groups": distinct(r.device_group for r in refs), "tags": distinct(t for r in refs for t in (r.tags or []))}
 
 
@@ -138,10 +142,10 @@ class Form:
         sel = Selection()
         bad = self.errors()
         for column in COLUMNS:
-            for _label, attr, kind, _flag, _eg in column.modes:
+            for label, attr, kind, _flag, _eg in column.modes:
                 text = self.values[attr].strip()
                 if text and attr not in bad:
-                    setattr(sel, attr, [_wrap(t) for t in _split(text)] if kind == LIST else text)
+                    setattr(sel, attr, [(t if label == "is" else _wrap(t)) for t in _split(text)] if kind == LIST else text)
         return sel
 
     def filters_active(self):

@@ -1361,7 +1361,7 @@ def _issue_kit(args, style, label):
         f"prepared {datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')}; running the script is the approval",
         datetime.now(timezone.utc).isoformat(timespec="seconds"), plan.get("snapshot", {}))
     _print_cautions(style, plan, "Running the script accepts these cautions:")
-    made = kit.write(args.kit_dir, stamp, args, plan, approval, who)
+    made = kit.write(args.kit_dir, stamp, args, plan, approval, who, groups=_groups(args))
     print(style.line("ok", "the upgrade kit is ready. Written:"))
     for label_, key in (("firewall list", "serials"), ("approval", "approval"), ("run script", "script")):
         print(f"    {label_:14} {made[key]}")

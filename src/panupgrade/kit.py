@@ -60,7 +60,7 @@ def upgrade_argv(args, serials_file, approval_file, journal_file):
     return argv
 
 
-def write(out_dir, stamp, args, plan, approval, who, windows=None, project_dir=None):
+def write(out_dir, stamp, args, plan, approval, who, windows=None, project_dir=None, groups=None):
     """Write the three files. Returns {'serials': Path, 'approval': Path, 'script': Path, 'journal': Path, 'command': str}."""
     windows = (os.name == "nt") if windows is None else windows
     out = Path(out_dir).resolve()
@@ -76,6 +76,11 @@ def write(out_dir, stamp, args, plan, approval, who, windows=None, project_dir=N
     # a stand-alone group member keeps its group ("SERIAL, group"): without it the upgrade plans the firewall as a plain stand-alone one
     lines += [f"{s}{', ' + names[s]['group'] if names[s].get('group') else ''}   # {names[s]['hostname']}  {names[s]['current_version']}  "
               f"{names[s].get('ha_state') or 'standalone'}" for s in approval.serials]
+    # The rest of a stand-alone group the approved firewalls belong to stays in the list: a group with ONE firewall named in it is no group (it would be
+    # planned as a plain stand-alone firewall), and the others are the ones that take the sessions of the member that reboots. They are not approved.
+    mine = {names[s]["group"] for s in approval.serials if names[s].get("group")}
+    lines += [f"{s}, {name}   # not part of this approval: the rest of the group, prepared for the asymmetry window and not upgraded"
+              for s, name in sorted((groups or {}).items()) if name in mine and s not in approval.serials]
     serials_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
     approval_file.write_text(json.dumps(approval.to_dict(), indent=1) + "\n", encoding="utf-8")
 

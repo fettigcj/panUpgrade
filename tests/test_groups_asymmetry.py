@@ -387,6 +387,14 @@ class Running(unittest.TestCase):
         self.assertEqual(result["outcome"]["S1"][0], "failed")
         self.assertEqual(result["lb_unrestored"], [])
 
+    def test_the_kit_list_keeps_the_rest_of_the_group_so_one_approved_member_is_still_a_group_member(self):
+        from panupgrade import kit
+        plan = build_plan(FakeFleet(three()), TARGET, settings.load(None, []), Selection(serials=["S1"], groups=GROUP), rules=TEST_RULES)
+        args = cli.build_parser().parse_args(["upgrade", "--source", "fake:x", "--target", TARGET])
+        made = kit.write(Path(tempfile.mkdtemp()), "20260101-000000", args, plan, approve(plan), "tester", windows=False, groups=GROUP)
+        self.assertEqual(cli._read_groups(str(made["serials"])), GROUP)
+        self.assertIn("not part of this approval", made["serials"].read_text(encoding="utf-8"))
+
     def test_a_firewall_with_uncommitted_changes_is_refused_before_anything_is_changed(self):
         data = three()
         data["devices"][1]["facts"]["pending_changes"] = True

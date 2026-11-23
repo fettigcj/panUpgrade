@@ -83,6 +83,12 @@ class PendingReboot(unittest.TestCase):
         p = plan(data, groups={"A": "g", "B": "g", "C": "g"})
         self.assertEqual(p["order"][0], ["A"])
 
+    def test_a_member_waiting_for_its_reboot_is_not_drained_before_that_reboot_because_a_drain_is_a_commit(self):
+        data = fleet_data(pending("A", "20.2.3", TARGET), device("B", version="20.2.3"))
+        p = plan(data, groups={"A": "g", "B": "g"}, lb_drain_profile="LB")
+        self.assertEqual([a for a in actions(dev(p, "A")) if a in ("drain", "reboot to activate " + TARGET)], ["reboot to activate " + TARGET])
+        self.assertIn("drain", actions(dev(p, "B")))
+
     def test_a_firewall_with_nothing_pending_is_planned_as_before(self):
         d = dev(plan(fleet_data(device("A", version="20.2.3"))), "A")
         self.assertNotIn("activate", d)

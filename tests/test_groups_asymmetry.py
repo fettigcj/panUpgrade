@@ -321,6 +321,72 @@ class Running(unittest.TestCase):
         self.assertIn("S1, edge", text)
         self.assertEqual(cli._read_groups(str(made["serials"])), GROUP)
 
+    def test_a_window_an_earlier_run_could_not_put_back_is_put_back_by_the_next_run_from_the_recorded_values(self):
+        class Stubborn(SimBackend):
+            refuse = True
+
+            def set_tcp_asymmetry(self, serial, reject_non_syn, reject_non_syn_config, asymmetric_path):
+                if self.refuse and serial == "S2" and reject_non_syn:                      # a restore (reject_non_syn back on) the firewall refuses
+                    raise executor.BackendError("S2: please reboot first")
+                super().set_tcp_asymmetry(serial, reject_non_syn, reject_non_syn_config, asymmetric_path)
+        Stubborn.refuse = True
+        sim = Stubborn(three())
+        plan, s = plan_for(three(), GROUP)
+        s.poll_interval_s, s.settle_after_failover_s, s.settle_after_reboot_s = 0, 0, 0
+        from panupgrade.ledger import Ledger
+        ledger = Ledger(Path(self.jpath).with_name("shared-ledger.json"))
+        first = executor.run(plan, approve(plan), sim, Journal.create(self.jpath, plan["hash"]), s, ledger=ledger)
+        self.assertEqual([e["serial"] for e in first["asymmetry_unrestored"]], ["S2"])
+        self.assertEqual(ledger.window("S2")["original"], ORIGINAL)                         # remembered outside the journal
+        self.assertEqual(sim.nodes["S2"].asym, TOLERANT)
+        Stubborn.refuse = False                                                              # the firewall has rebooted; a new run, a new journal
+        second = executor.run(plan, approve(plan), sim, Journal.create(str(self.jpath) + ".again", plan["hash"]), s, ledger=ledger)
+        self.assertEqual(second["asymmetry_unrestored"], [])
+        for serial in ("S1", "S2", "S3"):
+            self.assertEqual(sim.nodes[serial].asym, ORIGINAL)                              # the recorded originals, not the tolerant values it read
+        self.assertEqual(ledger.entries(), {})
+
+    def test_after_a_member_fails_the_rest_of_its_group_does_nothing_more(self):
+        _, sim, _, result = self.go(fail={("S1", "reboot"): "boom"}, max_parallel="1")
+        self.assertEqual(result["outcome"]["S1"][0], "failed")
+        self.assertEqual({result["outcome"][s][0] for s in ("S2", "S3")}, {"held"})
+        self.assertEqual([c for c in sim.calls if c[0] in ("S2", "S3") and c[1] in ("download", "install", "reboot")], [])
+
+    def test_leftovers_are_put_back_on_request_and_a_refusal_leaves_the_entry(self):
+        from panupgrade.ledger import Ledger
+        from panupgrade.windows import restore_leftovers
+        sim = SimBackend(three())
+        sim.nodes["S2"].asym = dict(TOLERANT)
+        sim.nodes["S3"].asym = dict(TOLERANT)
+        ledger = Ledger(Path(self.jpath).with_name("shared-ledger.json"))
+        ledger.set_window("S2", ORIGINAL, "group edge", "old.jsonl")
+        ledger.set_window("S3", ORIGINAL, "group edge", "old.jsonl")
+        journal = Journal.create(self.jpath, "recover")
+        journal.ledger = ledger
+        real = sim.set_tcp_asymmetry
+
+        def picky(serial, **kw):
+            if serial == "S3":
+                raise executor.BackendError("S3: please reboot first")
+            return real(serial, **kw)
+        sim.set_tcp_asymmetry = picky
+        s = settings.load(None, [])
+        found = {serial: error for serial, _what, error in restore_leftovers(ledger.entries(), sim, journal, s)}
+        self.assertEqual(found["S2"], "")
+        self.assertIn("reboot", found["S3"])
+        self.assertEqual(sim.nodes["S2"].asym, ORIGINAL)
+        self.assertEqual(list(ledger.entries()), ["S3"])
+
+    def test_a_drain_the_tool_itself_refused_before_sending_is_not_reported_as_left_drained(self):
+        class Refuses(SimBackend):
+            def set_lb_profile(self, serial, profile, changes):
+                raise PermissionError("refusing a profile copy that is not on the allow-list")
+        plan, s = plan_for(three(), GROUP, lb_drain_profile="LB-Probe", group_tolerate_asymmetry="false")
+        s.poll_interval_s, s.settle_after_failover_s, s.settle_after_reboot_s = 0, 0, 0
+        result = executor.run(plan, approve(plan), Refuses(three()), Journal.create(self.jpath, plan["hash"]), s)
+        self.assertEqual(result["outcome"]["S1"][0], "failed")
+        self.assertEqual(result["lb_unrestored"], [])
+
     def test_a_firewall_with_uncommitted_changes_is_refused_before_anything_is_changed(self):
         data = three()
         data["devices"][1]["facts"]["pending_changes"] = True

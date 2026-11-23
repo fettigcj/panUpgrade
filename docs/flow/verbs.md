@@ -265,6 +265,11 @@ Handler: `_upgrade`
 ```mermaid
 flowchart TD
     n_panupgrade_cli__upgrade["cli._upgrade"]
+    n_panupgrade_cli__recover["cli._recover<br/><i>What an earlier run left changed (the ledger), and with --confirm-rest</i>"]
+    n_panupgrade_ledger_Ledger_entries["ledger.Ledger.entries<br/><i>{serial: {'window': {...}, 'drain': {...}}} of everything not yet put </i>"]
+    n_panupgrade_ledger_describe["ledger.describe<br/><i>Plain-language lines for what is left changed</i>"]
+    n_panupgrade_windows_restore_leftovers["windows.restore_leftovers<br/><i>Put back what an earlier run left changed (the ledger's entries). Retu</i>"]
+    n_panupgrade_cli__recover_list_devices["list_devices<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_cli__upgrade_execute["cli._upgrade_execute<br/><i>Carry out a reviewed upgrade. ``approve(journal_path)`` returns the Ap</i>"]
     n_panupgrade_cli_UpgradeBundle_ready["cli.UpgradeBundle.ready"]
     n_panupgrade_cli_UpgradeBundle_acks["cli.UpgradeBundle.acks"]
@@ -362,6 +367,12 @@ flowchart TD
     n_panupgrade_planner_build_plan_panorama_version["panorama_version<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_planner_build_plan_panorama_clock["panorama_clock<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_worker_dead_run["worker.dead_run<br/><i>If a worker died without finishing (its lock is still there, its proce</i>"]
+    n_panupgrade_cli__leftovers_warning["cli._leftovers_warning<br/><i>Say, before anything is planned or run, what an earlier run left chang</i>"]
+    n_panupgrade_cli__upgrade --> n_panupgrade_cli__recover
+    n_panupgrade_cli__recover --> n_panupgrade_ledger_Ledger_entries
+    n_panupgrade_cli__recover --> n_panupgrade_ledger_describe
+    n_panupgrade_cli__recover --> n_panupgrade_windows_restore_leftovers
+    n_panupgrade_cli__recover -.-> n_panupgrade_cli__recover_list_devices
     n_panupgrade_cli__upgrade --> n_panupgrade_cli__upgrade_execute
     n_panupgrade_cli__upgrade_execute --> n_panupgrade_cli_UpgradeBundle_ready
     n_panupgrade_cli__upgrade_execute --> n_panupgrade_cli_UpgradeBundle_acks
@@ -472,6 +483,9 @@ flowchart TD
     n_panupgrade_planner_build_plan -.-> n_panupgrade_planner_build_plan_panorama_clock
     n_panupgrade_cli__upgrade_review --> n_panupgrade_cli__unfinished_run
     n_panupgrade_cli__upgrade_review --> n_panupgrade_worker_dead_run
+    n_panupgrade_cli__upgrade_review --> n_panupgrade_cli__leftovers_warning
+    n_panupgrade_cli__leftovers_warning --> n_panupgrade_ledger_Ledger_entries
+    n_panupgrade_cli__leftovers_warning --> n_panupgrade_ledger_describe
 ```
 
 ## `panupgrade watch`

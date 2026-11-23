@@ -20,7 +20,7 @@ from pathlib import Path
 
 from . import (approval as approval_mod, fleetreport, console, executor, paths, prepare as prepare_mod, progress, releases as releases_mod, report,
                runlog, settings as settings_mod, worker as worker_mod, xlsxout)
-from . import credstore, profiles, site, trust
+from . import credstore, ledger as ledger_mod, profiles, site, trust
 from .credstore import NeedsSignIn
 from .trust import CertificateProblem
 from .journal import Journal, JournalError
@@ -863,8 +863,56 @@ class UpgradeBundle(RunEvents):
         return [f"{c['scope']}:{c['code']}" for c in self.plan["cautions"]]
 
 
+LEDGER_FILE = "window-ledger.json"
+
+
+def _leftovers_warning(args, style, names=None):
+    """Say, before anything is planned or run, what an earlier run left changed on a firewall and never put back."""
+    try:
+        found = ledger_mod.Ledger(_ws(args, LEDGER_FILE)).entries()
+    except OSError:
+        return
+    if found:
+        print(style.line("warn", "an earlier run left firewalls changed and did not put them back (the next upgrade run that includes them puts them back, "
+                                 "after their reboot if they need one; `panupgrade upgrade --recover` shows them and `--recover --confirm-restore` puts them back now):"))
+        for line in ledger_mod.describe(found, names):
+            print(style.line("warn", line, 2))
+
+
+def _recover(args, style):
+    """What an earlier run left changed (the ledger), and with --confirm-restore, putting it back as it was recorded."""
+    ledger = ledger_mod.Ledger(_ws(args, LEDGER_FILE))
+    entries = ledger.entries()
+    if not entries:
+        print("Nothing is left changed: no earlier run has an unrestored asymmetry window or load-balancer drain.")
+        return 0
+    backend, fleet, label = _backend_and_source(args)
+    names = {r.serial: r.hostname for r in fleet.list_devices()}
+    for line in ledger_mod.describe(entries, names):
+        print(style.line("warn", line))
+    if not args.confirm_restore:
+        print("Nothing was changed. Add --confirm-restore to put them back as recorded; a firewall that must reboot first is left and said so.")
+        return 1
+    settings = _load_settings(args)
+    runs = Path(args.runs_dir) if args.runs_dir else _ws(args, "runs")
+    runs.mkdir(parents=True, exist_ok=True)
+    journal = Journal.create(runs / f"recover-{datetime.now().strftime('%Y%m%d-%H%M%S')}.jsonl", "recover")
+    journal.ledger = ledger
+    from .windows import restore_leftovers
+    failed = 0
+    for serial, what, error in restore_leftovers(entries, backend, journal, settings):
+        if error:
+            failed += 1
+            print(style.line("fail", f"{names.get(serial, serial)} ({serial}): {what} NOT put back: {error}"))
+        else:
+            print(style.line("ok", f"{names.get(serial, serial)} ({serial}): {what} put back"))
+    return 1 if failed else 0
+
+
 def _upgrade(args):
     style = _style(args)
+    if getattr(args, "recover", False):
+        return _guarded(style, lambda: _recover(args, style))
     return _guarded(style, lambda: _upgrade_execute(args, style, _upgrade_review(args, style)))
 
 
@@ -881,6 +929,7 @@ def _upgrade_review(args, style, show=False):
             print(style.line("warn", f"an earlier run ended abruptly (its worker, process {dead['pid']}, is gone): journal {dead['journal']}, started {dead['started']}. "
                                      f"Steps left in doubt: {dead['in_doubt'] or 'none'}. Check those firewalls (a member may be left suspended). "
                                      "This plan was read from the firewalls as they are now."))
+        _leftovers_warning(args, style, {d["serial"]: d["hostname"] for d in plan["devices"]})
         sys.stdout.write(console.render_plan(plan, style))
         if previous is not None:
             print()
@@ -1104,7 +1153,7 @@ def _upgrade_run(args, style, bundle, approval, journal_path, resuming):
                          + (" seeded from live state" if label == "DRY RUN" else "")))
     result = None
     try:
-        result = executor.run(plan, approval, backend, journal, settings, stop=bundle.stop)
+        result = executor.run(plan, approval, backend, journal, settings, stop=bundle.stop, ledger=ledger_mod.Ledger(_ws(args, LEDGER_FILE)))
     except executor.ExecutionRefused:
         _discard_if_empty(journal, resuming)
         raise
@@ -1713,6 +1762,10 @@ def build_parser():
     _run_args(ex)
     ex.add_argument("--approval", help="approval JSON written by `prepare` (or by typing APPROVE); without it you are asked to type APPROVE. "
                                        "A --dry-run asks nothing.")
+    ex.add_argument("--recover", action="store_true",
+                    help="show what an earlier run left changed on a firewall and did not put back (an asymmetry window, a load-balancer drain); "
+                         "with --confirm-restore, put it back as it was recorded")
+    ex.add_argument("--confirm-restore", action="store_true", help="with --recover: actually put it back")
     ex.add_argument("--foreground", action="store_true",
                     help="carry out a real run in this window instead of in a background process of its own. The run then ends with this window "
                          "(a closed terminal, a dropped connection), so use it only when you have a reason")

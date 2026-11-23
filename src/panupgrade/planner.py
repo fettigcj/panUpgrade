@@ -490,10 +490,10 @@ def _steps(dev, settings, devices=None):
             add("drain", "redundancy", f"take {settings.lb_drain_probe_protocol} out of the interface management profile {settings.lb_drain_profile!r} (commit on the "
                                        f"firewall) so the load balancer drains this member, then wait {settings.lb_drain_wait_s}s")
     activate = dev.get("activate")
-    if activate:
-        drain_once()
+    if activate:      # no drain first: a firewall with an image waiting for its reboot refuses every commit, and a drain is a commit
         add(f"reboot to activate {activate['version']}", traffic,
-            f"{activate['version']} is already installed and waiting for a reboot; timeout {settings.reboot_timeout_s}s")
+            f"{activate['version']} is already installed and waiting for a reboot (it cannot be drained first: it refuses commits until it has rebooted); "
+            f"timeout {settings.reboot_timeout_s}s")
         add("verify", note=f"version is {activate['version']}, no jobs running")
     for p in installs:
         add(f"install {p['version']}", note=f"timeout {settings.install_timeout_s}s")

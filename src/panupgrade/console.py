@@ -251,7 +251,8 @@ def unrestored_lines(unrestored, names, style):
     if not unrestored:
         return []
     lines = ["", style.line("fail", f"ALERT: {len(unrestored)} firewall(s) are STILL set to accept asymmetric traffic. The tool changed tcp-reject-non-syn "
-                                    f"and asymmetric-path for the upgrade window and could not put them back. Put them back by hand:")]
+                                    f"and asymmetric-path for the upgrade window and could not put them back. They are remembered: the next upgrade run that includes them puts "
+                                    f"them back (after their reboot if they need one), or run `panupgrade upgrade --recover --confirm-restore`. By hand:")]
     for entry in unrestored:
         original = entry["original"]
         path = original["asymmetric_path"]

@@ -17,6 +17,7 @@ Rules the code enforces, each with a test:
 import re
 import threading
 import time
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from . import progress
@@ -77,7 +78,7 @@ def _band_ok(before, after, band):
     return before > 0 and abs(after - before) / before <= band
 
 
-def run(plan, approval, backend, journal, settings, stop=None):
+def run(plan, approval, backend, journal, settings, stop=None, ledger=None):
     """Carry out the plan. Units (an HA pair, or a standalone firewall) run in parallel, up to ``settings.max_parallel``;
     the members of a pair always run in series, passive first. Ctrl-C stops new steps and lets the ones in flight finish."""
     problems = approval.problems(plan, settings.approval_max_age_hours)
@@ -88,6 +89,8 @@ def run(plan, approval, backend, journal, settings, stop=None):
     from .windows import Gate, Windows, lb_unrestored
     devices = {d["serial"]: d for d in plan["devices"]}
     stop = stop or threading.Event()
+    from .ledger import Ledger
+    journal.ledger = ledger if ledger is not None else Ledger(Path(str(journal.path)).with_name("window-ledger.json"))     # what is changed and not yet put back
     gate = Gate(settings.group_reboot_tolerance)
     windows = Windows(plan, approval.serials, backend, journal, say=progress.say, settings=settings)
     lock = threading.Lock()
@@ -189,6 +192,8 @@ def _run_steps(dev, backend, journal, settings, stop, gate, group, held, windows
     for index, st in enumerate(dev["steps"]):
         key = _key(index, st["action"])
         last = journal.last_state(serial, key)
+        if last != "ok" and group and gate is not None and not held and gate.closed_by(group):     # a member failed while out of service: the rest do nothing more
+            return "held", f"{gate.closed_by(group)} failed while out of service, so the rest of group {group!r} was not started"
         if last == "ok":
             if windows is not None and st["action"].startswith("reboot to activate "):
                 why = windows.after_activation(serial)               # idempotent: also covers a resumed run

@@ -24,6 +24,10 @@ LB_DRAIN, LB_RESTORE = "asymmetry lb drain", "asymmetry lb restore"      # the l
 TOLERANT = {"reject_non_syn": False, "reject_non_syn_config": "no", "asymmetric_path": "bypass"}
 
 
+def _ledger(journal):
+    return getattr(journal, "ledger", None)
+
+
 def is_window_step(step):
     return step.startswith("asymmetry")
 
@@ -53,6 +57,11 @@ class Gate:
         with self._cond:
             self._active[group] -= 1
             self._cond.notify_all()
+
+    def closed_by(self, group):
+        """The member whose failure closed this group, or ""."""
+        with self._cond:
+            return self._closed_by.get(group, "")
 
     def close(self, group, member):
         with self._cond:
@@ -183,6 +192,8 @@ class Windows:
         clear_candidate(self.backend, self.journal, serial, self.settings, "the commit that sets asymmetric-path")
         original = self.backend.tcp_asymmetry(serial)
         self.journal.record(serial, OPEN, "started", {"original": original, "setting": TOLERANT, "window": window["name"]})
+        if _ledger(self.journal):
+            _ledger(self.journal).set_window(serial, original, window["name"], self.journal.path)      # remembered outside this run, before anything changes
         window["opened"].append((serial, original))                 # from here on a restore is attempted, even if the change below fails half way
         try:
             self.backend.set_tcp_asymmetry(serial, **TOLERANT)
@@ -191,6 +202,8 @@ class Windows:
                 raise BackendError(f"{serial}: after the change the firewall reads {now}, not {TOLERANT}")
         except CommitRefused as exc:                                # nothing was committed and the edits were taken back: there is nothing to restore
             window["opened"].remove((serial, original))
+            if _ledger(self.journal):
+                _ledger(self.journal).clear_window(serial)
             self.journal.record(serial, OPEN, "failed", {"original": original, "error": str(exc), "changed": False})
             raise
         except BackendError as exc:
@@ -215,6 +228,8 @@ class Windows:
                 self.say(f"ALERT {serial}: could not put the TCP settings back to {original}: {exc}. Fix it by hand.")
                 continue
             self.journal.record(serial, RESTORE, "ok", {"original": original, "now": now})
+            if _ledger(self.journal):
+                _ledger(self.journal).clear_window(serial)
 
     def _still_open(self, serial):
         """The recorded original values when the last asymmetry record of this firewall in the journal is an open that was never restored."""
@@ -224,6 +239,11 @@ class Windows:
                 last = event
         if last is not None and last["step"] == OPEN:
             return last["detail"]["original"]
+        if last is None and _ledger(self.journal):                    # an EARLIER run left it open: its values, not what the firewall reads now
+            held = _ledger(self.journal).window(serial)
+            if held:
+                self.say(f"{serial}: the asymmetry window was left open by an earlier run ({held.get('window')}, {held.get('since')}); keeping the values recorded then")
+                return held["original"]
         return None
 
 
@@ -264,6 +284,33 @@ def clear_candidate(backend, journal, serial, settings, why):
     journal.record(serial, REVERT, "ok", {"why": why, "message": "the uncommitted candidate configuration was discarded (reverted to running)"})
 
 
+def restore_leftovers(entries, backend, journal, settings, say=print):
+    """Put back what an earlier run left changed (the ledger's entries). Returns [(serial, what, "" or why it could not be)]. A firewall that has to
+    reboot before it takes a commit is left as it is and said so: the next upgrade run restores it after its reboot."""
+    found = []
+    for serial, kinds in sorted(entries.items()):
+        if "window" in kinds:
+            original = kinds["window"]["original"]
+            journal.record(serial, RESTORE, "started", {"original": original, "leftover": True})
+            try:
+                backend.set_tcp_asymmetry(serial, **original)
+                now = backend.tcp_asymmetry(serial)
+                if now != original:
+                    raise BackendError(f"{serial}: after the restore the firewall reads {now}, not {original}")
+            except BackendError as exc:
+                journal.record(serial, RESTORE, "failed", {"original": original, "error": str(exc), "leftover": True})
+                found.append((serial, "asymmetry window", str(exc)))
+            else:
+                journal.record(serial, RESTORE, "ok", {"original": original, "now": now, "leftover": True})
+                if _ledger(journal):
+                    _ledger(journal).clear_window(serial)
+                found.append((serial, "asymmetry window", ""))
+        if "drain" in kinds:
+            error = restore_lb(serial, backend, journal, settings)
+            found.append((serial, "load balancer drain", error))
+    return found
+
+
 # ---------------------------------------------------------------- the load-balancer drain of one group member
 def _protocols(settings):
     return [p for p in settings.lb_drain_probe_protocol.split("+") if p]
@@ -280,8 +327,16 @@ def drain(serial, backend, journal, settings):
     original, origin = found["values"], found.get("origin") or "local"
     change = {p: "no" for p in protocols if original.get(p) == "yes"}
     journal.record(serial, LB_DRAIN, "started", {"profile": profile, "original": original, "changed": sorted(change), "origin": origin})
+    if _ledger(journal):
+        _ledger(journal).set_drain(serial, {"profile": profile, "original": original, "changed": sorted(change), "origin": origin}, journal.path)
     if change:
-        backend.set_lb_profile(serial, profile, change)
+        try:
+            backend.set_lb_profile(serial, profile, change)
+        except PermissionError as exc:                      # refused by the tool's own allow-list before anything was sent: nothing was changed
+            journal.record(serial, LB_DRAIN, "failed", {"error": str(exc), "nothing_sent": True})
+            if _ledger(journal):
+                _ledger(journal).clear_drain(serial)
+            raise
         now = backend.lb_profile(serial, profile, protocols)["values"]
         if any(now.get(p) != "no" for p in change):
             raise BackendError(f"{serial}: after the change the profile {profile!r} reads {now}, not {sorted(change)} off")
@@ -299,6 +354,10 @@ def _drained(journal, serial):
             open_ = event["detail"]
         elif event["step"] == LB_RESTORE and event["state"] == "ok":
             open_ = None
+        elif event["step"] == LB_DRAIN and event["state"] == "failed" and event["detail"].get("nothing_sent"):
+            open_ = None
+    if open_ is None and _ledger(journal) and not any(e["step"] in (LB_DRAIN, LB_RESTORE) for e in journal.steps_of(serial)):
+        open_ = _ledger(journal).drain(serial)                    # an earlier run's drain, never put back
     return open_
 
 
@@ -326,6 +385,8 @@ def restore_lb(serial, backend, journal, settings):
         journal.record(serial, LB_RESTORE, "failed", {"profile": profile, "original": original, "changed": changed, "error": str(exc)})
         return str(exc)
     journal.record(serial, LB_RESTORE, "ok", {"profile": profile, "original": original, "changed": changed})
+    if _ledger(journal):
+        _ledger(journal).clear_drain(serial)
     return ""
 
 

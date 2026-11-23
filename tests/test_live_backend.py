@@ -677,13 +677,13 @@ class PluginInstall(unittest.TestCase):
     def test_it_refreshes_the_list_downloads_installs_and_reads_the_installed_list_again(self):
         api = Scripted({PLUGIN_CHECK: [ok("List of plugin packages has been updated")], PLUGIN_PKGS: [PKG(("openconfig-2.1.0", "no"))],
                         PLUGIN_DL: [ok("<job>7</job>")], JOBQ(7): [JOB("FIN")], PLUGIN_INS: [ok("<job>8</job>")], JOBQ(8): [JOB("FIN")],
-                        PLUGIN_LIST: [INSTALLED(("openconfig", "2.1.0"))]})
+                        PLUGIN_LIST: [INSTALLED(("dlp", "3.0.10")), INSTALLED(("openconfig", "2.1.0"))]})
         self.assertEqual(backend(api).install_plugin("S1", "openconfig", "2.1.0"), {"installed": "openconfig-2.1.0"})
         self.assertEqual([k[0] + ":" + k[1] for k in api.log if k[0] == "write"], ["write:" + PLUGIN_DL[1], "write:" + PLUGIN_INS[1]])
 
     def test_a_package_the_firewall_already_holds_is_not_downloaded_again(self):
         api = Scripted({PLUGIN_CHECK: [ok()], PLUGIN_PKGS: [PKG(("openconfig-2.1.0", "yes"))], PLUGIN_INS: [ok("<job>8</job>")], JOBQ(8): [JOB("FIN")],
-                        PLUGIN_LIST: [INSTALLED(("openconfig", "2.1.0"))]})
+                        PLUGIN_LIST: [INSTALLED(("dlp", "3.0.10")), INSTALLED(("openconfig", "2.1.0"))]})
         backend(api).install_plugin("S1", "openconfig", "2.1.0")
         self.assertNotIn(PLUGIN_DL, api.log)
 
@@ -694,7 +694,7 @@ class PluginInstall(unittest.TestCase):
         self.assertEqual([k for k in api.log if k[0] == "write"], [])
 
     def test_a_refused_install_job_carries_the_firewalls_own_words(self):
-        api = Scripted({PLUGIN_CHECK: [ok()], PLUGIN_PKGS: [PKG(("openconfig-2.1.0", "yes"))], PLUGIN_INS: [ok("<job>8</job>")],
+        api = Scripted({PLUGIN_CHECK: [ok()], PLUGIN_PKGS: [PKG(("openconfig-2.1.0", "yes"))], PLUGIN_INS: [ok("<job>8</job>")], PLUGIN_LIST: [INSTALLED(("dlp", "3.0.10"))],
                         JOBQ(8): [JOB("FIN", "FAIL", "<line>Installation of openconfig-2.1.0 failed: Minimum software version 12.1.0 required</line>")]})
         with self.assertRaisesRegex(BackendError, "Minimum software version 12.1.0 required"):
             backend(api).install_plugin("S1", "openconfig", "2.1.0")
@@ -702,8 +702,18 @@ class PluginInstall(unittest.TestCase):
     def test_an_install_that_does_not_show_in_the_installed_list_is_an_error(self):
         api = Scripted({PLUGIN_CHECK: [ok()], PLUGIN_PKGS: [PKG(("openconfig-2.1.0", "yes"))], PLUGIN_INS: [ok("<job>8</job>")], JOBQ(8): [JOB("FIN")],
                         PLUGIN_LIST: [INSTALLED(("dlp", "3.0.10"))]})
-        with self.assertRaisesRegex(BackendError, "not installed, not 2.1.0"):
+        with self.assertRaisesRegex(BackendError, "neither the installed list nor the package list shows openconfig-2.1.0"):
             backend(api).install_plugin("S1", "openconfig", "2.1.0")
+
+    def test_a_plugin_that_is_already_there_is_not_installed_again(self):
+        api = Scripted({PLUGIN_CHECK: [ok()], PLUGIN_PKGS: [PKG(("openconfig-2.1.0", "yes"))], PLUGIN_LIST: [INSTALLED(("openconfig", "2.1.0"))]})
+        self.assertEqual(backend(api).install_plugin("S1", "openconfig", "2.1.0"), {"already_installed": "openconfig-2.1.0"})
+        self.assertEqual([k for k in api.log if k[0] == "write"], [])
+
+    def test_either_list_counts_the_installed_list_can_miss_a_plugin_the_package_list_flags(self):
+        flagged = ok("<plugins><entry><name>openconfig</name><version>2.0.0</version><pkg-file>openconfig-2.0.0</pkg-file><downloaded>yes</downloaded><installed>yes</installed></entry></plugins>")
+        api = Scripted({PLUGIN_CHECK: [ok()], PLUGIN_PKGS: [flagged], PLUGIN_LIST: [INSTALLED(("dlp", "3.0.10"))]})
+        self.assertEqual(backend(api).install_plugin("S1", "openconfig", "2.0.0"), {"already_installed": "openconfig-2.0.0"})
 
     def test_only_a_well_formed_plugin_package_may_be_downloaded_or_installed(self):
         w = WriteApi("192.0.2.1", key="not-a-key")

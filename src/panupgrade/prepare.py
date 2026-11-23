@@ -208,17 +208,24 @@ def build(source, settings, selection, target=None, rules=None):
                 families = ["content"]            # same versions, but PAN-OS itself cannot confirm the pair's content is compatible
                 reason = "PAN-OS reports the HA content compatibility as " + ", ".join(f"{k}: {compat[k]}" for k in bad)
             need_content = bool(families) and settings.sync_content == "prepare"
-            # HA members whose plugins differ cannot sync (PAN-OS: "Version mismatch with Peer"). plugin_mismatch = fix levels them first: the member that lacks a
-            # plugin gets the version its peer runs (or ships built in), nothing is removed.
-            plugin_fix, plugin_names = xmlops.plugin_fixes(facts, peer_facts)
+            # HA members whose plugins differ cannot sync (PAN-OS: "Version mismatch with Peer"). plugin_mismatch = rebalance / fullupgrade levels them first; alert only says
+            # what rebalance would do. Nothing is removed.
+            plugin_mode = settings.plugin_mismatch
+            plugin_fix, plugin_names = xmlops.plugin_fixes(facts, peer_facts, "fullupgrade" if plugin_mode == "fullupgrade" else "rebalance")
             if cfg_off and plugin_names:
-                if plugin_fix and len(plugin_fix) == len(plugin_names) and settings.plugin_mismatch == "fix" and settings.sync_to_peer != "Disable":
-                    own = {"a": (ref.serial, ref.hostname), "b": (peer, refs[peer].hostname if peer in refs else peer)}
-                    plugin_fix = [{"serial": own[d["on"]][0], "hostname": own[d["on"]][1], "name": d["name"], "version": d["version"], "had": d["had"]} for d in plugin_fix]
+                own = {"a": (ref.serial, ref.hostname), "b": (peer, refs[peer].hostname if peer in refs else peer)}
+                shown = [{"serial": own[d["on"]][0], "hostname": own[d["on"]][1], "name": d["name"], "version": d["version"], "had": d["had"], "active": d["on"] == "a"} for d in plugin_fix]
+                if shown and plugin_mode != "alert" and settings.sync_to_peer != "Disable":
+                    plugin_fix = shown
                 else:
+                    if plugin_mode == "alert":
+                        would = ", ".join(f"{d['name']}-{d['version']} on {d['hostname']}" + (" (the ACTIVE member)" if d["active"] else "") for d in shown)
+                        why = "plugin_mismatch is 'alert'" + (f"; rebalance would install {would}" if shown else " and the tool could not tell which version to install")
+                    elif settings.sync_to_peer == "Disable":
+                        why = "sync_to_peer is Disable"
+                    else:
+                        why = "the tool could not tell which version to install"
                     plugin_fix = []
-                    why = ("plugin_mismatch is 'leave'" if settings.plugin_mismatch == "leave" else
-                           "sync_to_peer is Disable" if settings.sync_to_peer == "Disable" else "the tool could not tell which version to install")
                     notes.append({"serial": ref.serial, "hostname": ref.hostname,
                                   "why": f"config is not synchronized with the passive member and cannot be: PAN-OS reports the plugin(s) {', '.join(plugin_names)} as different between the "
                                          f"members (it refuses the sync), and {why}, so prepare leaves them and does not try the sync"})
@@ -314,8 +321,9 @@ def describe(plan):
     lines = []
     for u in plan["units"]:
         for t in u.get("plugins", []):
-            lines.append(f"{t['hostname']}: install the plugin {t['name']}-{t['version']} through its own update server (has {t['had'] or 'none'}; its HA peer runs it), "
-                         f"because PAN-OS refuses a configuration sync between members whose plugins differ. Nothing is removed")
+            lines.append(f"{t['hostname']}{' (the ACTIVE member: this changes a firewall that is carrying traffic)' if t.get('active') else ''}: install the plugin {t['name']}-{t['version']} "
+                         f"through its own update server (has {t['had'] or 'none'}), because PAN-OS refuses a configuration sync between members whose plugins differ. Afterwards "
+                         f"both members' reported versions are compared and the lower one is raised to the higher. Nothing is removed")
         if u["content"]:
             lines.append(f"{u['active_name']} + {u['passive_name']}: 'check now' on both members, then (only if PAN-OS still cannot confirm) install the latest {' and '.join(u['content'])} update on both "
                          f"({u.get('content_reason') or 'versions differ'}{': ' + diff_text(u['content_diffs']) if u['content_diffs'] else ''})")
@@ -432,26 +440,33 @@ def run(plan, approval, backend, journal, settings=None, stop=None):
                                    "); the config sync is NOT attempted until it is")
             return {"app": a.get("app"), "threat": a.get("threat"), "av": a.get("av"), "wildfire": a.get("wildfire")}
 
-        def level_plugin(task):
-            """Install the plugin the plan names; then read what the HA state says the ACTIVE member runs (the passive's peer line) and, when that is another
-            version, install that one: a sync needs the same version on both members, and the active's version is only visible once the passive has the plugin."""
+        def level_plugin(task, last=True):
+            """Install the plugin version the plan names on the member it names. After the LAST install for that plugin, compare what the two members report (each one's
+            HA line shows, as its "peer", the version the other runs) and, while they differ, raise the lower one to the higher: a sync needs the same version on both,
+            and a version nobody could read before (the active's, when only the passive lacked the plugin) only shows once both have a line."""
+            detail = backend.install_plugin(task["serial"], task["name"], task["version"]) or {}
             line = next((k for k, v in xmlops.LINE_FAMILY.items() if v == task["name"]), None)
-            version, detail = task["version"], {}
+            if line is None or not last:
+                return detail
             for _round in range(3):
-                detail = backend.install_plugin(task["serial"], task["name"], version) or {}
-                if line is None:
-                    return detail
-                seen = None
-                deadline = time.monotonic() + (settings.content_settle_s if settings else 0)
-                while True:                                         # the HA state takes a little while to show the new plugin
-                    seen = xmlops._plugin_version((backend.ha_plugin_versions(task["serial"]).get(line) or {}).get("peer"))
-                    if seen or time.monotonic() >= deadline:
+                va = vp = None
+                deadline = time.monotonic() + (settings.content_settle_s if settings and getattr(backend, "real_time", True) else 0)
+                while True:                                         # the HA states take a little while to show a new plugin
+                    seen_a = backend.ha_plugin_versions(active).get(line) or {}
+                    seen_p = backend.ha_plugin_versions(passive).get(line) or {}
+                    va, vp = xmlops._plugin_version(seen_p.get("peer")), xmlops._plugin_version(seen_a.get("peer"))     # the active's version, the passive's version
+                    if (va and vp and va == vp) or time.monotonic() >= deadline:
                         break
                     time.sleep(settings.poll_interval_s if settings else 1)
-                if seen is None or seen == version:
+                if va and vp and va == vp:
                     return detail
-                version = seen                                      # the active runs another version: put that one on the passive
-            raise BackendError(f"{task['hostname']}: the HA state still reports a different {task['name']} version on its peer after {version} was installed")
+                if not (va and vp):
+                    raise BackendError(f"{task['hostname']}: after the install the two members' HA states do not both show a {task['name']} version (active {va or 'not shown'}, "
+                                       f"passive {vp or 'not shown'}); look at `show high-availability all` on both and level them by hand")
+                lower, target = (passive, va) if xmlops._plugin_key(vp) < xmlops._plugin_key(va) else (active, vp)
+                detail = backend.install_plugin(lower, task["name"], target) or {}
+            raise BackendError(f"{task['hostname']}: the two members still report different {task['name']} versions after three rounds (active {va}, passive {vp}); "
+                               f"look at `show high-availability all` on both and level them by hand")
 
         def sync():
             if backend.state(active)["ha_state"] != "active":
@@ -467,10 +482,11 @@ def run(plan, approval, backend, journal, settings=None, stop=None):
             return
         ok = True
         settled = False
-        for task in unit.get("plugins", []):                # 0. level the plugins first: a sync between members whose plugins differ is refused
+        last_of = {t["name"]: i for i, t in enumerate(unit.get("plugins", []))}
+        for i, task in enumerate(unit.get("plugins", [])):      # 0. level the plugins first: a sync between members whose plugins differ is refused
             if ok:
                 ok = attempt(active, f"install plugin {task['name']}-{task['version']}", f"{task['hostname']}: plugin {task['name']}-{task['version']} installed",
-                             lambda t=task: level_plugin(t), record_serial=task["serial"])
+                             lambda t=task, last=(i == last_of[task["name"]]): level_plugin(t, last), record_serial=task["serial"])
         if unit["content"]:
             # 1a. "check now" on both members first: on a pair that has never asked the update server, this alone can make PAN-OS
             #     recognise the content it already has. Read-only on the firewalls.

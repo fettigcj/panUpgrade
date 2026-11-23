@@ -160,7 +160,7 @@ Ahead of the window, `prepare` can:
 
 - bring dynamic content (apps and threats, antivirus, WildFire) level between HA members. If it cannot, the config sync below is not attempted.
 - force an active-to-passive config sync on pairs that read "not synchronized" (needs `sync_to_peer = "prepare"`; the passive is backed up first).
-- level the installed plugins of HA members first, where they differ (`plugin_mismatch = fix`, the default): PAN-OS refuses a config sync between members whose plugins differ ("Version mismatch with Peer"), so the passive member that lacks a plugin gets the version the active member runs (found from PAN-OS's HA plugin lines, installing a first try and reading what the passive's peer line then reports), through its own update server. Nothing is removed, and the active member is never touched. `plugin_mismatch = leave` touches no plugin, and the pair is then handled like any pair that cannot be synced (`ha_config_unsynced`). The plan holds such a pair until `prepare` has levelled it.
+- level the plugins of HA members first, where they differ and the setting allows it (`plugin_mismatch`): PAN-OS refuses a config sync between members whose plugins differ ("Version mismatch with Peer"). `alert` (the default) touches nothing; the plan and this preparation say what `rebalance` would install. `rebalance` brings the LOWER-versioned member up to the higher version already in use (a member that has none gets the other's version), so no third version is introduced, then compares what both members report and raises the lower one again if they still differ. `fullupgrade` puts the highest built-in version on both. Either may change the ACTIVE member, which carries traffic: the approval prompt says so on that line. Plugins are installed through each firewall's own update server; nothing is ever removed.
 - with `--target`, pre-download the image, and any base image the path needs, onto each selected firewall.
 
 It never installs, reboots or fails anything over. Whatever it cannot fix stays in the plan, which it re-runs at the end.
@@ -272,3 +272,7 @@ Without a terminal, or with `--set`, `settings` prints the current values instea
 ## What to confirm on your first live run
 
 These were observed in one lab only, so watch them on yours: the reply shape of the download and install jobs, how a rebooting firewall looks through Panorama, and whether `sync-to-remote` returns before or after the sync finishes (the tool polls rather than assuming). Anything it cannot read stops the step and puts the device's own words in the journal.
+
+## Cleaning up stragglers: start strict, loosen on purpose
+
+Run with the defaults first. They are the strictest: a pair the tool cannot make safe is held and the plan says why, and it says what a looser setting would do. Read that, decide, and only then loosen the one setting that matches (for example `plugin_mismatch = rebalance`, or `ha_config_unsynced = warn`) for the next run, which cleans up what the first run found. Then run again: a run that finds nothing left to clean up is the proof. Settings are not meant to stay loosened.

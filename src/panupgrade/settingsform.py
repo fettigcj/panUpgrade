@@ -138,13 +138,14 @@ INFO = {
                            "Only used when sync_to_peer is Disable; with Both or UpgradeOnly the tool syncs the pair itself.",
                            {"block": "refuse to plan such a pair at all, so nobody runs into it unread",
                             "warn": "plan it anyway, flag that moment on the active member, and accept it when the batch is prepared"}),
-    "plugin_mismatch": ("HA members whose installed plugins differ cannot synchronize their configuration: PAN-OS refuses it (\"Version mismatch with Peer\"). "
-                        "A plugin installed on one member only is the usual cause.\n\n"
-                        "Nothing is ever removed or taken down; the tool only adds. Where both members have a plugin at different versions, the lower one is brought up to the higher.",
-                        {"fix": "the default. `prepare` installs the missing plugin (the version the peer runs) on the member that lacks it, through that firewall's own "
-                                "update server, then syncs. A plan that still finds a difference says to run prepare",
-                         "leave": "touch no plugin. The pair cannot be synced, so it is planned like any pair that cannot be (ha_config_unsynced: refused, or "
-                                  "flagged at the fail-over)"}),
+    "plugin_mismatch": ("HA members whose plugins differ cannot synchronize their configuration: PAN-OS refuses it (\"Version mismatch with Peer\"). "
+                        "A plugin on one member only, or two versions of it, is the usual cause.\n\n"
+                        "Nothing is ever removed or taken down. Start with alert; once you have read what the plan says it would do, loosen it for the clean-up run.",
+                        {"alert": "the default. Touch no plugin. The plan names what rebalance would install, and the pair cannot be synced, so it is judged like any pair "
+                                  "that cannot be (ha_config_unsynced: refused, or flagged at the fail-over)",
+                         "rebalance": "`prepare` brings the LOWER-versioned member up to the higher version already in use (a member with none gets the other's), through that "
+                                      "firewall's own update server, then syncs. No third version is introduced. May touch the ACTIVE member; the plan says so",
+                         "fullupgrade": "`prepare` puts the highest built-in version (or the highest in use, if higher) on BOTH members. May touch the ACTIVE member; the plan says so"}),
     "blocked_peer": ("What to do with an HA member that could be upgraded when the other member of its pair is blocked by a check (or "
                      "could not be read). The active member's upgrade hands the traffic to its peer for the whole reboot, and either "
                      "upgrade leaves the pair on two releases. A peer that is only not selected, or already on the target, is not affected.",

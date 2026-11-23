@@ -59,11 +59,12 @@ class Settings:
     # when the batch is prepared; the passive's own upgrade is unaffected. Only used when sync_to_peer = Disable: with Both or
     # UpgradeOnly the tool syncs the pair itself instead.
     ha_config_unsynced: str = "block"
-    # HA members whose INSTALLED plugins differ: PAN-OS refuses the config sync between them ("Version mismatch with Peer for OC"). fix (the default):
-    # `prepare` installs on the member that lacks it the plugin the other member runs (a plugin only one member has; at different versions the higher
-    # one), through the firewall's own update server, then syncs. Nothing is ever removed or taken down. leave: plugins are not touched, the pair
-    # cannot be synced, and what happens to it is decided as for any pair that cannot be synced (ha_config_unsynced).
-    plugin_mismatch: str = "fix"
+    # HA members whose plugins differ: PAN-OS refuses the config sync between them ("Version mismatch with Peer for OC"). alert (the default, the strictest):
+    # no plugin is touched; the plan says what rebalance would install, and the pair is judged like any pair that cannot be synced (ha_config_unsynced).
+    # rebalance: `prepare` brings the LOWER-versioned member up to the higher version already in use (a member that has none gets the other's version), through
+    # the firewall's own update server, then syncs; no third version is introduced. fullupgrade: `prepare` puts the highest built-in version on BOTH members.
+    # rebalance and fullupgrade may touch the ACTIVE member; the plan and the approval prompt say so. Nothing is ever removed or taken down.
+    plugin_mismatch: str = "alert"
     # A pair whose HA peer is BLOCKED by a check (or could not be read at all). The active member's upgrade hands traffic to the peer
     # for the whole reboot, and either member's upgrade leaves the pair on two releases, so the tool does not go ahead with half of a
     # pair whose other half it has just found a problem with. block (the default): the member that could be upgraded is held too, with
@@ -172,7 +173,7 @@ _CHOICES = {
     "sync_content": ("never", "prepare"),
     "unattended": ("continue", "pause"),
     "ha_config_unsynced": ("block", "warn"),
-    "plugin_mismatch": ("fix", "leave"),
+    "plugin_mismatch": ("alert", "rebalance", "fullupgrade"),
     "blocked_peer": ("block", "warn"),
     "lb_drain_probe_protocol": PROBE_CHOICES,
 }

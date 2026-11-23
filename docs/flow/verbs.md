@@ -121,6 +121,8 @@ flowchart TD
     n_panupgrade_planner__apply_plugins["planner._apply_plugins<br/><i>HA members whose plugins differ cannot sync their configuration: PAN-O</i>"]
     n_panupgrade_xmlops_plugin_fixes["xmlops.plugin_fixes<br/><i>What would level the plugins of an HA pair: ``(fixes, names)``. ``fixe</i>"]
     n_panupgrade_xmlops__plugin_version["xmlops._plugin_version"]
+    n_panupgrade_xmlops__donor_version["xmlops._donor_version<br/><i>The version a member is known to hold: its installed list, else the hi</i>"]
+    n_panupgrade_xmlops__plugin_key["xmlops._plugin_key"]
     n_panupgrade_xmlops_plugin_differences["xmlops.plugin_differences<br/><i>What would level the plugins of two HA members ``a`` and ``b`` (dicts </i>"]
     n_panupgrade_planner__apply_pair_rules["planner._apply_pair_rules"]
     n_panupgrade_planner__peer_problem["planner._peer_problem<br/><i>Why an HA peer that is not in this run is a problem (words that fit 'i</i>"]
@@ -225,6 +227,8 @@ flowchart TD
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_plugins
     n_panupgrade_planner__apply_plugins --> n_panupgrade_xmlops_plugin_fixes
     n_panupgrade_xmlops_plugin_fixes --> n_panupgrade_xmlops__plugin_version
+    n_panupgrade_xmlops_plugin_fixes --> n_panupgrade_xmlops__donor_version
+    n_panupgrade_xmlops_plugin_fixes --> n_panupgrade_xmlops__plugin_key
     n_panupgrade_xmlops_plugin_fixes --> n_panupgrade_xmlops_plugin_differences
     n_panupgrade_planner__apply_plugins --> n_panupgrade_planner__swap
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_pair_rules
@@ -577,6 +581,7 @@ flowchart TD
     n_panupgrade_prepare_content_diffs["prepare.content_diffs<br/><i>{key: (a_value, b_value)} for each content type whose installed versio</i>"]
     n_panupgrade_prepare__norm["prepare._norm"]
     n_panupgrade_xmlops__plugin_version["xmlops._plugin_version"]
+    n_panupgrade_xmlops__plugin_key["xmlops._plugin_key"]
     n_panupgrade_prepare__highest_first["prepare._highest_first<br/><i>Deletions with the higher releases first, so a base image goes only af</i>"]
     n_panupgrade_versions_Version_parse["versions.Version.parse"]
     n_panupgrade_prepare__fold["prepare._fold"]
@@ -635,8 +640,8 @@ flowchart TD
     n_panupgrade_paths_keep_images["paths.keep_images<br/><i>The PAN-OS images a firewall must keep for this upgrade, as version st</i>"]
     n_panupgrade_prepare_content_state["prepare.content_state<br/><i>What each pair has LOADED, in words. This is what `show system info` r</i>"]
     n_panupgrade_xmlops_plugin_fixes["xmlops.plugin_fixes<br/><i>What would level the plugins of an HA pair: ``(fixes, names)``. ``fixe</i>"]
+    n_panupgrade_xmlops__donor_version["xmlops._donor_version<br/><i>The version a member is known to hold: its installed list, else the hi</i>"]
     n_panupgrade_xmlops_plugin_differences["xmlops.plugin_differences<br/><i>What would level the plugins of two HA members ``a`` and ``b`` (dicts </i>"]
-    n_panupgrade_xmlops__plugin_key["xmlops._plugin_key"]
     n_panupgrade_prepare_build_list_devices["list_devices<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_prepare_build_facts["facts<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_cli__prepare --> n_panupgrade_cli__prepare_execute
@@ -654,6 +659,7 @@ flowchart TD
     n_panupgrade_prepare_content_diffs --> n_panupgrade_prepare__norm
     n_panupgrade_prepare_run --> n_panupgrade_prepare_diff_text
     n_panupgrade_prepare_run --> n_panupgrade_xmlops__plugin_version
+    n_panupgrade_prepare_run --> n_panupgrade_xmlops__plugin_key
     n_panupgrade_prepare_run --> n_panupgrade_prepare__highest_first
     n_panupgrade_prepare__highest_first --> n_panupgrade_versions_Version_parse
     n_panupgrade_prepare_run --> n_panupgrade_prepare__fold
@@ -727,6 +733,8 @@ flowchart TD
     n_panupgrade_prepare_build --> n_panupgrade_prepare__norm
     n_panupgrade_prepare_build --> n_panupgrade_xmlops_plugin_fixes
     n_panupgrade_xmlops_plugin_fixes --> n_panupgrade_xmlops__plugin_version
+    n_panupgrade_xmlops_plugin_fixes --> n_panupgrade_xmlops__donor_version
+    n_panupgrade_xmlops_plugin_fixes --> n_panupgrade_xmlops__plugin_key
     n_panupgrade_xmlops_plugin_fixes --> n_panupgrade_xmlops_plugin_differences
     n_panupgrade_xmlops_plugin_differences --> n_panupgrade_xmlops__plugin_key
     n_panupgrade_prepare_build -.-> n_panupgrade_prepare_build_list_devices

@@ -255,6 +255,23 @@ class LiveBackend(Backend):
             raise BackendError(f"{serial}: {version} is not offered by the update server (it may not exist, or support is missing)")
         job = self._job_id(self._send(_version_xml("download", version), serial))
         self._wait_job(serial, job, self.settings.download_timeout_s, f"download {version}", self.settings.job_stall_s)
+        self._wait_loaded(serial, version)
+
+    def _wait_loaded(self, serial, version):
+        """The download job ends when the file is on the firewall; the firewall then loads it into its software manager ("Preloading into software
+        manager"), and until that is done the image is not usable and a later image that is built on it is refused ("the required '12.1.2' base image
+        must be loaded before this image can be loaded"). So the image counts as downloaded only when the software list says so."""
+        deadline = self._clock() + self.settings.busy_wait_s
+        while True:
+            try:
+                info = self._again(serial, lambda: self.read.op_xml(SOFTWARE_INFO, target=serial))
+            except SourceError as exc:
+                raise BackendError(f"{serial}: lost contact while waiting for {version} to load into the software manager: {exc}") from None
+            if any(e.findtext("version") == version and e.findtext("downloaded") == "yes" for e in info.iter("entry")):
+                return
+            if self._clock() >= deadline:
+                raise BackendError(f"{serial}: {version} was downloaded but is still not loaded into the software manager after {self.settings.busy_wait_s}s")
+            self._sleep(self.settings.poll_interval_s)
 
     def delete_image(self, serial, version):
         """Remove one downloaded image. Refused for the image that is running or flagged current; checked afterwards, never assumed."""

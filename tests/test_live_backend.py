@@ -88,10 +88,20 @@ class Downloads(unittest.TestCase):
         self.assertNotIn("write", [k[0] for k in api.log])
 
     def test_download_waits_for_the_job_to_finish(self):
-        api = Scripted({CHECK: [ok()], INFO: [INFO_ENTRIES(("10.2.2", "no"))], DL: [ok("<job>12</job>")],
+        api = Scripted({CHECK: [ok()], INFO: [INFO_ENTRIES(("10.2.2", "no")), INFO_ENTRIES(("10.2.2", "yes"))], DL: [ok("<job>12</job>")],
                         JOBQ(12): [JOB("ACT"), JOB("ACT"), JOB("FIN")]})
         backend(api).download("S1", "10.2.2")
         self.assertEqual([k for k in api.log if k == JOBQ(12)].__len__(), 3)
+
+    def test_a_finished_download_counts_only_once_the_firewall_has_loaded_it_into_its_software_manager(self):
+        # the job ends, but "Preloading into software manager" is still going: the next image built on this one would be refused until it is done
+        api = Scripted({CHECK: [ok()], INFO: [INFO_ENTRIES(("12.1.2", "no")), INFO_ENTRIES(("12.1.2", "no")), INFO_ENTRIES(("12.1.2", "no")),
+                                              INFO_ENTRIES(("12.1.2", "yes"))], (DL[0], DL[1].replace('10.2.2', '12.1.2'), DL[2]): [ok("<job>12</job>")], JOBQ(12): [JOB("FIN")]})
+        backend(api).download("S1", "12.1.2")
+        self.assertEqual([k for k in api.log if k == INFO].__len__(), 4)
+        stuck = Scripted({CHECK: [ok()], INFO: [INFO_ENTRIES(("12.1.2", "no"))], (DL[0], DL[1].replace('10.2.2', '12.1.2'), DL[2]): [ok("<job>12</job>")], JOBQ(12): [JOB("FIN")]})
+        with self.assertRaisesRegex(BackendError, "still not loaded into the software manager"):
+            backend(stuck, busy_wait_s=30).download("S1", "12.1.2")
 
     def test_a_failed_job_is_an_error_with_the_devices_own_words(self):
         api = Scripted({CHECK: [ok()], INFO: [INFO_ENTRIES(("10.2.2", "no"))], DL: [ok("<job>12</job>")],

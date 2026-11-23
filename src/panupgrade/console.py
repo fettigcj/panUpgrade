@@ -156,7 +156,7 @@ def render_plan(plan, style, verbose=False):
         for i, unit in enumerate(plan["order"], 1):
             out.append(f"  {i}. " + " > ".join(names[x] for x in unit))
         if plan.get("groups"):
-            out += ["", style.bold(f"Stand-alone groups: at most {plan['settings']['group_reboot_tolerance']} member(s) of a group are out of service at the same time")]
+            out += ["", style.bold(f"Stand-alone groups: at most {plan['settings']['group_install_tolerance']} member(s) of a group are out of service at the same time")]
             out += [f"  {name}: " + ", ".join(names[x] for x in members) for name, members in sorted(plan["groups"].items())]
     return "\n".join(out) + "\n"
 

@@ -91,7 +91,7 @@ def run(plan, approval, backend, journal, settings, stop=None, ledger=None):
     stop = stop or threading.Event()
     from .ledger import Ledger
     journal.ledger = ledger if ledger is not None else Ledger(Path(str(journal.path)).with_name("window-ledger.json"))     # what is changed and not yet put back
-    gate = Gate(settings.group_reboot_tolerance)
+    gate = Gate(settings.group_install_tolerance)
     windows = Windows(plan, approval.serials, backend, journal, say=progress.say, settings=settings)
     lock = threading.Lock()
     state = {"failures": sum(1 for s in devices if _failed_in_journal(journal, s))}
@@ -204,7 +204,7 @@ def _run_steps(dev, backend, journal, settings, stop, gate, group, held, windows
             return "stopped", f"stopped by you before {st['action']}"
         if last == "started":
             return "needs_attention", f"{st['action']} was started and not finished; check the device before resuming"
-        if group and (st["action"] in ("drain", "reboot", "verify") or st["action"].startswith("reboot to activate ")) and not held:
+        if group and (st["action"] in ("drain", "reboot", "verify") or st["action"].startswith(("reboot to activate ", "install "))) and not held:
             wait = windows.wait_for_deferred(serial, stop) if windows is not None else ""
             if wait:
                 return "held", wait

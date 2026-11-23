@@ -26,7 +26,7 @@ SECTIONS = [
     ("HA behaviour", ["session_noise_floor"]),
     ("  Active/Passive pairs", ["pair_session_warn_band", "pair_session_fail_band", "pair_session_wait_s", "upgrade_first", "restore_roles", "upgrade_suspended", "pair_tolerate_asymmetry", "sync_to_peer", "sync_timeout_s",
                                "busy_wait_s", "settle_after_failover_s", "settle_after_reboot_s", "ha_config_unsynced", "blocked_peer", "sync_content", "content_settle_s"]),
-    ("  Stand-alone groups", ["accept_standalone_outage", "group_reboot_tolerance", "group_tolerate_asymmetry", "lb_drain_profile", "lb_drain_probe_protocol", "lb_drain_wait_s",
+    ("  Stand-alone groups", ["accept_standalone_outage", "group_install_tolerance", "group_tolerate_asymmetry", "lb_drain_profile", "lb_drain_probe_protocol", "lb_drain_wait_s",
                                "group_session_warn_band", "group_session_fail_band", "group_session_wait_s"]),
     ("Panorama range", ["spread_limit", "panorama_compare"]),
     ("Failure handling", ["max_failures", "max_parallel", "api_rate_per_s", "pending_changes"]),
@@ -71,9 +71,10 @@ INFO = {
                                  "The plan states which way this is set, at the top.",
                                  {"true": "plan stand-alone firewalls too; each one is OFFLINE while it reboots",
                                   "false": "the default. Leave stand-alone firewalls out of the plan (firewalls in a group are not affected)"}),
-    "group_reboot_tolerance": ("A stand-alone group is a set of firewalls upgraded together that are not HA pairs (cloud load-balanced firewalls, for example); "
+    "group_install_tolerance": ("A stand-alone group is a set of firewalls upgraded together that are not HA pairs (cloud load-balanced firewalls, for example); "
                                "groups are named in the firewall list (Choose firewalls, G on an Included firewall). This is how many members of one group may "
-                               "be rebooting at the same time. 1 means one at a time. A group of seven with 5 upgrades five at once, then the other two. "
+                               "be in the middle of their upgrade at the same time, from the drain (or the install) to the end of the service check. Downloads and backups "
+                               "are done ahead for everyone. 1 means one at a time. A group of seven with 5 upgrades five at once, then the other two. "
                                "A member that fails while it is out of service holds its slot, and the rest of its group is not started.", {}),
     "lb_drain_profile": ("The interface management profile a load balancer's probe relies on (an Azure load balancer probes a dataplane interface with SSH or "
                          "HTTP, which this profile must permit). Empty: never drain. Set: before a group member reboots, the protocols in lb_drain_probe_protocol are "
@@ -205,7 +206,7 @@ LIMITS = {
     "api_rate_per_s": "a number above 0", "spread_limit": "a whole number, 1 or more", "max_failures": "a whole number, 1 or more",
     "max_parallel": "a whole number, 1 or more", "sync_timeout_s": "whole seconds, 1 or more", "busy_wait_s": "whole seconds, 1 or more",
     "unattended_pause_after_min": "whole minutes, 1 or more", "poll_interval_s": "whole seconds, 1 or more", "backup_keep_days": "whole days, 0 or more", "job_stall_s": "whole seconds, 0 or more", "lb_drain_wait_s": "whole seconds, 0 or more",
-    "group_session_warn_band": "a number above 0 and up to 1", "group_session_fail_band": "a number above 0 and up to 1", "group_session_wait_s": "whole seconds, 0 or more", "group_reboot_tolerance": "a whole number, 1 or more", "content_settle_s": "whole seconds, 0 or more",
+    "group_session_warn_band": "a number above 0 and up to 1", "group_session_fail_band": "a number above 0 and up to 1", "group_session_wait_s": "whole seconds, 0 or more", "group_install_tolerance": "a whole number, 1 or more", "content_settle_s": "whole seconds, 0 or more",
     "settle_after_failover_s": "whole seconds, 0 or more", "settle_after_reboot_s": "whole seconds, 0 or more",
 }
 HELP = {

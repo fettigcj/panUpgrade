@@ -50,8 +50,8 @@ flowchart TD
     s32["step: f'reboot to activate {activate['version']}'"]
     s33["step: 'verify'"]
     s34{"for p in installs"}
-    s35["step: f'install {p['version']}'"]
-    s36["drain_once()"]
+    s35["drain_once()"]
+    s36["step: f'install {p['version']}'"]
     s37["step: 'reboot'"]
     s38["step: 'verify'"]
     s39{"drained"}
@@ -143,7 +143,7 @@ flowchart TD
     class s26 step
     class s32 step
     class s33 step
-    class s35 step
+    class s36 step
     class s37 step
     class s38 step
     class s40 step

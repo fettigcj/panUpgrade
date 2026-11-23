@@ -604,6 +604,9 @@ flowchart TD
     n_panupgrade_planner_build_plan_list_devices["list_devices<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_planner_build_plan_panorama_version["panorama_version<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_planner_build_plan_panorama_clock["panorama_clock<br/><i>one of: FakeFleet / OpSource / Source</i>"]
+    n_panupgrade_cli__groups["cli._groups<br/><i>Stand-alone groups named in the list file the command uses (the saved </i>"]
+    n_panupgrade_cli__read_groups["cli._read_groups<br/><i>{serial: group name} for the firewalls the list file puts in a stand-a</i>"]
+    n_panupgrade_cli__read_entries["cli._read_entries<br/><i>[(serial, group)] from a list file. A line is 'SERIAL', or 'SERIAL, gr</i>"]
     n_panupgrade_cli__prepare_review["cli._prepare_review<br/><i>Read the fleet and say what prepare would do. Changes nothing. Returns</i>"]
     n_panupgrade_prepare_build["prepare.build"]
     n_panupgrade_paths_compute["paths.compute<br/><i>The path from ``current`` to ``target``. ``bases``: what the firewall </i>"]
@@ -673,6 +676,9 @@ flowchart TD
     n_panupgrade_planner_build_plan -.-> n_panupgrade_planner_build_plan_list_devices
     n_panupgrade_planner_build_plan -.-> n_panupgrade_planner_build_plan_panorama_version
     n_panupgrade_planner_build_plan -.-> n_panupgrade_planner_build_plan_panorama_clock
+    n_panupgrade_cli__issue_kit --> n_panupgrade_cli__groups
+    n_panupgrade_cli__groups --> n_panupgrade_cli__read_groups
+    n_panupgrade_cli__read_groups --> n_panupgrade_cli__read_entries
     n_panupgrade_cli__prepare --> n_panupgrade_cli__prepare_review
     n_panupgrade_cli__prepare_review --> n_panupgrade_paths_load_rules
     n_panupgrade_cli__prepare_review --> n_panupgrade_prepare_build

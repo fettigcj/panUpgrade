@@ -257,7 +257,7 @@ class Running(unittest.TestCase):
                     self.nodes[serial].version = TARGET
                 return super().reboot_and_wait(serial, timeout_s)
         Pending.done = set()
-        _, sim, _, result = self.go(Pending, data=data, group_reboot_tolerance="2", max_parallel="3")
+        _, sim, _, result = self.go(Pending, data=data, group_install_tolerance="2", max_parallel="3")
         self.assertEqual({v[0] for v in result["outcome"].values()}, {"done"})
         reboots = [(i, c[0]) for i, c in enumerate(sim.calls) if c[1] == "reboot"]
         self.assertEqual(reboots[0][1], "S2")
@@ -424,6 +424,15 @@ class Running(unittest.TestCase):
         self.assertEqual(sim.nodes["S1"].asym, ORIGINAL)
         self.assertEqual(ledger.entries(), {})
 
+    def test_a_group_member_installs_only_when_its_turn_comes_so_no_other_member_holds_an_unapplied_image(self):
+        _, sim, _, result = self.go(group_tolerate_asymmetry="false", max_parallel="3")
+        self.assertEqual({v[0] for v in result["outcome"].values()}, {"done"})
+        installs = [(i, c[0]) for i, c in enumerate(sim.calls) if c[1] == "install"]
+        reboots = {c[0]: i for i, c in enumerate(sim.calls) if c[1] == "reboot"}
+        self.assertEqual(len(installs), 3)
+        for (_, earlier), (later_at, later) in zip(installs, installs[1:]):
+            self.assertGreater(later_at, reboots[earlier])                       # the next member installs after the previous one has been rebooted
+
     def test_a_firewall_with_uncommitted_changes_is_refused_before_anything_is_changed(self):
         data = three()
         data["devices"][1]["facts"]["pending_changes"] = True
@@ -474,7 +483,7 @@ class TheRebootTolerance(unittest.TestCase):
                 finally:
                     with lock:
                         seen["now"] -= 1
-        plan, s = plan_for(data, groups, group_reboot_tolerance=str(tolerance), group_tolerate_asymmetry="false", max_parallel="5")
+        plan, s = plan_for(data, groups, group_install_tolerance=str(tolerance), group_tolerate_asymmetry="false", max_parallel="5")
         s.poll_interval_s, s.settle_after_failover_s, s.settle_after_reboot_s = 0, 0, 0
         with tempfile.TemporaryDirectory() as tmp:
             journal = Journal.create(str(Path(tmp, "j.jsonl")), plan["hash"])
@@ -570,11 +579,11 @@ class TheLoadBalancerDrain(unittest.TestCase):
         journal = Journal.create(self.jpath, plan["hash"])
         return plan, backend, journal, executor.run(plan, approve(plan), backend, journal, s)
 
-    def test_the_plan_drains_after_the_install_and_undrains_after_the_last_verify_and_asks_for_an_acknowledgement(self):
+    def test_the_plan_drains_before_the_install_and_undrains_after_the_last_verify_and_asks_for_an_acknowledgement(self):
         plan, _ = plan_for(three(), GROUP, lb_drain_profile="LB-Probe")
         actions = [s["action"] for s in plan["devices"][0]["steps"]]
-        self.assertLess(actions.index("install " + TARGET), actions.index("drain"))
-        self.assertLess(actions.index("drain"), actions.index("reboot"))
+        self.assertLess(actions.index("drain"), actions.index("install " + TARGET))       # the balancer gets the whole install to drain the member
+        self.assertLess(actions.index("install " + TARGET), actions.index("reboot"))
         self.assertEqual(actions[-3:], ["verify", "undrain", "check service"])
         self.assertIn("lb_drain", [c["code"] for c in plan["cautions"]])
 

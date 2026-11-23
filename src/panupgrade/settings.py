@@ -88,7 +88,7 @@ class Settings:
     group_tolerate_asymmetry: bool = True
     # Stand-alone groups (firewalls upgraded together that are not HA pairs, e.g. behind a cloud load balancer): how many members of one group may be
     # rebooting / out of service at the same time. 1 = one at a time.
-    group_reboot_tolerance: int = 1
+    group_install_tolerance: int = 1
     # Stand-alone firewalls that are not in a group go offline while they reboot. Off: they are left out of the plan (and the plan says so);
     # on: they are planned, and the plan says each one will be offline.
     accept_standalone_outage: bool = False
@@ -238,7 +238,7 @@ def from_dict(data, ignored=None, forgiven=()):
     for name in ("lb_drain_wait_s", "group_session_wait_s", "pair_session_wait_s", "session_noise_floor", "job_stall_s", "backup_keep_days"):
         if getattr(settings, name) < 0:
             raise SettingsError(f"{name} must not be negative")
-    for name in ("group_reboot_tolerance", "spread_limit", "max_failures", "max_parallel", "sync_timeout_s", "busy_wait_s", "poll_interval_s",
+    for name in ("group_install_tolerance", "spread_limit", "max_failures", "max_parallel", "sync_timeout_s", "busy_wait_s", "poll_interval_s",
                  "unattended_pause_after_min"):
         if getattr(settings, name) < 1:
             raise SettingsError(f"{name} must be at least 1")

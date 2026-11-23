@@ -209,7 +209,7 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
         "selection": selection.__dict__.copy(),
         "fleet_checks": [r.to_dict() for r in fleet],
         "devices": list(devices.values()),
-        "groups": groups,                            # stand-alone group name -> the serials planned in it (each reboots at most group_reboot_tolerance at a time)
+        "groups": groups,                            # stand-alone group name -> the serials planned in it (each reboots at most group_install_tolerance at a time)
         "asymmetry": windows,                        # where the tool will change tcp-reject-non-syn and asymmetric-path, and put them back
         "order": order,                              # the units (an HA pair in series, passive first; or one standalone), in the order they are started
         "cautions": cautions,
@@ -347,7 +347,7 @@ def _apply_standalone(devices, ctxs, selection):
             continue
         if dev["group"]:
             _add(dev, CheckResult("standalone_group", INFO, f"member of the stand-alone group {dev['group']!r}: the other members carry the traffic while "
-                                                           f"this one reboots (a group reboots {ctx.settings.group_reboot_tolerance} member(s) at a time)"))
+                                                           f"this one reboots (a group reboots {ctx.settings.group_install_tolerance} member(s) at a time)"))
         elif selection.accept_standalone_outage or getattr(ctx.settings, "accept_standalone_outage", False):
             _add(dev, CheckResult("standalone_outage", INFO, "standalone: outage during the reboot accepted by the user"))
         else:
@@ -495,17 +495,10 @@ def _steps(dev, settings, devices=None):
             f"{activate['version']} is already installed and waiting for a reboot (it cannot be drained first: it refuses commits until it has rebooted); "
             f"timeout {settings.reboot_timeout_s}s")
         add("verify", note=f"version is {activate['version']}, no jobs running")
-    running = activate["version"] if activate else dev["current_version"]
     for p in installs:
-        try:
-            downgrade = Version.parse(p["version"]) < Version.parse(running)
-        except VersionError:
-            downgrade = False
-        if downgrade:      # once an OLDER image is installed the firewall refuses every commit until it has rebooted, and a drain is a commit
-            drain_once()
+        drain_once()      # before the install: it gives the load balancer the whole install to drain the member, and once an OLDER image is installed the
+                          # firewall refuses every commit until it has rebooted, and a drain is a commit
         add(f"install {p['version']}", note=f"timeout {settings.install_timeout_s}s")
-        drain_once()
-        running = p["version"]
         add("reboot", traffic, f"timeout {settings.reboot_timeout_s}s")
         add("verify", note="version as expected, no jobs running")
     if drained:

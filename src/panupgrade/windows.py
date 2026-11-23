@@ -9,7 +9,7 @@
   own values are recorded BEFORE they are changed and put back when the whole pair / group is finished, successful or not. Every
   change and every restore is a journal step ("asymmetry open", "asymmetry restore"), and a firewall that could not be put back is
   reported, loudly, in the run's result.
-* the group gate: how many members of one stand-alone group may be out of service at the same time (``group_reboot_tolerance``).
+* the group gate: how many members of one stand-alone group may be out of service at the same time (``group_install_tolerance``).
 """
 
 import threading

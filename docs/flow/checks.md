@@ -76,7 +76,7 @@ flowchart LR
 | `disk_space` | yes | disk_free_mb, images_downloaded, pending_reboot, pending_reboot_version, sw_version | allow_downgrade, min_free_disk_mb | - |
 | `pending_changes` | yes | pending_changes | pending_changes | - |
 | `pending_reboot` | no | pending_reboot, pending_reboot_version | - | - |
-| `running_jobs` | no | running_jobs | - | - |
+| `running_jobs` | no | running_jobs | busy_wait_s | - |
 | `session_baseline` | no | ha_mode, ha_state, session_count | session_noise_floor | - |
 | `ntp` | no | ntp_synced | - | ntp_synced |
 | `licenses` | no | licenses_ok | - | licenses_ok |

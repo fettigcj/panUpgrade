@@ -285,7 +285,10 @@ def running_jobs(ctx):
     if jobs is None:
         return _no_data("running_jobs", "the job list")
     if jobs:
-        return CheckResult("running_jobs", WARN, f"{jobs} job(s) still running", ack="running_jobs")
+        # No acknowledgement: jobs come and go on their own (a scheduled download or list refresh at the top of the hour, a commit), so one that happens to be
+        # running when the plan is read must not invalidate an approval. The run waits for them to finish, up to busy_wait_s, before it starts the firewall.
+        return CheckResult("running_jobs", WARN, f"{jobs} job(s) running right now (a scheduled download or refresh, a commit): the run waits for them to "
+                                                 f"finish, up to {ctx.settings.busy_wait_s}s (setting busy_wait_s), before it starts this firewall")
     return CheckResult("running_jobs", PASS, "no jobs running")
 
 

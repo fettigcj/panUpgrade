@@ -108,6 +108,22 @@ class PendingReboot(unittest.TestCase):
         with self.assertRaises(executor.StepFailed):
             executor._preflight({"serial": "A", "current_version": "20.2.3"}, Seen(TARGET), settings.load())
 
+    def test_preflight_waits_for_a_job_that_finishes_by_itself_and_gives_up_after_busy_wait_s(self):
+        from panupgrade import executor
+
+        class Jobs:
+            def __init__(self, counts): self.counts = list(counts)
+            def preflight(self, serial):
+                return {"version": "20.2.3", "pending_changes": False, "running_jobs": self.counts[0] if len(self.counts) == 1 else self.counts.pop(0)}
+            def running_jobs(self, serial):
+                return self.counts[0] if len(self.counts) == 1 else self.counts.pop(0)
+        s = settings.load(None, ["poll_interval_s=1", "busy_wait_s=1"])
+        planned = {"serial": "A", "current_version": "20.2.3"}
+        self.assertEqual(executor._preflight(planned, Jobs([3, 1, 0, 0]), s)["version"], "20.2.3")      # busy at first, quiet a moment later
+        with self.assertRaises(executor.StepFailed) as stuck:
+            executor._preflight(planned, Jobs([2]), s)
+        self.assertIn("job(s) in its queue after 1s", str(stuck.exception))
+
     def test_verify_after_the_activation_expects_the_activated_version(self):
         from panupgrade import executor
         steps = [{"action": "backup"}, {"action": "reboot to activate 20.2.5"}, {"action": "verify"}, {"action": "install 20.2.9"}, {"action": "reboot"}, {"action": "verify"}]

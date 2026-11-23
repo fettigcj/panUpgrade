@@ -219,32 +219,41 @@ flowchart TD
 flowchart TD
     p1(["executor._preflight"])
     p2["seen = backend.preflight(dev['serial'])"]
-    p3{"seen.get('pending_changes') is True and settings.pending_changes == 'revert'"}
-    p4["backend.revert_candidate(dev['serial'])"]
-    p5["seen, reverted = (backend.preflight(dev['serial']), True)"]
-    p6{"seen.get('version') != dev['current_version']"}
-    p7(["raise f'plan is stale: device reports {seen.get('version')}, plan assumed {dev['cur…"])
-    p8{"seen.get('pending_changes') is not False and settings.pending_changes == 'block'"}
-    p9(["raise 'pending (uncommitted) configuration, or unknown; settings say block'"])
-    p10{"seen.get('running_jobs') != 0"}
-    p11(["raise f'jobs running or unknown: {seen.get('running_jobs')!r}'"])
-    p12{"seen.get('pending_reboot') is True and (not (dev.get('activate') and seen.get('pend…"}
-    p13(["raise f'{seen.get('pending_reboot_version') or 'an image'} is installed and waiting…"])
-    p14(["return {'version': seen['version'], **({'reverted': 'the uncommitted candidate conf…"])
+    p3["jobs = seen.get('running_jobs')"]
+    p4{"isinstance(jobs, int) and jobs &gt; 0 and getattr(backend, 'real_time', True)"}
+    p5["_wait_for_quiet(backend, dev['serial'], settings, 'the upgrade')"]
+    p6["seen = backend.preflight(dev['serial'])"]
+    p7{"seen.get('pending_changes') is True and settings.pending_changes == 'revert'"}
+    p8["backend.revert_candidate(dev['serial'])"]
+    p9["seen, reverted = (backend.preflight(dev['serial']), True)"]
+    p10{"seen.get('version') != dev['current_version']"}
+    p11(["raise f'plan is stale: device reports {seen.get('version')}, plan assumed {dev['cur…"])
+    p12{"seen.get('pending_changes') is not False and settings.pending_changes == 'block'"}
+    p13(["raise 'pending (uncommitted) configuration, or unknown; settings say block'"])
+    p14{"seen.get('running_jobs') != 0"}
+    p15(["raise f'jobs running or unknown: {seen.get('running_jobs')!r}'"])
+    p16{"seen.get('pending_reboot') is True and (not (dev.get('activate') and seen.get('pend…"}
+    p17(["raise f'{seen.get('pending_reboot_version') or 'an image'} is installed and waiting…"])
+    p18(["return {'version': seen['version'], **({'reverted': 'the uncommitted candidate conf…"])
     p1 --> p2
     p2 --> p3
-    p3 -->|yes| p4
-    p4 --> p5
+    p3 --> p4
+    p4 -->|yes| p5
     p5 --> p6
-    p3 -->|no| p6
-    p6 -->|yes| p7
-    p6 -->|no| p8
-    p8 -->|yes| p9
-    p8 -->|no| p10
+    p6 --> p7
+    p4 -->|no| p7
+    p7 -->|yes| p8
+    p8 --> p9
+    p9 --> p10
+    p7 -->|no| p10
     p10 -->|yes| p11
     p10 -->|no| p12
     p12 -->|yes| p13
     p12 -->|no| p14
+    p14 -->|yes| p15
+    p14 -->|no| p16
+    p16 -->|yes| p17
+    p16 -->|no| p18
     classDef api stroke:#2f6fed,stroke-width:3px
     classDef refuse stroke:#d64545,stroke-width:3px
     classDef done stroke:#2e9e5b,stroke-width:3px
@@ -252,13 +261,14 @@ flowchart TD
     classDef entry stroke-width:3px
     class p1 entry
     class p2 api
-    class p4 api
-    class p5 api
-    class p7 refuse
-    class p9 refuse
+    class p6 api
+    class p8 api
+    class p9 api
     class p11 refuse
     class p13 refuse
-    class p14 done
+    class p15 refuse
+    class p17 refuse
+    class p18 done
 ```
 
 `executor._step` ([executor.py:320]) wraps every step: write `started`, run it, write `ok` or `failed`.
@@ -286,7 +296,7 @@ flowchart TD
 
 ## 3. How each step is carried out
 
-`executor._do` ([executor.py:537]). Before any step that installs or reboots, a verified backup must be in the journal:
+`executor._do` ([executor.py:541]). Before any step that installs or reboots, a verified backup must be in the journal:
 
 ```mermaid
 flowchart TD
@@ -306,7 +316,7 @@ flowchart TD
 
 ### starts with 'download '
 
-executor.py:541
+executor.py:545
 
 ```mermaid
 flowchart TD
@@ -324,7 +334,7 @@ flowchart TD
 
 ### 'backup'
 
-executor.py:543
+executor.py:547
 
 ```mermaid
 flowchart TD
@@ -358,7 +368,7 @@ flowchart TD
 
 ### 'sync to peer'
 
-executor.py:553
+executor.py:557
 
 ```mermaid
 flowchart TD
@@ -396,7 +406,7 @@ flowchart TD
 
 ### "wait for the passive firewall's upgrade to finish" or "wait for the first member's upgrade to finish"
 
-executor.py:564
+executor.py:568
 
 ```mermaid
 flowchart TD
@@ -422,7 +432,7 @@ flowchart TD
 
 ### 'fail over'
 
-executor.py:571
+executor.py:575
 
 ```mermaid
 flowchart TD
@@ -485,7 +495,7 @@ flowchart TD
 
 ### 'hold suspended'
 
-executor.py:609
+executor.py:613
 
 ```mermaid
 flowchart TD
@@ -505,7 +515,7 @@ flowchart TD
 
 ### starts with 'install '
 
-executor.py:612
+executor.py:616
 
 ```mermaid
 flowchart TD
@@ -525,7 +535,7 @@ flowchart TD
 
 ### 'drain'
 
-executor.py:615
+executor.py:619
 
 ```mermaid
 flowchart TD
@@ -543,7 +553,7 @@ flowchart TD
 
 ### 'undrain'
 
-executor.py:618
+executor.py:622
 
 ```mermaid
 flowchart TD
@@ -561,7 +571,7 @@ flowchart TD
 
 ### 'check service'
 
-executor.py:621
+executor.py:625
 
 ```mermaid
 flowchart TD
@@ -579,7 +589,7 @@ flowchart TD
 
 ### 'reboot' or starts with 'reboot to activate '
 
-executor.py:623
+executor.py:627
 
 ```mermaid
 flowchart TD
@@ -600,7 +610,7 @@ flowchart TD
 
 ### 'verify'
 
-executor.py:627
+executor.py:631
 
 ```mermaid
 flowchart TD
@@ -633,7 +643,7 @@ flowchart TD
 
 ### 'go live'
 
-executor.py:635
+executor.py:639
 
 ```mermaid
 flowchart TD
@@ -651,7 +661,7 @@ flowchart TD
 
 ### 'verify HA'
 
-executor.py:637
+executor.py:641
 
 ```mermaid
 flowchart TD
@@ -758,7 +768,7 @@ flowchart TD
 
 ### 'restore roles'
 
-executor.py:688
+executor.py:692
 
 ```mermaid
 flowchart TD
@@ -779,7 +789,7 @@ flowchart TD
 
 ### anything else
 
-executor.py:693
+executor.py:697
 
 ```mermaid
 flowchart TD
@@ -805,30 +815,30 @@ Found by reading every decision in the code that looks at the config-sync or ses
 | prepare | `build` (prepare.py:146) | `steps and idle and (not (facts.session_count or 0) >= floor)` | prepare |
 | prepare | `build` (prepare.py:148) | `facts.session_count is None` | prepare |
 | prepare | `build` (prepare.py:189) | `facts.ha_config_sync is False` | prepare |
-| executor | `_sessions` (executor.py:495) | `hasattr(backend, 'session_count')` | upgrade |
-| executor | `_do` (executor.py:560) | `after['ha_config_sync'] is not True` | upgrade |
-| executor | `_do` (executor.py:642) | `got['ha_session_sync'] is not True` | upgrade |
+| executor | `_sessions` (executor.py:499) | `hasattr(backend, 'session_count')` | upgrade |
+| executor | `_do` (executor.py:564) | `after['ha_config_sync'] is not True` | upgrade |
+| executor | `_do` (executor.py:646) | `got['ha_session_sync'] is not True` | upgrade |
 | fleetreport | `_attention` (fleetreport.py:49) | `facts.get('ha_config_sync') is False and (not mixed)` | report |
 
 ## Helpers the charts call
 
 | function | what it does |
 |---|---|
-| `_backup_verified` (executor.py:349) | return any((st['action'] == 'backup' and journal.last_state(serial, _key(i, 'backup')) == 'ok' for i, st in enumerate(steps))) |
-| `_baseline` (executor.py:367) | The pair's session baseline: the count on the node that was active before the unit started. |
-| `_check_service` (executor.py:502) | A group member is back (upgraded, undrained): wait until its session table is within ``group_session_warn_band`` of what it was before it |
-| `_expected_version` (executor.py:359) | see the source |
-| `_floor` (executor.py:487) | return max(settings.session_noise_floor, 1) |
+| `_backup_verified` (executor.py:353) | return any((st['action'] == 'backup' and journal.last_state(serial, _key(i, 'backup')) == 'ok' for i, st in enumerate(steps))) |
+| `_baseline` (executor.py:371) | The pair's session baseline: the count on the node that was active before the unit started. |
+| `_check_service` (executor.py:506) | A group member is back (upgraded, undrained): wait until its session table is within ``group_session_warn_band`` of what it was before it |
+| `_expected_version` (executor.py:363) | see the source |
+| `_floor` (executor.py:491) | return max(settings.session_noise_floor, 1) |
 | `_key` (executor.py:161) | return f'{index}:{action}' |
 | `_retry_while_busy` (executor.py:302) | Run a command the firewall may refuse because it is busy. The jobs list showed nothing a moment ago, but a commit can be queued |
-| `_revert_failover` (executor.py:437) | Put the traffic back where it was known to work: this member (the active one before the fail-over) active again, the peer out of the way. |
+| `_revert_failover` (executor.py:441) | Put the traffic back where it was known to work: this member (the active one before the fail-over) active again, the peer out of the way. |
 | `_run_steps` (executor.py:181) | see the source |
-| `_sessions` (executor.py:492) | try: return backend.session_count(serial) if hasattr(backend, 'session_count') else backend.state(serial).get('session_count') except Exception as ex… |
+| `_sessions` (executor.py:496) | try: return backend.session_count(serial) if hasattr(backend, 'session_count') else backend.state(serial).get('session_count') except Exception as ex… |
 | `_settle` (executor.py:265) | Wait ``seconds``, then until the firewall has no unfinished job, before the next step touches it. |
-| `_target_version` (executor.py:354) | return _expected_version(steps, len(steps)) |
-| `_versions_note` (executor.py:478) | What the pair is left running, for a failure that cannot be undone: 'A runs x, B runs y'. Empty when it cannot be read. |
+| `_target_version` (executor.py:358) | return _expected_version(steps, len(steps)) |
+| `_versions_note` (executor.py:482) | What the pair is left running, for a failure that cannot be undone: 'A runs x, B runs y'. Empty when it cannot be read. |
 | `_wait_for_quiet` (executor.py:287) | A config sync, an HA state change or a boot queues a commit on the firewall, and the install is refused while that is still in the |
-| `_watch_sessions` (executor.py:376) | Wait until a node's session table is back, and judge it. ``observe()`` gives (the node's count, [the counts it should match]); the best of |
+| `_watch_sessions` (executor.py:380) | Wait until a node's session table is back, and judge it. ``observe()`` gives (the node's count, [the counts it should match]); the best of |
 
 ## Settings the charts read
 

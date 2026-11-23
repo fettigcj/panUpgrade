@@ -330,6 +330,10 @@ def _step(journal, serial, key, fn):
 
 def _preflight(dev, backend, settings):
     seen = backend.preflight(dev["serial"])
+    jobs = seen.get("running_jobs")
+    if isinstance(jobs, int) and jobs > 0 and getattr(backend, "real_time", True):      # a job that will finish by itself is waited for, not failed on
+        _wait_for_quiet(backend, dev["serial"], settings, "the upgrade")
+        seen = backend.preflight(dev["serial"])
     reverted = False
     if seen.get("pending_changes") is True and settings.pending_changes == "revert":
         backend.revert_candidate(dev["serial"])

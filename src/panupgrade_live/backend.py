@@ -121,6 +121,20 @@ class LiveBackend(Backend):
                 return m.group(1)
         raise BackendError(f"no job id in the reply: {ET.tostring(root, encoding='unicode')[:200]}")
 
+    def _commit(self, serial, what):
+        """Commit on the firewall and return the job id. When the firewall refuses (it must reboot first, another commit...) nothing was committed, so the
+        candidate edits made for it are taken back and CommitRefused says so: the firewall is left as it was."""
+        reply = self.write.commit_local(serial)
+        if reply.get("status") != "success":
+            said = " ".join(" ".join((e.text or "").split()) for e in reply.iter("line")) or str(reply.get("status"))
+            try:
+                self._send("<revert><config/></revert>", serial)
+                tidy = "the uncommitted edits were reverted"
+            except BackendError as exc:
+                tidy = f"the uncommitted edits could NOT be reverted ({exc}); discard the candidate configuration by hand"
+            raise CommitRefused(f"{serial}: the firewall refused the commit for {what}: {said}. Nothing was changed on it; {tidy}.")
+        return self._job_id(reply)
+
     def _wait_job(self, serial, job, timeout_s, label, stall_s=0):
         """Wait for a firewall job to finish. ``stall_s`` (downloads only): give up when neither the status nor the percentage has moved for that long
         (a job queued behind others is not stalled, it is waiting); half-way there the log says so."""
@@ -449,7 +463,7 @@ class LiveBackend(Backend):
             else:
                 for protocol, value in changes.items():
                     self.write.write_profile(profile, protocol, "delete" if value is None else "set", value, serial)
-            job = self._job_id(self.write.commit_local(serial))
+            job = self._commit(serial, "the interface management profile change")
         except SourceError as exc:
             raise BackendError(str(exc)) from None
         self._wait_job(serial, job, self.settings.install_timeout_s, "the commit of the interface management profile change")
@@ -458,7 +472,7 @@ class LiveBackend(Backend):
         """Delete the local copy of a template's profile (one commit on the firewall): the template's profile resumes, which is the state before the drain."""
         try:
             self.write.write_profile_remove(profile, serial)
-            job = self._job_id(self.write.commit_local(serial))
+            job = self._commit(serial, "removing the local copy of the interface management profile")
         except SourceError as exc:
             raise BackendError(str(exc)) from None
         self._wait_job(serial, job, self.settings.install_timeout_s, "the commit that removes the local copy of the interface management profile")

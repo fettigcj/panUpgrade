@@ -495,9 +495,17 @@ def _steps(dev, settings, devices=None):
             f"{activate['version']} is already installed and waiting for a reboot (it cannot be drained first: it refuses commits until it has rebooted); "
             f"timeout {settings.reboot_timeout_s}s")
         add("verify", note=f"version is {activate['version']}, no jobs running")
+    running = activate["version"] if activate else dev["current_version"]
     for p in installs:
+        try:
+            downgrade = Version.parse(p["version"]) < Version.parse(running)
+        except VersionError:
+            downgrade = False
+        if downgrade:      # once an OLDER image is installed the firewall refuses every commit until it has rebooted, and a drain is a commit
+            drain_once()
         add(f"install {p['version']}", note=f"timeout {settings.install_timeout_s}s")
         drain_once()
+        running = p["version"]
         add("reboot", traffic, f"timeout {settings.reboot_timeout_s}s")
         add("verify", note="version as expected, no jobs running")
     if drained:

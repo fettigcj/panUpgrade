@@ -332,7 +332,7 @@ def drain(serial, backend, journal, settings):
     if change:
         try:
             backend.set_lb_profile(serial, profile, change)
-        except PermissionError as exc:                      # refused by the tool's own allow-list before anything was sent: nothing was changed
+        except (PermissionError, CommitRefused) as exc:     # refused by the tool's own allow-list, or by the firewall's commit (the edits taken back): nothing was changed
             journal.record(serial, LB_DRAIN, "failed", {"error": str(exc), "nothing_sent": True})
             if _ledger(journal):
                 _ledger(journal).clear_drain(serial)

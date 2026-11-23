@@ -89,6 +89,15 @@ class PendingReboot(unittest.TestCase):
         self.assertEqual([a for a in actions(dev(p, "A")) if a in ("drain", "reboot to activate " + TARGET)], ["reboot to activate " + TARGET])
         self.assertIn("drain", actions(dev(p, "B")))
 
+    def test_a_downgrade_is_drained_before_the_older_image_is_installed_because_it_refuses_commits_after(self):
+        data = fleet_data(device("A", version="21.0.1"), device("B", version="21.0.1"))
+        p = plan(data, groups={"A": "g", "B": "g"}, lb_drain_profile="LB", allow_downgrade="true")
+        acts = actions(dev(p, "A"))
+        self.assertLess(acts.index("drain"), next(i for i, x in enumerate(acts) if x.startswith("install ")))
+        up = plan(fleet_data(device("A", version="20.2.1"), device("B", version="20.2.1")), groups={"A": "g", "B": "g"}, lb_drain_profile="LB")
+        acts = actions(dev(up, "A"))
+        self.assertGreater(acts.index("drain"), next(i for i, x in enumerate(acts) if x.startswith("install ")))      # an upgrade is unchanged
+
     def test_a_firewall_with_nothing_pending_is_planned_as_before(self):
         d = dev(plan(fleet_data(device("A", version="20.2.3"))), "A")
         self.assertNotIn("activate", d)

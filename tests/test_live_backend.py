@@ -360,6 +360,27 @@ class TheAsymmetryWindowOnARealFirewall(unittest.TestCase):
         self.assertIn("reverted", text)
         self.assertEqual(sent, ["<revert><config/></revert>"])           # no runtime flag was set, the candidate was reverted
 
+    def test_a_refused_commit_of_a_profile_change_also_takes_the_candidate_edits_back(self):
+        from panupgrade.executor import CommitRefused
+        merged = "<show><config><merged/></config></show>"
+        sent = []
+
+        class Write(Scripted):
+            def write_profile(self, profile, protocol, action, value, target):
+                return ok()
+
+            def commit_local(self, target):
+                return R('<response status="error" code="13"><msg><line>Software has been downgraded, please reboot</line></msg></response>')
+
+            def write_xml(self, xml, target):
+                sent.append(xml)
+                return R("<response status='success'/>")
+        w = Write({("xml", "<show><config><running/></config></show>", "S1"): [R("<response status='success'><result><config><devices><entry><network><profiles>"
+                   "<interface-management-profile><entry name='LB'><ssh>yes</ssh></entry></interface-management-profile></profiles></network></entry></devices></config></result></response>")]})
+        with self.assertRaises(CommitRefused):
+            backend(w, w).set_lb_profile("S1", "LB", {"ssh": "no"})
+        self.assertEqual(sent, ["<revert><config/></revert>"])
+
     def test_only_the_asymmetric_path_may_be_edited_and_only_those_ways(self):
         from panupgrade_live.panorama import WRITE_ALLOWED, _config_params
         w = WriteApi("192.0.2.1", key="not-a-key")

@@ -395,6 +395,35 @@ class Running(unittest.TestCase):
         self.assertEqual(cli._read_groups(str(made["serials"])), GROUP)
         self.assertIn("not part of this approval", made["serials"].read_text(encoding="utf-8"))
 
+    def test_a_window_left_open_on_the_only_member_in_the_run_is_taken_over_and_put_back(self):
+        from tests.support import facts
+        from panupgrade.ledger import Ledger
+        data = three()
+        data["devices"][0]["facts"] = facts(pending_reboot=True, pending_reboot_version=TARGET)
+        sel = Selection(serials=["S1"], groups=GROUP)
+        s = settings.load(None, [])
+        s.poll_interval_s, s.settle_after_failover_s, s.settle_after_reboot_s = 0, 0, 0
+        plan = build_plan(FakeFleet(data), TARGET, s, sel, rules=TEST_RULES)
+
+        class Pending(SimBackend):
+            def preflight(self, serial):
+                seen = super().preflight(serial)
+                return {**seen, "pending_reboot": True, "pending_reboot_version": TARGET} if serial == "S1" and not self.rebooted else seen
+            rebooted = False
+
+            def reboot_and_wait(self, serial, timeout_s):
+                self.rebooted = True
+                self.nodes[serial].version = TARGET
+                return super().reboot_and_wait(serial, timeout_s)
+        sim = Pending(data)
+        sim.nodes["S1"].asym = dict(TOLERANT)                                           # an earlier run left it open
+        ledger = Ledger(Path(self.jpath).with_name("shared-ledger.json"))
+        ledger.set_window("S1", ORIGINAL, "group edge", "old.jsonl")
+        result = executor.run(plan, approve(plan), sim, Journal.create(self.jpath, plan["hash"]), s, ledger=ledger)
+        self.assertEqual(result["outcome"]["S1"][0], "done")
+        self.assertEqual(sim.nodes["S1"].asym, ORIGINAL)
+        self.assertEqual(ledger.entries(), {})
+
     def test_a_firewall_with_uncommitted_changes_is_refused_before_anything_is_changed(self):
         data = three()
         data["devices"][1]["facts"]["pending_changes"] = True

@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- **Fix: a window an earlier run left open on the only member of a run is now taken over and put back by that run** (it was skipped because a lone member needs no window of its own, and so stayed open; `upgrade --recover --confirm-restore` put it back).
 - **Fix: the upgrade kit's list keeps the rest of the stand-alone group of the approved firewalls** (marked as not part of the approval). With only one member named, the upgrade re-planned it as a plain stand-alone firewall and refused it.
 - **Fix: a downgrade is drained BEFORE its older image is installed.** Once an older image is installed the firewall refuses every commit until it has rebooted ("Software has been downgraded, please reboot"), and a drain is a commit; the plan put the drain after the install. A commit the firewall refuses for a profile change now takes the candidate edits back, like the asymmetry window already did, and a drain that was refused that way is no longer reported as left drained.
 - **A job that is running when a run starts is waited for, not failed on.** The pre-flight of each firewall now waits for unfinished jobs (a scheduled download or list refresh at the top of the hour, an auto-commit) up to `busy_wait_s`, asking again every `poll_interval_s`, as the install and verify steps already did. The "jobs running" caution no longer needs an acknowledgement, so a job that happens to be running when the plan is read cannot invalidate an approval.

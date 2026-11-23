@@ -143,7 +143,10 @@ class Windows:
     def _open_after_activation(self, serial):
         """"" when nothing was needed or the window is now open on this firewall; else why it could not be opened (the firewall's step then fails)."""
         window = self.by_serial.get(serial)
-        if window is None or serial not in self.deferred or window["planned"] < 2:      # the only member going down: nobody else's drain to tolerate
+        if window is None or serial not in self.deferred:
+            return ""
+        left_open = _ledger(self.journal) and _ledger(self.journal).window(serial)          # an earlier run's window is always taken over, to be put back
+        if window["planned"] < 2 and not left_open:      # the only member going down: nobody else's drain to tolerate
             return ""
         with window["lock"]:
             if window["state"] != "open" or any(s == serial for s, _o in window["opened"]):

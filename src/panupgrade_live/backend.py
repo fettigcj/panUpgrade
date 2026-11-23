@@ -167,6 +167,9 @@ class LiveBackend(Backend):
             if stall_s and node is not None:
                 still = int(self._clock() - moved)
                 at = f"{node.findtext('status') or '?'}{' ' + node.findtext('progress') + '%' if (node.findtext('progress') or '').isdigit() else ''}"
+                if (node.findtext("progress") or "").isdigit() and int(node.findtext("progress")) >= 99:
+                    # PAN-OS reports a download at 99% while it loads the image into its software manager, which can take minutes: that is not a stall
+                    stall_s = max(stall_s, self.settings.busy_wait_s)
                 if still >= stall_s:
                     raise BackendError(f"{serial}: {label} job {job} made no progress for {still}s (stuck at {at}), so it was given up on "
                                        f"(setting job_stall_s = {stall_s}). The job may still be running on the firewall; look with `show jobs id {job}`")

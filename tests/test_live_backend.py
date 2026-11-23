@@ -573,6 +573,12 @@ class StalledJobs(unittest.TestCase):
         self.assertIn("job_stall_s", error)
         self.assertEqual(len([m for m in said if "no progress" in m]), 1)            # the notice at half the limit, once
 
+    def test_a_download_at_99_percent_is_loading_into_the_software_manager_and_is_given_more_time(self):
+        error, _ = self.wait([self.job(progress="99")] * 40 + [ok("<job><status>FIN</status><result>OK</result></job>")])
+        self.assertIsNone(error)                                                     # 40 polls = 600 s at 99%, past job_stall_s (180 here), inside busy_wait_s (900)
+        error, _ = self.wait([self.job(progress="99")] * 1000)
+        self.assertIn("no progress for 900s", error)                                 # but not forever
+
     def test_a_download_that_creeps_forward_is_never_given_up_on(self):
         error, _ = self.wait([self.job(progress=str(n // 8 + 1)) for n in range(40)] + [ok("<job><status>FIN</status><result>OK</result></job>")])
         self.assertIsNone(error)                                                     # 8 polls (120 s) per percent

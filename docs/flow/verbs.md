@@ -120,8 +120,8 @@ flowchart TD
     n_panupgrade_planner__apply_standalone["planner._apply_standalone"]
     n_panupgrade_planner__apply_plugins["planner._apply_plugins<br/><i>HA members whose plugins differ cannot sync their configuration: PAN-O</i>"]
     n_panupgrade_xmlops_plugin_fixes["xmlops.plugin_fixes<br/><i>What would level the plugins of an HA pair: ``(fixes, names)``. ``fixe</i>"]
+    n_panupgrade_xmlops__plugin_version["xmlops._plugin_version"]
     n_panupgrade_xmlops_plugin_differences["xmlops.plugin_differences<br/><i>What would level the plugins of two HA members ``a`` and ``b`` (dicts </i>"]
-    n_panupgrade_xmlops_plugin_blockers["xmlops.plugin_blockers<br/><i>The plugin names whose difference between the two HA members makes PAN</i>"]
     n_panupgrade_planner__apply_pair_rules["planner._apply_pair_rules"]
     n_panupgrade_planner__peer_problem["planner._peer_problem<br/><i>Why an HA peer that is not in this run is a problem (words that fit 'i</i>"]
     n_panupgrade_planner__apply_positions["planner._apply_positions<br/><i>For a pair with both members in the run, say which goes first and whic</i>"]
@@ -224,8 +224,8 @@ flowchart TD
     n_panupgrade_planner__apply_standalone --> n_panupgrade_planner__add
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_plugins
     n_panupgrade_planner__apply_plugins --> n_panupgrade_xmlops_plugin_fixes
+    n_panupgrade_xmlops_plugin_fixes --> n_panupgrade_xmlops__plugin_version
     n_panupgrade_xmlops_plugin_fixes --> n_panupgrade_xmlops_plugin_differences
-    n_panupgrade_xmlops_plugin_fixes --> n_panupgrade_xmlops_plugin_blockers
     n_panupgrade_planner__apply_plugins --> n_panupgrade_planner__swap
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_pair_rules
     n_panupgrade_planner__apply_pair_rules --> n_panupgrade_planner__add
@@ -576,13 +576,15 @@ flowchart TD
     n_panupgrade_prepare_run["prepare.run"]
     n_panupgrade_prepare_content_diffs["prepare.content_diffs<br/><i>{key: (a_value, b_value)} for each content type whose installed versio</i>"]
     n_panupgrade_prepare__norm["prepare._norm"]
+    n_panupgrade_xmlops__plugin_version["xmlops._plugin_version"]
     n_panupgrade_prepare__highest_first["prepare._highest_first<br/><i>Deletions with the higher releases first, so a base image goes only af</i>"]
     n_panupgrade_versions_Version_parse["versions.Version.parse"]
     n_panupgrade_prepare__fold["prepare._fold"]
     n_panupgrade_prepare_run_backup["backup<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
     n_panupgrade_prepare_run_content_versions["content_versions<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
-    n_panupgrade_prepare_run_sync_to_peer["sync_to_peer<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
     n_panupgrade_prepare_run_install_plugin["install_plugin<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
+    n_panupgrade_prepare_run_ha_plugin_versions["ha_plugin_versions<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
+    n_panupgrade_prepare_run_sync_to_peer["sync_to_peer<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
     n_panupgrade_prepare_run_refresh_updates["refresh_updates<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
     n_panupgrade_prepare_run_update_content["update_content<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
     n_panupgrade_prepare_run_delete_image["delete_image<br/><i>one of: Backend / LiveBackend / SimBackend</i>"]
@@ -635,7 +637,6 @@ flowchart TD
     n_panupgrade_xmlops_plugin_fixes["xmlops.plugin_fixes<br/><i>What would level the plugins of an HA pair: ``(fixes, names)``. ``fixe</i>"]
     n_panupgrade_xmlops_plugin_differences["xmlops.plugin_differences<br/><i>What would level the plugins of two HA members ``a`` and ``b`` (dicts </i>"]
     n_panupgrade_xmlops__plugin_key["xmlops._plugin_key"]
-    n_panupgrade_xmlops_plugin_blockers["xmlops.plugin_blockers<br/><i>The plugin names whose difference between the two HA members makes PAN</i>"]
     n_panupgrade_prepare_build_list_devices["list_devices<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_prepare_build_facts["facts<br/><i>one of: FakeFleet / OpSource / Source</i>"]
     n_panupgrade_cli__prepare --> n_panupgrade_cli__prepare_execute
@@ -652,13 +653,15 @@ flowchart TD
     n_panupgrade_prepare_run --> n_panupgrade_prepare_content_diffs
     n_panupgrade_prepare_content_diffs --> n_panupgrade_prepare__norm
     n_panupgrade_prepare_run --> n_panupgrade_prepare_diff_text
+    n_panupgrade_prepare_run --> n_panupgrade_xmlops__plugin_version
     n_panupgrade_prepare_run --> n_panupgrade_prepare__highest_first
     n_panupgrade_prepare__highest_first --> n_panupgrade_versions_Version_parse
     n_panupgrade_prepare_run --> n_panupgrade_prepare__fold
     n_panupgrade_prepare_run -.-> n_panupgrade_prepare_run_backup
     n_panupgrade_prepare_run -.-> n_panupgrade_prepare_run_content_versions
-    n_panupgrade_prepare_run -.-> n_panupgrade_prepare_run_sync_to_peer
     n_panupgrade_prepare_run -.-> n_panupgrade_prepare_run_install_plugin
+    n_panupgrade_prepare_run -.-> n_panupgrade_prepare_run_ha_plugin_versions
+    n_panupgrade_prepare_run -.-> n_panupgrade_prepare_run_sync_to_peer
     n_panupgrade_prepare_run -.-> n_panupgrade_prepare_run_refresh_updates
     n_panupgrade_prepare_run -.-> n_panupgrade_prepare_run_update_content
     n_panupgrade_prepare_run -.-> n_panupgrade_prepare_run_delete_image
@@ -723,9 +726,9 @@ flowchart TD
     n_panupgrade_prepare_content_state --> n_panupgrade_prepare__norm
     n_panupgrade_prepare_build --> n_panupgrade_prepare__norm
     n_panupgrade_prepare_build --> n_panupgrade_xmlops_plugin_fixes
+    n_panupgrade_xmlops_plugin_fixes --> n_panupgrade_xmlops__plugin_version
     n_panupgrade_xmlops_plugin_fixes --> n_panupgrade_xmlops_plugin_differences
     n_panupgrade_xmlops_plugin_differences --> n_panupgrade_xmlops__plugin_key
-    n_panupgrade_xmlops_plugin_fixes --> n_panupgrade_xmlops_plugin_blockers
     n_panupgrade_prepare_build -.-> n_panupgrade_prepare_build_list_devices
     n_panupgrade_prepare_build -.-> n_panupgrade_prepare_build_facts
     n_panupgrade_cli__prepare_review --> n_panupgrade_prepare_deletion_lines

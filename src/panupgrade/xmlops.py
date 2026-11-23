@@ -277,35 +277,54 @@ def plugin_blockers(plugins):
     return sorted(name for name, seen in (plugins or {}).items() if seen.get("local") == "Mismatch" or seen.get("peer") == "Not Installed")
 
 
-def plugin_fixes(active, passive):
-    """What would level the plugins of an HA pair: ``(fixes, names)``. ``fixes`` is a list of {"name", "version", "on": "a" (the active member) | "b" (the passive),
-    "had"}, ``names`` every plugin family found to differ (a name with no fix could not be resolved to a version).
+_PLUGIN_VERSION = re.compile(r"^\d+\.\d+\.\d+(?:-h\d+)?$")
 
-    Two sources. (1) The INSTALLED lists, where they differ. (2) PAN-OS's own plugin lines of the HA state, which are what actually makes it refuse the sync and which the
-    installed lists do NOT show (seen 2026-11-23: two members with identical installed lists, one reading OC "Mismatch" with its peer "Not Installed"): the member that has
-    the line donates its installed version, or else the highest built-in package of that family (what its PAN-OS image ships). Nothing is ever removed."""
-    fixes, names, seen = [], set(), set()
-    a_inst = getattr(active, "plugins_installed", None)
-    p_inst = getattr(passive, "plugins_installed", None) if passive is not None else None
+
+def _plugin_version(text):
+    text = (text or "").strip()
+    return text if _PLUGIN_VERSION.match(text) else None
+
+
+def plugin_fixes(active, passive):
+    """What would level the plugins of an HA pair: ``(fixes, names)``. ``fixes`` is a list of {"name", "version", "on": "b" (the passive member; the active is never
+    touched), "had"}; ``names`` is every plugin family found to differ (one with no fix could not be resolved to a version).
+
+    PAN-OS's own plugin lines of the HA state are what decide. Each member's line for a plugin shows, as "peer", the version the OTHER member runs. Seen 2026-11-23: the
+    installed lists (`show plugins installed`) do NOT show every plugin that is running (a member kept running openconfig 2.0.0 that its list does not show), and a sync
+    needs the SAME version on both members (2.1.0 against 2.0.0 was refused as well). So:
+    * the active member's line reads Mismatch / its peer Not Installed: the passive lacks the plugin and the active's version cannot be seen yet. The fix names the
+      active's installed version, or else the highest built-in package of that family (a first try: once it is installed the passive's line shows what the active runs,
+      and ``prepare`` goes on to that version);
+    * both members have a line and the versions each reports for the other differ: the passive gets the active's version.
+    The installed lists decide only for a plugin family neither member has a line for. Nothing is ever removed, and the active member is never touched."""
+    fixes, names, lined = [], set(), set()
+    a_lines = dict(getattr(active, "ha_plugins", None) or {})
+    p_lines = dict(getattr(passive, "ha_plugins", None) or {}) if passive is not None else {}
+    for line, family in LINE_FAMILY.items():
+        a, p = a_lines.get(line), p_lines.get(line)
+        if not a and not p:
+            continue
+        lined.add(family)
+        v_active = _plugin_version((p or {}).get("peer"))          # what the passive says the active runs
+        v_passive = _plugin_version((a or {}).get("peer"))         # what the active says the passive runs
+        if a and (a.get("peer") or "") == "Not Installed":
+            names.add(family)
+            version = v_active or (getattr(active, "plugins_installed", None) or {}).get(family) or (getattr(active, "plugins_builtin", None) or {}).get(family)
+            if version:
+                fixes.append({"name": family, "version": version, "on": "b", "had": None})
+        elif a and p and v_active and v_passive and v_active != v_passive:
+            names.add(family)
+            fixes.append({"name": family, "version": v_active, "on": "b", "had": v_passive})
+        elif (a and a.get("local") == "Mismatch") or (p and p.get("local") == "Mismatch") or (p and (p.get("peer") or "") == "Not Installed"):
+            names.add(family)                                          # something PAN-OS calls different that this cannot name a fix for
+    a_inst, p_inst = getattr(active, "plugins_installed", None), getattr(passive, "plugins_installed", None) if passive is not None else None
     if a_inst is not None and p_inst is not None:
         for d in plugin_differences(a_inst, p_inst):
-            fixes.append(d)
-            names.add(d["name"])
-            seen.add(d["name"])
-    for me, other_side in ((active, "b"), (passive, "a")):
-        if me is None:
-            continue
-        for line in plugin_blockers(getattr(me, "ha_plugins", None)):
-            family = LINE_FAMILY.get(line, line.lower())
-            if family in seen:
+            if d["name"] in lined:
                 continue
-            names.add(family)
-            if (me.ha_plugins[line].get("peer") or "") != "Not Installed":
-                continue                                   # it is this member that lacks it: the other member's own look names the fix
-            version = (getattr(me, "plugins_installed", None) or {}).get(family) or (getattr(me, "plugins_builtin", None) or {}).get(family)
-            if version:
-                fixes.append({"name": family, "version": version, "on": other_side, "had": None})
-                seen.add(family)
+            names.add(d["name"])
+            if d["on"] == "b":
+                fixes.append(d)                                        # (when the ACTIVE member would have to change, it is a name with no fix: not done)
     return fixes, sorted(names)
 
 

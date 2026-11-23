@@ -23,6 +23,7 @@ class Node:
         self.asym = {"reject_non_syn": True, "reject_non_syn_config": None, "asymmetric_path": None}   # on by default; neither is in the config
         self.config_synced = True
         self.plugins = {}
+        self.ghost = {}                    # plugins PAN-OS runs that the installed list does not show (seen on the lab's active members): family -> version
         self.content = {}
         self.compat = {}
         self.preferred = state == "active"   # preemption hands the active role back to the original active
@@ -114,6 +115,17 @@ class SimBackend(Backend):
     def plugins_installed(self, serial):
         return dict(self._enter(serial, "plugins installed").plugins)
 
+    @staticmethod
+    def _running(node):
+        return {**node.ghost, **node.plugins}
+
+    def ha_plugin_versions(self, serial):
+        n = self._enter(serial, "ha plugin versions")
+        peer = self.nodes.get(n.peer)
+        mine, theirs = self._running(n), self._running(peer) if peer is not None else {}
+        return {line: {"local": "Compat Match" if theirs.get(family) else "Match", "peer": theirs.get(family) or "Not Installed"}
+                for line, family in {"OC": "openconfig", "VMS": "vm_series", "DLP": "dlp"}.items() if mine.get(family) or theirs.get(family)}
+
     def install_plugin(self, serial, name, version):
         n = self._enter(serial, "install plugin", name, version)
         n.plugins[name] = version
@@ -122,7 +134,7 @@ class SimBackend(Backend):
     def sync_to_peer(self, serial):
         n = self._enter(serial, "sync to peer")
         peer = self.nodes.get(n.peer)
-        if peer is not None and n.plugins != peer.plugins:           # PAN-OS refuses a sync between members whose plugins differ
+        if peer is not None and self._running(n) != self._running(peer):           # PAN-OS refuses a sync between members whose plugins differ (a plugin only the active member runs without listing it is not modelled)
             raise BackendError(f"{serial}: device refused the command: Failed to synchronize running configuration with HA peer; operation not allowed: Version mismatch with Peer for plugins")
         for node in (n, self.nodes.get(n.peer)):
             if node is not None:

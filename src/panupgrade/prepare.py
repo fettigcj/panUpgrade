@@ -432,6 +432,27 @@ def run(plan, approval, backend, journal, settings=None, stop=None):
                                    "); the config sync is NOT attempted until it is")
             return {"app": a.get("app"), "threat": a.get("threat"), "av": a.get("av"), "wildfire": a.get("wildfire")}
 
+        def level_plugin(task):
+            """Install the plugin the plan names; then read what the HA state says the ACTIVE member runs (the passive's peer line) and, when that is another
+            version, install that one: a sync needs the same version on both members, and the active's version is only visible once the passive has the plugin."""
+            line = next((k for k, v in xmlops.LINE_FAMILY.items() if v == task["name"]), None)
+            version, detail = task["version"], {}
+            for _round in range(3):
+                detail = backend.install_plugin(task["serial"], task["name"], version) or {}
+                if line is None:
+                    return detail
+                seen = None
+                deadline = time.monotonic() + (settings.content_settle_s if settings else 0)
+                while True:                                         # the HA state takes a little while to show the new plugin
+                    seen = xmlops._plugin_version((backend.ha_plugin_versions(task["serial"]).get(line) or {}).get("peer"))
+                    if seen or time.monotonic() >= deadline:
+                        break
+                    time.sleep(settings.poll_interval_s if settings else 1)
+                if seen is None or seen == version:
+                    return detail
+                version = seen                                      # the active runs another version: put that one on the passive
+            raise BackendError(f"{task['hostname']}: the HA state still reports a different {task['name']} version on its peer after {version} was installed")
+
         def sync():
             if backend.state(active)["ha_state"] != "active":
                 raise BackendError(f"{active} is not the active member any more")
@@ -449,7 +470,7 @@ def run(plan, approval, backend, journal, settings=None, stop=None):
         for task in unit.get("plugins", []):                # 0. level the plugins first: a sync between members whose plugins differ is refused
             if ok:
                 ok = attempt(active, f"install plugin {task['name']}-{task['version']}", f"{task['hostname']}: plugin {task['name']}-{task['version']} installed",
-                             lambda t=task: backend.install_plugin(t["serial"], t["name"], t["version"]), record_serial=task["serial"])
+                             lambda t=task: level_plugin(t), record_serial=task["serial"])
         if unit["content"]:
             # 1a. "check now" on both members first: on a pair that has never asked the update server, this alone can make PAN-OS
             #     recognise the content it already has. Read-only on the firewalls.

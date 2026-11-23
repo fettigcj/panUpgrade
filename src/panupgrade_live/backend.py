@@ -365,6 +365,12 @@ class LiveBackend(Backend):
         except (xmlops.XmlOpError, ET.ParseError) as exc:
             raise BackendError(f"{serial}: the installed plugins could not be read: {exc}") from None
 
+    def ha_plugin_versions(self, serial):
+        try:
+            return xmlops.parse_ha(self._op(serial)).get("ha_plugins") or {}
+        except (xmlops.XmlOpError, ET.ParseError) as exc:
+            raise BackendError(f"{serial}: the HA state could not be read: {exc}") from None
+
     def install_plugin(self, serial, name, version):
         """Put plugin ``name`` at ``version`` on this firewall, by the firewall's own update server: refresh its package list (`request plugins check`, which
         changes nothing installed), download the package unless it is already there, install it, and read the installed list again. Nothing is removed.

@@ -66,6 +66,7 @@ class Backend:
     def update_content(self, serial, family): raise NotImplementedError   # install the latest of: content | antivirus | wildfire
     def sync_to_peer(self, serial): raise NotImplementedError       # run on the ACTIVE member; returns when the sync job ends
     def plugins_installed(self, serial): raise NotImplementedError  # {name: version} of the INSTALLED plugins
+    def ha_plugin_versions(self, serial): raise NotImplementedError    # the plugin lines of this firewall's HA state: {"OC": {"local": "Compat Match", "peer": "2.0.0"}, ...}
     def install_plugin(self, serial, name, version): raise NotImplementedError   # install that plugin version on this firewall (refresh the list, download if needed, install); never removes one
     def suspend(self, serial): raise NotImplementedError
     def functional(self, serial): raise NotImplementedError

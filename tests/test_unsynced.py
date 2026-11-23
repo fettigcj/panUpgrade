@@ -238,5 +238,56 @@ class PluginLineOfTheHaState(unittest.TestCase):
         self.assertIn(("A2", "force_config_sync"), [(c["scope"], c["code"]) for c in p["cautions"]])
 
 
+class PluginVersionsThatDiffer(unittest.TestCase):
+    """Seen 2026-11-23 on the second lab pair: after the passive got openconfig 2.1.0 the sync was still refused, because the active member runs 2.0.0 (its installed list
+    shows no openconfig at all; only the passive's HA line, as its "peer", says 2.0.0). A sync needs the SAME version on both members."""
+
+    def data(self):
+        d = fleet_data(pair("A1", "A2", ha_config_sync=False))
+        same = {"dlp": "3.0.10", "vm_series": "5.0.0"}
+        d["devices"][0]["facts"]["plugins_installed"] = dict(same)
+        d["devices"][1]["facts"]["plugins_installed"] = dict(same)
+        d["devices"][0]["facts"]["ha_plugins"] = {"OC": {"local": "Mismatch", "peer": "Not Installed"}}
+        d["devices"][0]["facts"]["plugins_builtin"] = {"openconfig": "2.1.0"}
+        return d
+
+    def test_versions_each_member_reports_for_the_other_are_compared_and_the_passive_gets_the_actives(self):
+        from panupgrade import xmlops
+        fleet = FakeFleet(self.data())
+        a, p = fleet.facts("A1"), fleet.facts("A2")
+        a.ha_plugins = {"OC": {"local": "Compat Match", "peer": "2.1.0"}}          # what the active says the passive runs
+        p.ha_plugins = {"OC": {"local": "Compat Match", "peer": "2.0.0"}}          # what the passive says the active runs
+        self.assertEqual(xmlops.plugin_fixes(a, p), ([{"name": "openconfig", "version": "2.0.0", "on": "b", "had": "2.1.0"}], ["openconfig"]))
+        p.ha_plugins = {"OC": {"local": "Match", "peer": "2.1.0"}}
+        self.assertEqual(xmlops.plugin_fixes(a, p), ([], []))                       # the same version on both: nothing to level
+
+    def test_prepare_installs_a_first_try_then_the_version_the_peer_line_reveals_and_only_then_syncs(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        data = self.data()
+        s = settings.load(None, [])
+        plan = prepare.build(FakeFleet(data), s, Selection(), TARGET, TEST_RULES)
+        self.assertEqual(plan["units"][0]["plugins"][0]["version"], "2.1.0")        # the first try: the highest built-in package
+        sim = SimBackend(data)
+        sim.nodes["A1"].ghost = {"openconfig": "2.0.0"}                              # what the active really runs
+        result = prepare.run(plan, Approval(plan["hash"], plan["serials"]), sim, Journal.create(str(Path(tmp.name, "j")), plan["hash"]), s)
+        self.assertTrue(all(v[0] == "done" for v in result["outcome"].values()), result["outcome"])
+        self.assertEqual([x[2:] for x in sim.calls if x[1] == "install plugin"], [("openconfig", "2.1.0"), ("openconfig", "2.0.0")])
+        self.assertEqual(sim.nodes["A2"].plugins["openconfig"], "2.0.0")
+        self.assertTrue(sim.nodes["A2"].config_synced)
+
+    def test_a_first_try_that_is_already_right_is_installed_once(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        data = self.data()
+        s = settings.load(None, [])
+        plan = prepare.build(FakeFleet(data), s, Selection(), TARGET, TEST_RULES)
+        sim = SimBackend(data)
+        sim.nodes["A1"].ghost = {"openconfig": "2.1.0"}
+        result = prepare.run(plan, Approval(plan["hash"], plan["serials"]), sim, Journal.create(str(Path(tmp.name, "j")), plan["hash"]), s)
+        self.assertTrue(all(v[0] == "done" for v in result["outcome"].values()), result["outcome"])
+        self.assertEqual(len([x for x in sim.calls if x[1] == "install plugin"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

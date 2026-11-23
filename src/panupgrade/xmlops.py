@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from .model import DeviceRef, Facts
 from .sources import Source, SourceError
 
-READ_ONLY_PREFIXES = ("show ", "check ", "request system software check", "request system software info",
+READ_ONLY_PREFIXES = ("show ", "check ", "request system software check", "request system software info", "request plugins check",
                       "request content upgrade check", "request anti-virus upgrade check", "request wildfire upgrade check")
 # Spelled out whole, never as a prefix: `debug swm status` only prints the software manager's partition table (which version runs, which is installed and
 # waiting for a reboot). It is the one debug command panUpgrade sends, and it changes nothing. Nothing else beginning with "debug" is allowed.
@@ -213,6 +213,56 @@ def parse_free_mb(op, mount="/opt/panrepo"):
     return None
 
 
+def parse_plugins_installed(op):
+    """{plugin name: version} of what is INSTALLED, from `show plugins installed` (entries like name "openconfig", version "openconfig-2.1.0").
+    Seen 2026-11-23 on PAN-OS 10.2.18-h14. Not the package list: its installed flag read "no" for an installed openconfig."""
+    node = _result(op("show plugins installed"), "show plugins installed")
+    out = {}
+    for entry in node.iter("entry"):
+        name, version = (_text(entry, "name") or "").strip(), (_text(entry, "version") or "").strip()
+        if name:
+            out[name] = version[len(name) + 1:] if version.startswith(name + "-") else version
+    return out
+
+
+def parse_plugin_packages(op):
+    """{package file name: {"downloaded": bool, "installed": bool}} from `show plugins packages` (the package file is like "openconfig-2.1.0")."""
+    node = _result(op("show plugins packages"), "show plugins packages")
+    return {(_text(e, "pkg-file") or "").strip(): {"downloaded": _yes(_text(e, "downloaded")) is True, "installed": _yes(_text(e, "installed")) is True}
+            for e in node.iter("entry") if (_text(e, "pkg-file") or "").strip()}
+
+
+def _plugin_key(version):
+    return [int(x) if x.isdigit() else 0 for x in re.split(r"[.\-]+|h", version or "") if x != ""]
+
+
+def plugin_differences(a, b):
+    """What would level the plugins of two HA members ``a`` and ``b`` (dicts name -> version): a list of {"name", "version", "on": "a" | "b", "had"}.
+    A plugin only one member has goes onto the other; a plugin both have at different versions goes, at the HIGHER version (the lower one is
+    brought up; nothing is ever removed or taken down). Empty when they match."""
+    out = []
+    for name in sorted(set(a) | set(b)):
+        va, vb = a.get(name), b.get(name)
+        if va == vb:
+            continue
+        if va is None or (vb is not None and _plugin_key(vb) > _plugin_key(va)):
+            out.append({"name": name, "version": vb, "on": "a", "had": va})
+        else:
+            out.append({"name": name, "version": va, "on": "b", "had": vb})
+    return out
+
+
+# The plugin lines of `show high-availability state`: "OC" and "VMS". Seen 2026-11-22 on PAN-OS 10.2.18-h14: where a plugin is installed on one member of a
+# pair only, the member that has it reads "Mismatch" and its peer's line reads "Not Installed", and the config sync is refused ("Version mismatch with
+# Peer for OC"). Which plugin "OC" is is not confirmed (probably OpenConfig).
+PLUGIN_LINES = ("OC", "VMS")
+
+
+def plugin_blockers(plugins):
+    """The plugin names whose difference between the two HA members makes PAN-OS refuse a config sync (sorted)."""
+    return sorted(name for name, seen in (plugins or {}).items() if seen.get("local") == "Mismatch" or seen.get("peer") == "Not Installed")
+
+
 def parse_ha(op):
     """dict of HA facts; keys absent from the response are simply missing (no data)."""
     node = _result(op("show high-availability state"), "show high-availability state")
@@ -240,6 +290,10 @@ def parse_ha(op):
         out["preemption"] = _yes(_text(group, "local-info/preemptive"))
     # PAN-OS's own sanity check on whether the members' content can coexist. Seen 2026-10-29: "Match" on pairs whose config sync
     # works, "Unknown" on pairs whose config sync is refused, "Mismatch" for the PAN-DB URL version (never judged: the standby usually cannot reach the URL cloud).
+    plugins = {k: {"local": _text(group, f"local-info/{k}") or "", "peer": _text(group, f"peer-info/{k}") or ""} for k in PLUGIN_LINES}
+    plugins = {k: v for k, v in plugins.items() if v["local"] or v["peer"]}
+    if plugins:
+        out["ha_plugins"] = plugins
     compat = {k: _text(group, f"local-info/{k}-compat") for k in ("build", "app", "threat", "av", "url", "iot")}
     if any(compat.values()):
         out["ha_content_compat"] = compat
@@ -286,6 +340,7 @@ def collect_facts(op, peer_serial=None):
 
     attempt("images", parse_software_list, apply_software)
     attempt("content", parse_content_versions, lambda v: setattr(facts, "content_versions", v))
+    attempt("plugins", parse_plugins_installed, lambda v: setattr(facts, "plugins_installed", v))
     attempt("device certificate", parse_device_cert, lambda v: setattr(facts, "device_cert", v))
     attempt("clock", parse_clock, lambda v: setattr(facts, "clock_utc", v))
 
@@ -296,6 +351,7 @@ def collect_facts(op, peer_serial=None):
         facts.ha_session_sync = ha.get("ha_session_sync")
         facts.ha_links_ok = ha.get("ha_links_ok")
         facts.ha_content_compat = ha.get("ha_content_compat")
+        facts.ha_plugins = ha.get("ha_plugins")
         facts.preemption = ha.get("preemption")
         if facts.ha_mode not in (None, "none"):
             facts.peer_serial = peer_serial

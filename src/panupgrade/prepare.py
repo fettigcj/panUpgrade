@@ -28,7 +28,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from . import paths
+from . import paths, xmlops
 from .executor import BackendError, ExecutionRefused
 from . import progress
 from .sources import SourceError, read_facts
@@ -208,21 +208,38 @@ def build(source, settings, selection, target=None, rules=None):
                 families = ["content"]            # same versions, but PAN-OS itself cannot confirm the pair's content is compatible
                 reason = "PAN-OS reports the HA content compatibility as " + ", ".join(f"{k}: {compat[k]}" for k in bad)
             need_content = bool(families) and settings.sync_content == "prepare"
-            need_cfg = cfg_off and settings.sync_to_peer == "Both"
+            # HA members whose INSTALLED plugins differ cannot sync (PAN-OS: "Version mismatch with Peer"). plugin_mismatch = fix levels them first: the member
+            # that lacks a plugin gets the version its peer runs (at different versions the higher one), nothing is removed.
+            plugin_diffs = xmlops.plugin_differences(facts.plugins_installed, peer_facts.plugins_installed) if (
+                peer_facts is not None and facts.plugins_installed is not None and peer_facts.plugins_installed is not None) else None
+            plugin_names = sorted({d["name"] for d in plugin_diffs}) if plugin_diffs else (
+                [] if plugin_diffs == [] else sorted(set(xmlops.plugin_blockers(facts.ha_plugins)) | set(xmlops.plugin_blockers(getattr(peer_facts, "ha_plugins", None)))))
+            plugin_fix = []
+            if cfg_off and plugin_names:
+                if plugin_diffs and settings.plugin_mismatch == "fix" and settings.sync_to_peer != "Disable":
+                    own = {"a": (ref.serial, ref.hostname), "b": (peer, refs[peer].hostname if peer in refs else peer)}
+                    plugin_fix = [{"serial": own[d["on"]][0], "hostname": own[d["on"]][1], "name": d["name"], "version": d["version"], "had": d["had"]} for d in plugin_diffs]
+                else:
+                    why = ("plugin_mismatch is 'leave'" if settings.plugin_mismatch == "leave" else
+                           "sync_to_peer is Disable" if plugin_diffs else "the installed plugin lists could not be compared")
+                    notes.append({"serial": ref.serial, "hostname": ref.hostname,
+                                  "why": f"config is not synchronized with the passive member and cannot be: the plugin(s) {', '.join(plugin_names)} differ between the members "
+                                         f"(PAN-OS refuses the sync), and {why}, so prepare leaves them and does not try the sync"})
+            need_cfg = cfg_off and settings.sync_to_peer == "Both" and (not plugin_names or bool(plugin_fix))
             if families and not need_content:
                 notes.append({"serial": ref.serial, "hostname": ref.hostname,
                               "why": f"dynamic content is not level between the HA members ({reason}); "
                                      f"sync_content is 'never', so prepare leaves it and will not attempt a config sync"})
-            if cfg_off and not need_cfg:
+            if cfg_off and not need_cfg and not plugin_names:
                 notes.append({"serial": ref.serial, "hostname": ref.hostname,
                               "why": ("config is not synchronized with the passive member; sync_to_peer is "
                                       f"'{settings.sync_to_peer}', so prepare leaves it" +
                                       (" (the upgrade run will sync it)" if settings.sync_to_peer == "UpgradeOnly"
                                        else " (set sync_to_peer to Both or UpgradeOnly to have the tool fix it)"))})
-            if need_content or need_cfg:
+            if need_content or need_cfg or plugin_fix:
                 units.append({"active": ref.serial, "active_name": ref.hostname, "passive": peer,
                               "passive_name": refs[peer].hostname if peer in refs else peer,
-                              "sync_config": need_cfg, "content": families if need_content else [],
+                              "sync_config": need_cfg, "plugins": plugin_fix, "content": families if need_content else [],
                               "content_diffs": {k: list(v) for k, v in diffs.items()}, "content_reason": reason})
     in_units = {s for u in units if u["content"] for s in (u["active"], u["passive"])}
     content_tasks = [t for t in content_tasks if t["serial"] not in in_units]        # a pair's own content step already covers its members
@@ -258,6 +275,8 @@ def work_groups(plan):
         key = frozenset({unit["active"], unit["passive"]})
         member(key, unit["passive"], unit["passive_name"])
         member(key, unit["active"], unit["active_name"])["expected"].append("sync to peer" if unit["sync_config"] else "content check")
+        for task in unit.get("plugins", []):
+            member(key, task["serial"], task["hostname"])["expected"].append(f"install plugin {task['name']}-{task['version']}")
     partner = {s: frozenset({u["active"], u["passive"]}) for u in plan["units"] for s in (u["active"], u["passive"])}
     for serial, (peer, _name) in pairs.items():
         partner.setdefault(serial, frozenset({serial, peer}))
@@ -295,6 +314,9 @@ def describe(plan):
     """One line per task, for the screen and for the approval prompt."""
     lines = []
     for u in plan["units"]:
+        for t in u.get("plugins", []):
+            lines.append(f"{t['hostname']}: install the plugin {t['name']}-{t['version']} through its own update server (has {t['had'] or 'none'}; its HA peer runs it), "
+                         f"because PAN-OS refuses a configuration sync between members whose plugins differ. Nothing is removed")
         if u["content"]:
             lines.append(f"{u['active_name']} + {u['passive_name']}: 'check now' on both members, then (only if PAN-OS still cannot confirm) install the latest {' and '.join(u['content'])} update on both "
                          f"({u.get('content_reason') or 'versions differ'}{': ' + diff_text(u['content_diffs']) if u['content_diffs'] else ''})")
@@ -425,6 +447,10 @@ def run(plan, approval, backend, journal, settings=None, stop=None):
             return
         ok = True
         settled = False
+        for task in unit.get("plugins", []):                # 0. level the plugins first: a sync between members whose plugins differ is refused
+            if ok:
+                ok = attempt(active, f"install plugin {task['name']}-{task['version']}", f"{task['hostname']}: plugin {task['name']}-{task['version']} installed",
+                             lambda t=task: backend.install_plugin(t["serial"], t["name"], t["version"]), record_serial=task["serial"])
         if unit["content"]:
             # 1a. "check now" on both members first: on a pair that has never asked the update server, this alone can make PAN-OS
             #     recognise the content it already has. Read-only on the firewalls.

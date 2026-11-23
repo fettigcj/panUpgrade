@@ -661,5 +661,59 @@ class ReadsThatGetNoAnswer(unittest.TestCase):
                 b.sync_to_peer("S1")
 
 
+PKG = lambda *rows: ok("<plugins>" + "".join(f"<entry><name>{n.rsplit('-', 1)[0]}</name><version>{n.rsplit('-', 1)[1]}</version><pkg-file>{n}</pkg-file>"
+                                              f"<downloaded>{d}</downloaded><installed>no</installed></entry>" for n, d in rows) + "</plugins>")
+INSTALLED = lambda *rows: ok("<list>" + "".join(f"<entry><type>x</type><name>{n}</name><version>{n}-{v}</version><desc>d</desc></entry>" for n, v in rows) + "</list>")
+PLUGIN_CHECK = ("op", "request plugins check", "S1")
+PLUGIN_PKGS = ("op", "show plugins packages", "S1")
+PLUGIN_LIST = ("op", "show plugins installed", "S1")
+PLUGIN_DL = ("write", "<request><plugins><download><file>openconfig-2.1.0</file></download></plugins></request>", "S1")
+PLUGIN_INS = ("write", "<request><plugins><install>openconfig-2.1.0</install></plugins></request>", "S1")
+
+
+class PluginInstall(unittest.TestCase):
+    """Putting one plugin version on a firewall that lacks it (UNVERIFIED shapes of the download and install replies: a job id, as for PAN-OS images)."""
+
+    def test_it_refreshes_the_list_downloads_installs_and_reads_the_installed_list_again(self):
+        api = Scripted({PLUGIN_CHECK: [ok("List of plugin packages has been updated")], PLUGIN_PKGS: [PKG(("openconfig-2.1.0", "no"))],
+                        PLUGIN_DL: [ok("<job>7</job>")], JOBQ(7): [JOB("FIN")], PLUGIN_INS: [ok("<job>8</job>")], JOBQ(8): [JOB("FIN")],
+                        PLUGIN_LIST: [INSTALLED(("openconfig", "2.1.0"))]})
+        self.assertEqual(backend(api).install_plugin("S1", "openconfig", "2.1.0"), {"installed": "openconfig-2.1.0"})
+        self.assertEqual([k[0] + ":" + k[1] for k in api.log if k[0] == "write"], ["write:" + PLUGIN_DL[1], "write:" + PLUGIN_INS[1]])
+
+    def test_a_package_the_firewall_already_holds_is_not_downloaded_again(self):
+        api = Scripted({PLUGIN_CHECK: [ok()], PLUGIN_PKGS: [PKG(("openconfig-2.1.0", "yes"))], PLUGIN_INS: [ok("<job>8</job>")], JOBQ(8): [JOB("FIN")],
+                        PLUGIN_LIST: [INSTALLED(("openconfig", "2.1.0"))]})
+        backend(api).install_plugin("S1", "openconfig", "2.1.0")
+        self.assertNotIn(PLUGIN_DL, api.log)
+
+    def test_a_version_the_firewall_does_not_offer_is_an_error_before_anything_is_sent(self):
+        api = Scripted({PLUGIN_CHECK: [ok()], PLUGIN_PKGS: [PKG(("openconfig-2.0.1", "no"))]})
+        with self.assertRaisesRegex(BackendError, "does not offer openconfig-2.1.0"):
+            backend(api).install_plugin("S1", "openconfig", "2.1.0")
+        self.assertEqual([k for k in api.log if k[0] == "write"], [])
+
+    def test_a_refused_install_job_carries_the_firewalls_own_words(self):
+        api = Scripted({PLUGIN_CHECK: [ok()], PLUGIN_PKGS: [PKG(("openconfig-2.1.0", "yes"))], PLUGIN_INS: [ok("<job>8</job>")],
+                        JOBQ(8): [JOB("FIN", "FAIL", "<line>Installation of openconfig-2.1.0 failed: Minimum software version 12.1.0 required</line>")]})
+        with self.assertRaisesRegex(BackendError, "Minimum software version 12.1.0 required"):
+            backend(api).install_plugin("S1", "openconfig", "2.1.0")
+
+    def test_an_install_that_does_not_show_in_the_installed_list_is_an_error(self):
+        api = Scripted({PLUGIN_CHECK: [ok()], PLUGIN_PKGS: [PKG(("openconfig-2.1.0", "yes"))], PLUGIN_INS: [ok("<job>8</job>")], JOBQ(8): [JOB("FIN")],
+                        PLUGIN_LIST: [INSTALLED(("dlp", "3.0.10"))]})
+        with self.assertRaisesRegex(BackendError, "not installed, not 2.1.0"):
+            backend(api).install_plugin("S1", "openconfig", "2.1.0")
+
+    def test_only_a_well_formed_plugin_package_may_be_downloaded_or_installed(self):
+        w = WriteApi("192.0.2.1", key="not-a-key")
+        for bad in ("<request><plugins><install>openconfig-2.1.0; reboot</install></plugins></request>",
+                    "<request><plugins><download><file>../x-1.0.0</file></download></plugins></request>",
+                    "<request><plugins><uninstall>openconfig-2.1.0</uninstall></plugins></request>",
+                    "<request><plugins><install>openconfig</install></plugins></request>"):
+            with self.assertRaises(PermissionError, msg=bad):
+                w.write_xml(bad, "S1")
+
+
 if __name__ == "__main__":
     unittest.main()

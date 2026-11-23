@@ -144,6 +144,22 @@ class Following(Folder):
         self.assertEqual([r.get("serial") for r in records], [None, "A1"])
         self.assertTrue(worker.sidecar(self.journal, ".viewer").exists())              # it said it was looking
 
+    def test_a_viewer_that_finds_the_clock_far_ahead_says_the_computer_was_asleep(self):
+        proc, lines, now = self.Proc(), [], {"t": 1000.0}
+
+        def clock():
+            return now["t"]
+
+        def sleep(_):
+            now["t"] += 1.0
+            if now["t"] == 1001.0:
+                now["t"] += 7200                       # the lid closed here
+            else:
+                proc.ended, proc.returncode = True, 0
+        self.journal.write_text(json.dumps({"type": "header", "plan_hash": "h"}) + chr(10), encoding="utf-8")
+        worker.follow(self.journal, proc=proc, on_line=lines.append, clock=clock, sleep=sleep)
+        self.assertTrue(any("probably asleep" in l and "120 minute" in l for l in lines), lines)
+
     def test_a_stop_wanted_by_the_viewer_reaches_the_worker_once(self):
         proc, wants = self.Proc(), {"n": 0}
 

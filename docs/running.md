@@ -160,6 +160,7 @@ Ahead of the window, `prepare` can:
 
 - bring dynamic content (apps and threats, antivirus, WildFire) level between HA members. If it cannot, the config sync below is not attempted.
 - force an active-to-passive config sync on pairs that read "not synchronized" (needs `sync_to_peer = "prepare"`; the passive is backed up first).
+- level the installed plugins of HA members first, where they differ (`plugin_mismatch = fix`, the default): PAN-OS refuses a config sync between members whose plugins differ ("Version mismatch with Peer"), so the member that lacks a plugin gets the version its peer runs, through its own update server. Nothing is removed or taken down. `plugin_mismatch = leave` touches no plugin, and the pair is then handled like any pair that cannot be synced (`ha_config_unsynced`). The plan holds such a pair until `prepare` has levelled it.
 - with `--target`, pre-download the image, and any base image the path needs, onto each selected firewall.
 
 It never installs, reboots or fails anything over. Whatever it cannot fix stays in the plan, which it re-runs at the end.

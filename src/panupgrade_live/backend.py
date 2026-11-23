@@ -359,6 +359,34 @@ class LiveBackend(Backend):
         self._wait_job(serial, job, self.settings.install_timeout_s, f"{family} install")
         return {"installed": latest}
 
+    def plugins_installed(self, serial):
+        try:
+            return xmlops.parse_plugins_installed(self._op(serial))
+        except (xmlops.XmlOpError, ET.ParseError) as exc:
+            raise BackendError(f"{serial}: the installed plugins could not be read: {exc}") from None
+
+    def install_plugin(self, serial, name, version):
+        """Put plugin ``name`` at ``version`` on this firewall, by the firewall's own update server: refresh its package list (`request plugins check`, which
+        changes nothing installed), download the package unless it is already there, install it, and read the installed list again. Nothing is removed.
+        UNVERIFIED until the first live run: the shape of the download and install requests and their replies (a job id, as for PAN-OS images)."""
+        package = f"{name}-{version}"
+        try:
+            self.read.op("request plugins check", target=serial)
+            have = xmlops.parse_plugin_packages(self._op(serial))
+        except (SourceError, xmlops.XmlOpError, ET.ParseError) as exc:
+            raise BackendError(f"{serial}: the plugin package list could not be read: {exc}") from None
+        if package not in have:
+            raise BackendError(f"{serial}: its package list does not offer {package}, so it cannot be installed there")
+        if not have[package]["downloaded"]:
+            job = self._job_id(self._send(f"<request><plugins><download><file>{package}</file></download></plugins></request>", serial))
+            self._wait_job(serial, job, self.settings.download_timeout_s, f"plugin {package} download", self.settings.job_stall_s)
+        job = self._job_id(self._send(f"<request><plugins><install>{package}</install></plugins></request>", serial))
+        self._wait_job(serial, job, self.settings.install_timeout_s, f"plugin {package} install")
+        now = self.plugins_installed(serial).get(name)
+        if now != version:
+            raise BackendError(f"{serial}: after the install the firewall lists {name} as {now or 'not installed'}, not {version}")
+        return {"installed": package}
+
     def sync_to_peer(self, serial):
         self._send(SYNC, serial)
         seen = {}

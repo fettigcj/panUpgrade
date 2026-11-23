@@ -32,6 +32,7 @@ class WorkerBusy(Exception):
 LOCK_NAME = "worker.lock"
 HEARTBEAT_S = 2.0
 CHECKIN_S = 5.0
+ASLEEP_S = 60.0           # a viewer that finds more than this between two looks of about a second was suspended with its computer
 
 
 # ---- small file helpers
@@ -274,7 +275,7 @@ def follow(journal, proc=None, on_line=None, on_record=None, want_stop=None, clo
     Raising (Ctrl-C) leaves the worker running."""
     out = Tail(sidecar(journal, ".out"), out_from or 0)          # out_from: where this run's output begins in the file (a resumed run appends to it)
     records = Tail(journal, 0)
-    last_checkin, asked_stop = 0.0, False
+    last_checkin, asked_stop, last_tick = 0.0, False, clock()
 
     def drain():
         for line in out.lines():
@@ -290,6 +291,10 @@ def follow(journal, proc=None, on_line=None, on_record=None, want_stop=None, clo
 
     while True:
         now = clock()
+        if now - last_tick > ASLEEP_S and on_line:      # the loop sleeps about a second: a long jump means this computer was suspended, and the run stood still with it
+            on_line(f"[WARN] no time passed for this run for {int((now - last_tick) // 60)} minute(s): this computer was probably asleep. The firewalls kept working; "
+                    f"the tool did not (check what they did in the log above, and keep the computer awake for a long run).")
+        last_tick = now
         if now - last_checkin >= CHECKIN_S:
             checkin(journal, clock)
             last_checkin = now

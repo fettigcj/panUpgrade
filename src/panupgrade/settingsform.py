@@ -25,7 +25,7 @@ SAVE_ONLY, SAVE_EXIT, QUIT = 0, 1, 2
 SECTIONS = [
     ("HA behaviour", ["session_noise_floor"]),
     ("  Active/Passive pairs", ["pair_session_warn_band", "pair_session_fail_band", "pair_session_wait_s", "upgrade_first", "restore_roles", "upgrade_suspended", "pair_tolerate_asymmetry", "sync_to_peer", "sync_timeout_s",
-                               "busy_wait_s", "settle_after_failover_s", "settle_after_reboot_s", "ha_config_unsynced", "blocked_peer", "sync_content", "content_settle_s"]),
+                               "busy_wait_s", "settle_after_failover_s", "settle_after_reboot_s", "ha_config_unsynced", "plugin_mismatch", "blocked_peer", "sync_content", "content_settle_s"]),
     ("  Stand-alone groups", ["accept_standalone_outage", "group_install_tolerance", "group_tolerate_asymmetry", "lb_drain_profile", "lb_drain_probe_protocol", "lb_drain_wait_s",
                                "group_session_warn_band", "group_session_fail_band", "group_session_wait_s"]),
     ("Panorama range", ["spread_limit", "panorama_compare"]),
@@ -138,6 +138,13 @@ INFO = {
                            "Only used when sync_to_peer is Disable; with Both or UpgradeOnly the tool syncs the pair itself.",
                            {"block": "refuse to plan such a pair at all, so nobody runs into it unread",
                             "warn": "plan it anyway, flag that moment on the active member, and accept it when the batch is prepared"}),
+    "plugin_mismatch": ("HA members whose installed plugins differ cannot synchronize their configuration: PAN-OS refuses it (\"Version mismatch with Peer\"). "
+                        "A plugin installed on one member only is the usual cause.\n\n"
+                        "Nothing is ever removed or taken down; the tool only adds. Where both members have a plugin at different versions, the lower one is brought up to the higher.",
+                        {"fix": "the default. `prepare` installs the missing plugin (the version the peer runs) on the member that lacks it, through that firewall's own "
+                                "update server, then syncs. A plan that still finds a difference says to run prepare",
+                         "leave": "touch no plugin. The pair cannot be synced, so it is planned like any pair that cannot be (ha_config_unsynced: refused, or "
+                                  "flagged at the fail-over)"}),
     "blocked_peer": ("What to do with an HA member that could be upgraded when the other member of its pair is blocked by a check (or "
                      "could not be read). The active member's upgrade hands the traffic to its peer for the whole reboot, and either "
                      "upgrade leaves the pair on two releases. A peer that is only not selected, or already on the target, is not affected.",

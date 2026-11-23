@@ -22,6 +22,7 @@ class Node:
         self.profiles = {"LB-Probe": {"ssh": "yes", "ping": "yes"}}       # interface management profiles: name -> {protocol: "yes" | "no"} (absent = not set)
         self.asym = {"reject_non_syn": True, "reject_non_syn_config": None, "asymmetric_path": None}   # on by default; neither is in the config
         self.config_synced = True
+        self.plugins = {}
         self.content = {}
         self.compat = {}
         self.preferred = state == "active"   # preemption hands the active role back to the original active
@@ -43,6 +44,7 @@ class SimBackend(Backend):
             self.nodes[entry["serial"]].config_synced = f.get("ha_config_sync") is not False
             self.nodes[entry["serial"]].downloaded = set(f.get("images_downloaded") or [])
             self.nodes[entry["serial"]].content = dict(f.get("content_versions") or {})
+            self.nodes[entry["serial"]].plugins = dict(f.get("plugins_installed") or {})
             self.nodes[entry["serial"]].compat = dict(f.get("ha_content_compat") or {})
         self.fail = dict(fail or {})
         self.takeover_ratio = takeover_ratio
@@ -109,8 +111,19 @@ class SimBackend(Backend):
                 node.compat.update({k: "Match" for k in ("app", "threat", "av", "iot")})
         return {"installed": self.LATEST[family]}
 
+    def plugins_installed(self, serial):
+        return dict(self._enter(serial, "plugins installed").plugins)
+
+    def install_plugin(self, serial, name, version):
+        n = self._enter(serial, "install plugin", name, version)
+        n.plugins[name] = version
+        return {"installed": f"{name}-{version}"}
+
     def sync_to_peer(self, serial):
         n = self._enter(serial, "sync to peer")
+        peer = self.nodes.get(n.peer)
+        if peer is not None and n.plugins != peer.plugins:           # PAN-OS refuses a sync between members whose plugins differ
+            raise BackendError(f"{serial}: device refused the command: Failed to synchronize running configuration with HA peer; operation not allowed: Version mismatch with Peer for plugins")
         for node in (n, self.nodes.get(n.peer)):
             if node is not None:
                 node.config_synced = True

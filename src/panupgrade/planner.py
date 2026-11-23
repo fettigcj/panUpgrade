@@ -20,7 +20,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from . import __version__, checks, paths, progress
+from . import __version__, checks, paths, progress, xmlops
 from .model import (WAIT_FIRST, WAIT_PASSIVE, ERROR, EXCLUDED, FAIL, INFO, NO_DATA, NOT_APPLICABLE, SAID_ONCE, SKIP, WARN, CheckResult)
 from .sources import SourceError, read_facts
 from .versions import Version, VersionError
@@ -168,6 +168,7 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
             devices[serial]["group_peers"] = sorted(s for s, other in selection.groups.items() if other == name and s != serial)
     _apply_pending(devices, ctxs, by_serial, selection, target)
     _apply_standalone(devices, ctxs, selection)
+    _apply_plugins(devices, ctxs, settings)
     _apply_pair_rules(devices, ctxs, by_serial, target)
     _apply_positions(devices, settings)
 
@@ -355,6 +356,54 @@ def _apply_standalone(devices, ctxs, selection):
                                               "standalone firewall: the reboot is an outage; set accept_standalone_outage (Settings) or use --accept-standalone-outage",
                                               kind=EXCLUDED).to_dict())
             dev["verdict"], dev["skip_kind"] = "skipped", EXCLUDED
+
+
+def _apply_plugins(devices, ctxs, settings):
+    """HA members whose installed plugins differ cannot sync their configuration: PAN-OS refuses it. The unsynced pair is then judged here, on the ACTIVE
+    member's word, and both members get the same verdict. plugin_mismatch = fix: blocked until `prepare` has levelled the plugins (the plan says what it will
+    install). leave: judged like any pair that cannot be synced (ha_config_unsynced: refused, or flagged at the fail-over)."""
+    for serial, ctx in ctxs.items():
+        f = ctx.facts
+        if f is None or f.ha_mode != "active-passive" or f.ha_state != "active" or f.ha_config_sync is not False or devices.get(serial) is None:
+            continue
+        peer = devices[serial].get("peer_serial")
+        peer_facts = ctxs[peer].facts if peer in ctxs else None
+        diffs = None
+        if f.plugins_installed is not None and peer_facts is not None and peer_facts.plugins_installed is not None:
+            diffs = xmlops.plugin_differences(f.plugins_installed, peer_facts.plugins_installed)
+        names = sorted({d["name"] for d in diffs}) if diffs else ([] if diffs == [] else xmlops.plugin_blockers(f.ha_plugins))
+        if not names:
+            continue
+        members = [serial] + ([peer] if peer in devices else [])
+        will = ""
+        if diffs:
+            names_of = {"a": devices[serial]["hostname"], "b": devices[peer]["hostname"] if peer in devices else "its peer"}
+            will = "; ".join(f"{d['name']}-{d['version']} on {names_of[d['on']]} (has {d['had'] or 'none'})" for d in diffs)
+        for member in members:
+            dev = devices[member]
+            if not any(r["check"] == "ha_peer" and r.get("ack") == "force_config_sync" for r in dev["results"]):
+                continue                                           # sync_to_peer = Disable: the ordinary unsynced rules above already judged it
+            if settings.plugin_mismatch == "fix" and diffs:
+                _swap(dev, CheckResult("ha_peer", FAIL,
+                                       f"the passive member's configuration cannot be synchronized with the active member: the installed plugin(s) {', '.join(names)} differ "
+                                       f"between the two members, and PAN-OS refuses a sync then ('Version mismatch with Peer'). Run `prepare` first: with plugin_mismatch = fix "
+                                       f"it installs {will}, then syncs. Nothing is removed."))
+            elif settings.ha_config_unsynced == "warn":
+                text = (f"FAILOVER RISK. The plugin(s) {', '.join(names)} differ between the members, so PAN-OS refuses the configuration sync "
+                        f"and this pair's passive member does NOT have the active member's configuration. When the ACTIVE member suspends, the passive runs ITS OWN "
+                        f"configuration, so anything that differs changes at that moment. plugin_mismatch is '{settings.plugin_mismatch}'"
+                        + (" (the installed lists could not be compared)" if diffs is None else "") + ". Accepting this when you prepare the batch lets the upgrade proceed.")
+                if f.ha_state == "active" and member == serial:
+                    _swap(dev, CheckResult("ha_peer", WARN, text, ack="failover_to_unsynced_passive"))
+                else:
+                    _swap(dev, CheckResult("ha_peer", INFO, "config not synchronized with the active member (the plugins differ); the risk is at the later failover "
+                                                            "and is flagged on the active member."))
+            else:
+                _swap(dev, CheckResult("ha_peer", FAIL,
+                                       f"the passive member's configuration cannot be synchronized: the plugin(s) {', '.join(names)} differ between the members "
+                                       f"(PAN-OS refuses the sync)" + (f". plugin_mismatch = leave keeps the tool away from plugins" if settings.plugin_mismatch == "leave" else
+                                                                       ". The installed plugin lists could not be compared, so the tool cannot level them") +
+                                       f"; set plugin_mismatch = fix, level them yourself, or set ha_config_unsynced = warn to proceed anyway"))
 
 
 def _apply_pair_rules(devices, ctxs, by_serial, target):

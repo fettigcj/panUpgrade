@@ -43,6 +43,10 @@ def responses(**over):
                                               "<validity>Valid</validity><not_valid_before>2026/10/29 13:18:01 PDT</not_valid_before>"
                                               "<not_valid_after>2027/01/27 12:18:00 PST</not_valid_after></device-certificate>"),
         "show clock": ok("Thu Oct 29 13:22:23 PDT 2026"),
+        # as a lab firewall printed it (2026-11-23), PAN-OS 10.2
+        "show plugins installed": ok("<list><entry><type>dlp_config</type><name>dlp</name><version>dlp-3.0.10</version><desc>DLP</desc></entry>"
+                                     "<entry><type>mgmt</type><name>openconfig</name><version>openconfig-2.1.0</version><desc>Openconfig</desc></entry>"
+                                     "<entry><type>virtualization</type><name>vm_series</name><version>vm_series-3.0.14</version><desc>VM-Series</desc></entry></list>"),
         "request system software info": ok("<sw-updates><versions><entry><version>20.2.3</version><downloaded>yes</downloaded></entry>"
                                            "<entry><version>20.2.9</version><downloaded>no</downloaded></entry></versions></sw-updates>"),
     }

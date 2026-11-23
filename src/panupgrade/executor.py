@@ -65,6 +65,8 @@ class Backend:
     def refresh_updates(self, serial, families): raise NotImplementedError   # "check now" for content | antivirus | wildfire (read-only)
     def update_content(self, serial, family): raise NotImplementedError   # install the latest of: content | antivirus | wildfire
     def sync_to_peer(self, serial): raise NotImplementedError       # run on the ACTIVE member; returns when the sync job ends
+    def plugins_installed(self, serial): raise NotImplementedError  # {name: version} of the INSTALLED plugins
+    def install_plugin(self, serial, name, version): raise NotImplementedError   # install that plugin version on this firewall (refresh the list, download if needed, install); never removes one
     def suspend(self, serial): raise NotImplementedError
     def functional(self, serial): raise NotImplementedError
     def lb_profile(self, serial, profile, protocols): raise NotImplementedError    # {"exists": bool, "values": {protocol: "yes" | "no" | None (not set)}, "origin": "local" | "template" | None} of an interface management profile
@@ -97,6 +99,10 @@ def run(plan, approval, backend, journal, settings, stop=None, ledger=None):
     state = {"failures": sum(1 for s in devices if _failed_in_journal(journal, s))}
 
     def do_unit(unit):
+        if stop.is_set() and not any(any(not e["step"].startswith("asymmetry") for e in journal.steps_of(s)) for s in unit):
+            for serial in unit:                        # stopped before this unit began: no window is opened for it (that is minutes of commits for nothing)
+                windows.resolve(serial)
+            return {serial: ("not_started", "stopped by you before it started") for serial in unit}
         refusal = windows.begin([s for s in unit if s in approval.serials])
         if refusal:
             for serial in unit:

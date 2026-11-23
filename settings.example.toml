@@ -17,6 +17,7 @@ restore_roles      = "leave"   # once both members are done: leave | restore (fa
 sync_to_peer       = "Both"    # force the passive member to match the active one: Disable (never) | Both (in `prepare` AND again during the upgrade) | UpgradeOnly (only during the upgrade)
 sync_timeout_s     = 600
 ha_config_unsynced = "block"   # only used when sync_to_peer = Disable. A pair whose passive config is not synchronized: block (refuse to plan it; default) | warn (flag the failover moment on the active member, accepted when you prepare the batch)
+plugin_mismatch    = "fix"     # HA members whose INSTALLED plugins differ cannot sync config (PAN-OS refuses it): fix (prepare installs on the member that lacks it the plugin its peer runs, nothing is removed; default) | leave (touch no plugin; the pair is then handled like any pair that cannot be synced)
 sync_content       = "prepare" # HA members must run the same dynamic content and PAN-OS must agree; prepare installs the latest on both (listed in the one approval prompt) | never. A mismatch GATES the config sync.
 
 # ---- Panorama range (advice only; never blocks an upgrade) ---------------------------------------------------

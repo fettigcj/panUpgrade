@@ -235,6 +235,10 @@ WRITE_ALLOWED = [
     re.compile(r"<request><(content|anti-virus|wildfire)><upgrade><install><version>latest</version></install></upgrade></\1></request>"),
     re.compile(r"<request><high-availability><state><(?:suspend|functional)/></state></high-availability></request>"),
     re.compile(r"<request><high-availability><sync-to-remote><running-config/></sync-to-remote></high-availability></request>"),
+    # one plugin, by its package file name, onto a firewall that lacks it (prepare, plugin_mismatch = fix): download it (when the firewall does not have it) and install it.
+    # UNVERIFIED shapes of the two requests until the first live run (the Panorama GUI's `upload-install` of the same package is verified).
+    re.compile(r"<request><plugins><download><file>[a-z][a-z0-9_]*-[0-9]+\.[0-9]+\.[0-9]+(?:-h[0-9]+)?</file></download></plugins></request>"),
+    re.compile(r"<request><plugins><install>[a-z][a-z0-9_]*-[0-9]+\.[0-9]+\.[0-9]+(?:-h[0-9]+)?</install></plugins></request>"),
     # the asymmetry window (see windows.py): the runtime half; the configuration half is write_config() below
     re.compile(r"<set><session><tcp-reject-non-syn>(?:yes|no)</tcp-reject-non-syn></session></set>"),
     # take back the candidate edits of a commit the firewall refused (only sent when nothing else was uncommitted, which the window checks first)

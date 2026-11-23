@@ -433,6 +433,17 @@ class Running(unittest.TestCase):
         for (_, earlier), (later_at, later) in zip(installs, installs[1:]):
             self.assertGreater(later_at, reboots[earlier])                       # the next member installs after the previous one has been rebooted
 
+    def test_a_run_stopped_before_it_started_opens_no_window(self):
+        data = three()
+        plan, s = plan_for(data, GROUP)
+        s.poll_interval_s, s.settle_after_failover_s, s.settle_after_reboot_s = 0, 0, 0
+        sim = SimBackend(data)
+        stop = threading.Event()
+        stop.set()
+        result = executor.run(plan, approve(plan), sim, Journal.create(self.jpath, plan["hash"]), s, stop=stop)
+        self.assertEqual({v[0] for v in result["outcome"].values()}, {"not_started"})
+        self.assertEqual([c for c in sim.calls if c[1] == "set asymmetry"], [])
+
     def test_a_firewall_with_uncommitted_changes_is_refused_before_anything_is_changed(self):
         data = three()
         data["devices"][1]["facts"]["pending_changes"] = True

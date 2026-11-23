@@ -245,8 +245,10 @@ class LiveBackend(Backend):
     def download(self, serial, version):
         # refresh the offered list, then skip if the image is already on the box
         try:
-            self.read.op_xml("<request><system><software><check/></software></system></request>", target=serial)
-            info = self.read.op_xml(SOFTWARE_INFO, target=serial)
+            info = self.read.op_xml(SOFTWARE_INFO, target=serial)           # the cheap look first: an image prepare already staged needs no call to the update server
+            if not any(e.findtext("version") == version and e.findtext("downloaded") == "yes" for e in info.iter("entry")):
+                self.read.op_xml("<request><system><software><check/></software></system></request>", target=serial)
+                info = self.read.op_xml(SOFTWARE_INFO, target=serial)
         except SourceError as exc:
             raise BackendError(str(exc)) from None
         for entry in info.iter("entry"):

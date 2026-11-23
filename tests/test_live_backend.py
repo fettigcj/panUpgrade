@@ -81,6 +81,11 @@ class Downloads(unittest.TestCase):
         backend(api).download("S1", "10.2.2")
         self.assertNotIn("write", [k[0] for k in api.log])
 
+    def test_an_image_prepare_already_staged_needs_no_call_to_the_update_server(self):
+        api = Scripted({INFO: [INFO_ENTRIES(("10.2.2", "yes"))]})                   # no CHECK is scripted: asking for one would fail the test
+        backend(api).download("S1", "10.2.2")
+        self.assertNotIn(CHECK, api.log)
+
     def test_a_version_the_update_server_does_not_offer_is_an_error_before_anything_is_sent(self):
         api = Scripted({CHECK: [ok()], INFO: [INFO_ENTRIES(("10.2.1", "yes"))]})
         with self.assertRaisesRegex(BackendError, "not offered"):
@@ -88,17 +93,17 @@ class Downloads(unittest.TestCase):
         self.assertNotIn("write", [k[0] for k in api.log])
 
     def test_download_waits_for_the_job_to_finish(self):
-        api = Scripted({CHECK: [ok()], INFO: [INFO_ENTRIES(("10.2.2", "no")), INFO_ENTRIES(("10.2.2", "yes"))], DL: [ok("<job>12</job>")],
+        api = Scripted({CHECK: [ok()], INFO: [INFO_ENTRIES(("10.2.2", "no")), INFO_ENTRIES(("10.2.2", "no")), INFO_ENTRIES(("10.2.2", "yes"))], DL: [ok("<job>12</job>")],
                         JOBQ(12): [JOB("ACT"), JOB("ACT"), JOB("FIN")]})
         backend(api).download("S1", "10.2.2")
         self.assertEqual([k for k in api.log if k == JOBQ(12)].__len__(), 3)
 
     def test_a_finished_download_counts_only_once_the_firewall_has_loaded_it_into_its_software_manager(self):
         # the job ends, but "Preloading into software manager" is still going: the next image built on this one would be refused until it is done
-        api = Scripted({CHECK: [ok()], INFO: [INFO_ENTRIES(("12.1.2", "no")), INFO_ENTRIES(("12.1.2", "no")), INFO_ENTRIES(("12.1.2", "no")),
+        api = Scripted({CHECK: [ok()], INFO: [INFO_ENTRIES(("12.1.2", "no")), INFO_ENTRIES(("12.1.2", "no")), INFO_ENTRIES(("12.1.2", "no")), INFO_ENTRIES(("12.1.2", "no")),
                                               INFO_ENTRIES(("12.1.2", "yes"))], (DL[0], DL[1].replace('10.2.2', '12.1.2'), DL[2]): [ok("<job>12</job>")], JOBQ(12): [JOB("FIN")]})
         backend(api).download("S1", "12.1.2")
-        self.assertEqual([k for k in api.log if k == INFO].__len__(), 4)
+        self.assertEqual([k for k in api.log if k == INFO].__len__(), 5)
         stuck = Scripted({CHECK: [ok()], INFO: [INFO_ENTRIES(("12.1.2", "no"))], (DL[0], DL[1].replace('10.2.2', '12.1.2'), DL[2]): [ok("<job>12</job>")], JOBQ(12): [JOB("FIN")]})
         with self.assertRaisesRegex(BackendError, "still not loaded into the software manager"):
             backend(stuck, busy_wait_s=30).download("S1", "12.1.2")

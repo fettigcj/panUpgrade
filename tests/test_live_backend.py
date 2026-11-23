@@ -430,6 +430,25 @@ class TheLoadBalancerDrainOnARealFirewall(unittest.TestCase):
         backend(w, w).remove_lb_override("S1", "LB")
         self.assertEqual(sent[2:], [("remove", "LB"), ("commit",)])
 
+    def test_the_template_provenance_marks_of_the_merged_view_are_not_sent_back_in_the_local_copy(self):
+        merged = "<show><config><merged/></config></show>"
+        sent = []
+
+        class Write(Scripted):
+            def write_profile_override(self, profile, entry_xml, target):
+                sent.append(entry_xml)
+                return ok()
+
+            def commit_local(self, target):
+                return ok("<job>9</job>")
+        entry = ("<entry name='LB' ptpl='90.TestFleet'><permitted-ip ptpl='90.TestFleet'><entry name='10.0.0.0/8' ptpl='90.TestFleet'/></permitted-ip>"
+                 "<ssh>yes</ssh></entry>")
+        w = Write({("xml", self.CONFIG, "S1"): [self.config("<entry name='Other'/>")], ("xml", merged, "S1"): [self.config(entry)],
+                   ("xml", "<show><jobs><id>9</id></jobs></show>", "S1"): [JOB("FIN")]})
+        backend(w, w).set_lb_profile("S1", "LB", {"ssh": "no"})
+        self.assertNotIn("ptpl", sent[0])
+        self.assertIn("<entry name=\"10.0.0.0/8\"", sent[0].replace("'", '"'))
+
     def test_only_a_well_formed_same_named_copy_can_be_sent_as_an_override(self):
         from panupgrade_live.panorama import _override_params, _profile_params
         good = _override_params("LB", "<entry name='LB'><ssh>no</ssh><permitted-ip><entry name='10.0.0.0/8'/></permitted-ip></entry>")

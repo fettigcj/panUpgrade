@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- **Fix: the load-balancer drain of a template-owned interface management profile** was refused by the tool's own allow-list, because the merged view marks each node with where it came from (`ptpl=...`) and that was copied into the local copy. The marks are dropped before it is sent.
 - **Fix: the upgrade kit's firewall list now keeps each firewall's stand-alone group** (`SERIAL, group`). It was written without it, so the upgrade re-planned a group member as a plain stand-alone firewall and refused it.
 - **Stand-alone group windows now cover the whole group**, including members that are not in the run (they take the sessions a rebooting member drops); the plan says how many. An HA member is refused a group even when it is the only one named. New `pending_changes = "revert"`: uncommitted candidate configuration is never committed by the tool (the window's commit would commit it); the plan blocks until you commit it yourself or choose revert, which discards it (revert to running) and journals that. New [docs/scenarios.md](docs/scenarios.md) describes the four kinds of firewall.
 - **A stand-alone group with only one firewall named in it is treated as a plain stand-alone firewall** (it needs `accept_standalone_outage`, gets no drain, gate or window), and the plan says so.

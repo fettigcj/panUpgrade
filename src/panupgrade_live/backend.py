@@ -437,6 +437,9 @@ class LiveBackend(Backend):
                 entry = self._profile_entry(serial, profile, "merged")
                 if entry is None:
                     raise BackendError(f"{serial}: the interface management profile {profile!r} is on neither the firewall nor a template")
+                for node in entry.iter():                    # the merged view marks where each node came from (ptpl="template", loc, src ...): that is not configuration
+                    for attribute in [k for k in node.attrib if k != "name"]:
+                        del node.attrib[attribute]
                 for protocol, value in changes.items():
                     for old in entry.findall(protocol):
                         entry.remove(old)

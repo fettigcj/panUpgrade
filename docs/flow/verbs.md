@@ -118,9 +118,9 @@ flowchart TD
     n_panupgrade_planner__apply_pending["planner._apply_pending<br/><i>An image that is installed and not booted holds a firewall (it refuses</i>"]
     n_panupgrade_planner__swap["planner._swap<br/><i>Replace the recorded result of the same check, then judge the firewall</i>"]
     n_panupgrade_planner__apply_standalone["planner._apply_standalone"]
-    n_panupgrade_planner__apply_plugins["planner._apply_plugins<br/><i>HA members whose installed plugins differ cannot sync their configurat</i>"]
+    n_panupgrade_planner__apply_plugins["planner._apply_plugins<br/><i>HA members whose plugins differ cannot sync their configuration: PAN-O</i>"]
+    n_panupgrade_xmlops_plugin_fixes["xmlops.plugin_fixes<br/><i>What would level the plugins of an HA pair: ``(fixes, names)``. ``fixe</i>"]
     n_panupgrade_xmlops_plugin_differences["xmlops.plugin_differences<br/><i>What would level the plugins of two HA members ``a`` and ``b`` (dicts </i>"]
-    n_panupgrade_xmlops__plugin_key["xmlops._plugin_key"]
     n_panupgrade_xmlops_plugin_blockers["xmlops.plugin_blockers<br/><i>The plugin names whose difference between the two HA members makes PAN</i>"]
     n_panupgrade_planner__apply_pair_rules["planner._apply_pair_rules"]
     n_panupgrade_planner__peer_problem["planner._peer_problem<br/><i>Why an HA peer that is not in this run is a problem (words that fit 'i</i>"]
@@ -223,9 +223,9 @@ flowchart TD
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_standalone
     n_panupgrade_planner__apply_standalone --> n_panupgrade_planner__add
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_plugins
-    n_panupgrade_planner__apply_plugins --> n_panupgrade_xmlops_plugin_differences
-    n_panupgrade_xmlops_plugin_differences --> n_panupgrade_xmlops__plugin_key
-    n_panupgrade_planner__apply_plugins --> n_panupgrade_xmlops_plugin_blockers
+    n_panupgrade_planner__apply_plugins --> n_panupgrade_xmlops_plugin_fixes
+    n_panupgrade_xmlops_plugin_fixes --> n_panupgrade_xmlops_plugin_differences
+    n_panupgrade_xmlops_plugin_fixes --> n_panupgrade_xmlops_plugin_blockers
     n_panupgrade_planner__apply_plugins --> n_panupgrade_planner__swap
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_pair_rules
     n_panupgrade_planner__apply_pair_rules --> n_panupgrade_planner__add
@@ -348,9 +348,8 @@ flowchart TD
     n_panupgrade_planner__apply_pending["planner._apply_pending<br/><i>An image that is installed and not booted holds a firewall (it refuses</i>"]
     n_panupgrade_planner__swap["planner._swap<br/><i>Replace the recorded result of the same check, then judge the firewall</i>"]
     n_panupgrade_planner__apply_standalone["planner._apply_standalone"]
-    n_panupgrade_planner__apply_plugins["planner._apply_plugins<br/><i>HA members whose installed plugins differ cannot sync their configurat</i>"]
-    n_panupgrade_xmlops_plugin_differences["xmlops.plugin_differences<br/><i>What would level the plugins of two HA members ``a`` and ``b`` (dicts </i>"]
-    n_panupgrade_xmlops_plugin_blockers["xmlops.plugin_blockers<br/><i>The plugin names whose difference between the two HA members makes PAN</i>"]
+    n_panupgrade_planner__apply_plugins["planner._apply_plugins<br/><i>HA members whose plugins differ cannot sync their configuration: PAN-O</i>"]
+    n_panupgrade_xmlops_plugin_fixes["xmlops.plugin_fixes<br/><i>What would level the plugins of an HA pair: ``(fixes, names)``. ``fixe</i>"]
     n_panupgrade_planner__apply_pair_rules["planner._apply_pair_rules"]
     n_panupgrade_planner__peer_problem["planner._peer_problem<br/><i>Why an HA peer that is not in this run is a problem (words that fit 'i</i>"]
     n_panupgrade_planner__apply_positions["planner._apply_positions<br/><i>For a pair with both members in the run, say which goes first and whic</i>"]
@@ -459,8 +458,7 @@ flowchart TD
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_standalone
     n_panupgrade_planner__apply_standalone --> n_panupgrade_planner__add
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_plugins
-    n_panupgrade_planner__apply_plugins --> n_panupgrade_xmlops_plugin_differences
-    n_panupgrade_planner__apply_plugins --> n_panupgrade_xmlops_plugin_blockers
+    n_panupgrade_planner__apply_plugins --> n_panupgrade_xmlops_plugin_fixes
     n_panupgrade_planner__apply_plugins --> n_panupgrade_planner__swap
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__apply_pair_rules
     n_panupgrade_planner__apply_pair_rules --> n_panupgrade_planner__add
@@ -602,7 +600,7 @@ flowchart TD
     n_panupgrade_planner__add["planner._add"]
     n_panupgrade_planner__apply_pending["planner._apply_pending<br/><i>An image that is installed and not booted holds a firewall (it refuses</i>"]
     n_panupgrade_planner__apply_standalone["planner._apply_standalone"]
-    n_panupgrade_planner__apply_plugins["planner._apply_plugins<br/><i>HA members whose installed plugins differ cannot sync their configurat</i>"]
+    n_panupgrade_planner__apply_plugins["planner._apply_plugins<br/><i>HA members whose plugins differ cannot sync their configuration: PAN-O</i>"]
     n_panupgrade_planner__apply_pair_rules["planner._apply_pair_rules"]
     n_panupgrade_planner__apply_positions["planner._apply_positions<br/><i>For a pair with both members in the run, say which goes first and whic</i>"]
     n_panupgrade_planner__planned_versions["planner._planned_versions"]
@@ -634,6 +632,7 @@ flowchart TD
     n_panupgrade_paths_content_requirement["paths.content_requirement<br/><i>The highest app-content number any installed step needs, as (number, v</i>"]
     n_panupgrade_paths_keep_images["paths.keep_images<br/><i>The PAN-OS images a firewall must keep for this upgrade, as version st</i>"]
     n_panupgrade_prepare_content_state["prepare.content_state<br/><i>What each pair has LOADED, in words. This is what `show system info` r</i>"]
+    n_panupgrade_xmlops_plugin_fixes["xmlops.plugin_fixes<br/><i>What would level the plugins of an HA pair: ``(fixes, names)``. ``fixe</i>"]
     n_panupgrade_xmlops_plugin_differences["xmlops.plugin_differences<br/><i>What would level the plugins of two HA members ``a`` and ``b`` (dicts </i>"]
     n_panupgrade_xmlops__plugin_key["xmlops._plugin_key"]
     n_panupgrade_xmlops_plugin_blockers["xmlops.plugin_blockers<br/><i>The plugin names whose difference between the two HA members makes PAN</i>"]
@@ -723,9 +722,10 @@ flowchart TD
     n_panupgrade_prepare_build --> n_panupgrade_prepare_content_state
     n_panupgrade_prepare_content_state --> n_panupgrade_prepare__norm
     n_panupgrade_prepare_build --> n_panupgrade_prepare__norm
-    n_panupgrade_prepare_build --> n_panupgrade_xmlops_plugin_differences
+    n_panupgrade_prepare_build --> n_panupgrade_xmlops_plugin_fixes
+    n_panupgrade_xmlops_plugin_fixes --> n_panupgrade_xmlops_plugin_differences
     n_panupgrade_xmlops_plugin_differences --> n_panupgrade_xmlops__plugin_key
-    n_panupgrade_prepare_build --> n_panupgrade_xmlops_plugin_blockers
+    n_panupgrade_xmlops_plugin_fixes --> n_panupgrade_xmlops_plugin_blockers
     n_panupgrade_prepare_build -.-> n_panupgrade_prepare_build_list_devices
     n_panupgrade_prepare_build -.-> n_panupgrade_prepare_build_facts
     n_panupgrade_cli__prepare_review --> n_panupgrade_prepare_deletion_lines

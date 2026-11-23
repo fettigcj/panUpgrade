@@ -66,6 +66,7 @@ class Facts:
     ntp_synced: bool = None
     licenses_ok: bool = None
     plugins_installed: dict = None  # `show plugins installed`: {"openconfig": "2.1.0", "vm_series": "3.0.14"}. The package list's installed flag is NOT reliable (it said "no" for an installed openconfig)
+    plugins_builtin: dict = None    # the highest BUILT-IN package of each plugin family on this firewall's package list (release date "Built-in"): what its PAN-OS image ships, {"openconfig": "2.1.0"}
     ha_plugins: dict = None         # the plugin lines of the HA state: {"OC": {"local": "Mismatch", "peer": "Not Installed"}, "VMS": {...}}; an absent line is "" (not installed here)
     ha_content_compat: dict = None  # PAN-OS's own HA verdict per content type: Match | Mismatch | Unknown ("build","app","threat","av","url","iot")
     device_cert: dict = None        # {"status","validity","msg","not_valid_before","not_valid_after"} from `show device-certificate status`

@@ -47,6 +47,10 @@ def responses(**over):
         "show plugins installed": ok("<list><entry><type>dlp_config</type><name>dlp</name><version>dlp-3.0.10</version><desc>DLP</desc></entry>"
                                      "<entry><type>mgmt</type><name>openconfig</name><version>openconfig-2.1.0</version><desc>Openconfig</desc></entry>"
                                      "<entry><type>virtualization</type><name>vm_series</name><version>vm_series-3.0.14</version><desc>VM-Series</desc></entry></list>"),
+        "show plugins packages": ok("<plugins><entry><name>openconfig</name><version>2.1.0</version><release-date>Built-in</release-date><pkg-file>openconfig-2.1.0</pkg-file>"
+                                    "<size>1M</size><platform>any</platform><installed>no</installed><downloaded>yes</downloaded></entry>"
+                                    "<entry><name>openconfig</name><version>2.0.2</version><release-date>Built-in</release-date><pkg-file>openconfig-2.0.2</pkg-file>"
+                                    "<size>1M</size><platform>any</platform><installed>no</installed><downloaded>yes</downloaded></entry></plugins>"),
         "request system software info": ok("<sw-updates><versions><entry><version>20.2.3</version><downloaded>yes</downloaded></entry>"
                                            "<entry><version>20.2.9</version><downloaded>no</downloaded></entry></versions></sw-updates>"),
     }
@@ -55,6 +59,12 @@ def responses(**over):
 
 
 class Parsers(unittest.TestCase):
+    def test_the_plugins_are_read_installed_and_built_in(self):
+        facts, problems = collect_facts(CannedOp(responses()), None)
+        self.assertEqual(problems, [])
+        self.assertEqual(facts.plugins_installed, {"dlp": "3.0.10", "openconfig": "2.1.0", "vm_series": "3.0.14"})
+        self.assertEqual(facts.plugins_builtin, {"openconfig": "2.1.0"})            # the highest of the entries dated Built-in
+
     def test_full_collection(self):
         op = CannedOp(responses())
         facts, problems = collect_facts(op, "PEER1")

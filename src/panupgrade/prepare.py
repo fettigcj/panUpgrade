@@ -208,23 +208,22 @@ def build(source, settings, selection, target=None, rules=None):
                 families = ["content"]            # same versions, but PAN-OS itself cannot confirm the pair's content is compatible
                 reason = "PAN-OS reports the HA content compatibility as " + ", ".join(f"{k}: {compat[k]}" for k in bad)
             need_content = bool(families) and settings.sync_content == "prepare"
-            # HA members whose INSTALLED plugins differ cannot sync (PAN-OS: "Version mismatch with Peer"). plugin_mismatch = fix levels them first: the member
-            # that lacks a plugin gets the version its peer runs (at different versions the higher one), nothing is removed.
-            plugin_diffs = xmlops.plugin_differences(facts.plugins_installed, peer_facts.plugins_installed) if (
-                peer_facts is not None and facts.plugins_installed is not None and peer_facts.plugins_installed is not None) else None
-            plugin_names = sorted({d["name"] for d in plugin_diffs}) if plugin_diffs else (
-                [] if plugin_diffs == [] else sorted(set(xmlops.plugin_blockers(facts.ha_plugins)) | set(xmlops.plugin_blockers(getattr(peer_facts, "ha_plugins", None)))))
-            plugin_fix = []
+            # HA members whose plugins differ cannot sync (PAN-OS: "Version mismatch with Peer"). plugin_mismatch = fix levels them first: the member that lacks a
+            # plugin gets the version its peer runs (or ships built in), nothing is removed.
+            plugin_fix, plugin_names = xmlops.plugin_fixes(facts, peer_facts)
             if cfg_off and plugin_names:
-                if plugin_diffs and settings.plugin_mismatch == "fix" and settings.sync_to_peer != "Disable":
+                if plugin_fix and len(plugin_fix) == len(plugin_names) and settings.plugin_mismatch == "fix" and settings.sync_to_peer != "Disable":
                     own = {"a": (ref.serial, ref.hostname), "b": (peer, refs[peer].hostname if peer in refs else peer)}
-                    plugin_fix = [{"serial": own[d["on"]][0], "hostname": own[d["on"]][1], "name": d["name"], "version": d["version"], "had": d["had"]} for d in plugin_diffs]
+                    plugin_fix = [{"serial": own[d["on"]][0], "hostname": own[d["on"]][1], "name": d["name"], "version": d["version"], "had": d["had"]} for d in plugin_fix]
                 else:
+                    plugin_fix = []
                     why = ("plugin_mismatch is 'leave'" if settings.plugin_mismatch == "leave" else
-                           "sync_to_peer is Disable" if plugin_diffs else "the installed plugin lists could not be compared")
+                           "sync_to_peer is Disable" if settings.sync_to_peer == "Disable" else "the tool could not tell which version to install")
                     notes.append({"serial": ref.serial, "hostname": ref.hostname,
-                                  "why": f"config is not synchronized with the passive member and cannot be: the plugin(s) {', '.join(plugin_names)} differ between the members "
-                                         f"(PAN-OS refuses the sync), and {why}, so prepare leaves them and does not try the sync"})
+                                  "why": f"config is not synchronized with the passive member and cannot be: PAN-OS reports the plugin(s) {', '.join(plugin_names)} as different between the "
+                                         f"members (it refuses the sync), and {why}, so prepare leaves them and does not try the sync"})
+            else:
+                plugin_fix = []
             need_cfg = cfg_off and settings.sync_to_peer == "Both" and (not plugin_names or bool(plugin_fix))
             if families and not need_content:
                 notes.append({"serial": ref.serial, "hostname": ref.hostname,

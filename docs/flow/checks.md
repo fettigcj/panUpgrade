@@ -103,6 +103,7 @@ A fact in the last column is read by the check but is not set by `collect_facts`
 | images | `request system software info` | images_downloaded, base_images | disk_space |
 | content | `show system info` | content_versions | certificate_advisory, content_minimum |
 | plugins | `show plugins installed` | plugins_installed | - |
+| plugin packages |  | plugins_builtin | - |
 | device certificate | `show device-certificate status` | device_cert | device_certificate |
 | clock | `show clock` | clock_utc | clock_skew |
 | high availability | `show high-availability state` | ha_mode, ha_state, ha_config_sync, ha_session_sync, ha_links_ok, ha_content_compat, ha_plugins, preemption, peer_serial | ha_peer, ha_state, preemption, session_baseline |
@@ -137,6 +138,8 @@ flowchart LR
     reads --> q_content
     q_plugins["plugins<br/>show plugins installed"]
     reads --> q_plugins
+    q_plugin_packages["plugin packages<br/>"]
+    reads --> q_plugin_packages
     q_device_certificate["device certificate<br/>show device-certificate status"]
     reads --> q_device_certificate
     q_clock["clock<br/>show clock"]

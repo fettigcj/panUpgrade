@@ -190,5 +190,53 @@ class PluginsThatDiffer(unittest.TestCase):
         self.assertNotIn("sync to peer", [x[1] for x in sim.calls])
 
 
+class PluginLineOfTheHaState(unittest.TestCase):
+    """Seen 2026-11-23 on a lab pair: the two members' INSTALLED plugin lists are identical, yet the active member's HA state reads OC "Mismatch" with its peer
+    "Not Installed", and PAN-OS refuses the sync. The installed lists cannot show that; PAN-OS's own plugin line is what counts, and the member that has the line
+    donates the version (its installed one, or the highest built-in package of that family)."""
+
+    def data(self, builtin=None):
+        d = fleet_data(pair("A1", "A2", ha_config_sync=False))
+        same = {"dlp": "3.0.10", "vm_series": "5.0.0"}
+        d["devices"][0]["facts"]["plugins_installed"] = dict(same)
+        d["devices"][1]["facts"]["plugins_installed"] = dict(same)
+        d["devices"][0]["facts"]["ha_plugins"] = {"OC": {"local": "Mismatch", "peer": "Not Installed"}, "VMS": {"local": "Match", "peer": "5.0.0"}}
+        d["devices"][0]["facts"]["plugins_builtin"] = {"openconfig": "2.1.0"} if builtin is None else builtin
+        return d
+
+    def test_the_fix_names_the_family_and_the_builtin_version_and_goes_on_the_member_without_the_line(self):
+        from panupgrade import xmlops
+        from panupgrade.sources import FakeFleet as F
+        facts = {r.serial: F(self.data()).facts(r.serial) for r in F(self.data()).list_devices()}
+        fixes, names = xmlops.plugin_fixes(facts["A1"], facts["A2"])
+        self.assertEqual(names, ["openconfig"])
+        self.assertEqual(fixes, [{"name": "openconfig", "version": "2.1.0", "on": "b", "had": None}])
+
+    def test_with_no_version_to_name_the_tool_does_not_guess(self):
+        from panupgrade import xmlops
+        from panupgrade.sources import FakeFleet as F
+        fleet = F(self.data(builtin={}))
+        facts = {r.serial: fleet.facts(r.serial) for r in fleet.list_devices()}
+        fixes, names = xmlops.plugin_fixes(facts["A1"], facts["A2"])
+        self.assertEqual((fixes, names), ([], ["openconfig"]))
+        plan = prepare.build(fleet, settings.load(None, []), Selection(), TARGET, TEST_RULES)
+        self.assertEqual([u for u in plan["units"] if u["sync_config"] or u["plugins"]], [])
+        self.assertTrue(any("could not tell which version" in n["why"] for n in plan["notes"]))
+
+    def test_prepare_plans_the_install_and_the_plan_holds_the_pair_until_then(self):
+        plan = prepare.build(FakeFleet(self.data()), settings.load(None, []), Selection(), TARGET, TEST_RULES)
+        self.assertEqual(plan["units"][0]["plugins"], [{"serial": "A2", "hostname": "a2", "name": "openconfig", "version": "2.1.0", "had": None}])
+        p = build_plan(FakeFleet(self.data()), TARGET, settings.load(None, []), Selection(), TEST_RULES)
+        self.assertEqual(dev(p, "A2")["verdict"], "blocked")
+        self.assertIn("openconfig-2.1.0 on a2", next(r["reason"] for r in dev(p, "A2")["results"] if r["check"] == "ha_peer"))
+
+    def test_after_the_install_the_pair_plans_as_an_ordinary_one_to_sync(self):
+        data = self.data()
+        data["devices"][0]["facts"]["ha_plugins"] = {"OC": {"local": "Match", "peer": "2.1.0"}}
+        p = build_plan(FakeFleet(data), TARGET, settings.load(None, []), Selection(), TEST_RULES)
+        self.assertEqual(dev(p, "A2")["verdict"], "caution")
+        self.assertIn(("A2", "force_config_sync"), [(c["scope"], c["code"]) for c in p["cautions"]])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -228,8 +228,21 @@ def parse_plugins_installed(op):
 def parse_plugin_packages(op):
     """{package file name: {"downloaded": bool, "installed": bool}} from `show plugins packages` (the package file is like "openconfig-2.1.0")."""
     node = _result(op("show plugins packages"), "show plugins packages")
-    return {(_text(e, "pkg-file") or "").strip(): {"downloaded": _yes(_text(e, "downloaded")) is True, "installed": _yes(_text(e, "installed")) is True}
+    return {(_text(e, "pkg-file") or "").strip(): {"downloaded": _yes(_text(e, "downloaded")) is True, "installed": _yes(_text(e, "installed")) is True,
+                                                   "builtin": (_text(e, "release-date") or "").strip() == "Built-in"}
             for e in node.iter("entry") if (_text(e, "pkg-file") or "").strip()}
+
+
+def parse_plugins_builtin(op):
+    """{plugin family: highest built-in version} from the package list: the entries whose release date reads "Built-in" are what the PAN-OS image ships."""
+    out = {}
+    for package, seen in parse_plugin_packages(op).items():
+        m = re.match(r"^([a-z][a-z0-9_]*)-(\d+\.\d+\.\d+(?:-h\d+)?)$", package)
+        if m and seen["builtin"]:
+            name, version = m.group(1), m.group(2)
+            if name not in out or _plugin_key(version) > _plugin_key(out[name]):
+                out[name] = version
+    return out
 
 
 def _plugin_key(version):
@@ -255,12 +268,45 @@ def plugin_differences(a, b):
 # The plugin lines of `show high-availability state`: "OC" and "VMS". Seen 2026-11-22 on PAN-OS 10.2.18-h14: where a plugin is installed on one member of a
 # pair only, the member that has it reads "Mismatch" and its peer's line reads "Not Installed", and the config sync is refused ("Version mismatch with
 # Peer for OC"). Which plugin "OC" is is not confirmed (probably OpenConfig).
-PLUGIN_LINES = ("OC", "VMS")
+PLUGIN_LINES = ("OC", "VMS", "DLP")
+LINE_FAMILY = {"OC": "openconfig", "VMS": "vm_series", "DLP": "dlp"}      # the HA state's plugin lines -> the plugin family (OC = openconfig is confirmed 2026-11-23)
 
 
 def plugin_blockers(plugins):
     """The plugin names whose difference between the two HA members makes PAN-OS refuse a config sync (sorted)."""
     return sorted(name for name, seen in (plugins or {}).items() if seen.get("local") == "Mismatch" or seen.get("peer") == "Not Installed")
+
+
+def plugin_fixes(active, passive):
+    """What would level the plugins of an HA pair: ``(fixes, names)``. ``fixes`` is a list of {"name", "version", "on": "a" (the active member) | "b" (the passive),
+    "had"}, ``names`` every plugin family found to differ (a name with no fix could not be resolved to a version).
+
+    Two sources. (1) The INSTALLED lists, where they differ. (2) PAN-OS's own plugin lines of the HA state, which are what actually makes it refuse the sync and which the
+    installed lists do NOT show (seen 2026-11-23: two members with identical installed lists, one reading OC "Mismatch" with its peer "Not Installed"): the member that has
+    the line donates its installed version, or else the highest built-in package of that family (what its PAN-OS image ships). Nothing is ever removed."""
+    fixes, names, seen = [], set(), set()
+    a_inst = getattr(active, "plugins_installed", None)
+    p_inst = getattr(passive, "plugins_installed", None) if passive is not None else None
+    if a_inst is not None and p_inst is not None:
+        for d in plugin_differences(a_inst, p_inst):
+            fixes.append(d)
+            names.add(d["name"])
+            seen.add(d["name"])
+    for me, other_side in ((active, "b"), (passive, "a")):
+        if me is None:
+            continue
+        for line in plugin_blockers(getattr(me, "ha_plugins", None)):
+            family = LINE_FAMILY.get(line, line.lower())
+            if family in seen:
+                continue
+            names.add(family)
+            if (me.ha_plugins[line].get("peer") or "") != "Not Installed":
+                continue                                   # it is this member that lacks it: the other member's own look names the fix
+            version = (getattr(me, "plugins_installed", None) or {}).get(family) or (getattr(me, "plugins_builtin", None) or {}).get(family)
+            if version:
+                fixes.append({"name": family, "version": version, "on": other_side, "had": None})
+                seen.add(family)
+    return fixes, sorted(names)
 
 
 def parse_ha(op):
@@ -341,6 +387,7 @@ def collect_facts(op, peer_serial=None):
     attempt("images", parse_software_list, apply_software)
     attempt("content", parse_content_versions, lambda v: setattr(facts, "content_versions", v))
     attempt("plugins", parse_plugins_installed, lambda v: setattr(facts, "plugins_installed", v))
+    attempt("plugin packages", parse_plugins_builtin, lambda v: setattr(facts, "plugins_builtin", v))
     attempt("device certificate", parse_device_cert, lambda v: setattr(facts, "device_cert", v))
     attempt("clock", parse_clock, lambda v: setattr(facts, "clock_utc", v))
 

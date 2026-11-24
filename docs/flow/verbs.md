@@ -134,6 +134,7 @@ flowchart TD
     n_panupgrade_planner__order["planner._order<br/><i>Units in plan order: an HA pair is one unit (passive first, or active </i>"]
     n_panupgrade_planner__groups_planned["planner._groups_planned"]
     n_panupgrade_planner__asymmetry_windows["planner._asymmetry_windows<br/><i>Each place the tool will let a pair or group accept traffic that looks</i>"]
+    n_panupgrade_planner__preemption_windows["planner._preemption_windows<br/><i>Each HA pair whose members have preemption on, when disable_preemption</i>"]
     n_panupgrade_planner__cautions["planner._cautions"]
     n_panupgrade_planner__window_words["planner._window_words"]
     n_panupgrade_settings_Settings_loosening_warnings["settings.Settings.loosening_warnings<br/><i>Plain-language cautions for settings that make a run riskier. Never an</i>"]
@@ -250,6 +251,7 @@ flowchart TD
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__order
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__groups_planned
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__asymmetry_windows
+    n_panupgrade_planner_build_plan --> n_panupgrade_planner__preemption_windows
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__cautions
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__window_words
     n_panupgrade_planner_build_plan --> n_panupgrade_settings_Settings_loosening_warnings
@@ -301,15 +303,15 @@ flowchart TD
     n_panupgrade_cli__upgrade_run["cli._upgrade_run<br/><i>The run itself, in this process</i>"]
     n_panupgrade_executor_run["executor.run<br/><i>Carry out the plan. Units (an HA pair, or a standalone firewall) run i</i>"]
     n_panupgrade_executor__failed_in_journal["executor._failed_in_journal"]
-    n_panupgrade_windows_Windows_begin["windows.Windows.begin<br/><i>'' when every window the unit needs is open, else why it could not be </i>"]
-    n_panupgrade_windows_Windows_end["windows.Windows.end"]
     n_panupgrade_executor__run_device["executor._run_device<br/><i>Run one firewall's steps. A member of a stand-alone group takes a slot</i>"]
     n_panupgrade_executor__run_steps["executor._run_steps"]
     n_panupgrade_windows_restore_lb["windows.restore_lb<br/><i>Put the profile back as the journal recorded it. '' when there was not</i>"]
-    n_panupgrade_windows_Windows_close_all["windows.Windows.close_all"]
     n_panupgrade_executor__standing["executor._standing<br/><i>Where a firewall stands when the step at ``index`` did not finish: whi</i>"]
     n_panupgrade_executor__key["executor._key"]
     n_panupgrade_windows_lb_unrestored["windows.lb_unrestored<br/><i>Members whose drain was started and whose profile is not known to be b</i>"]
+    n_panupgrade_executor_run_begin["begin<br/><i>one of: Preemption / Windows</i>"]
+    n_panupgrade_executor_run_end["end<br/><i>one of: Preemption / Windows</i>"]
+    n_panupgrade_executor_run_close_all["close_all<br/><i>one of: Preemption / Windows</i>"]
     n_panupgrade_worker_acquire["worker.acquire<br/><i>Take the lock for this process, or raise WorkerBusy naming the run alr</i>"]
     n_panupgrade_worker_install_signals["worker.install_signals<br/><i>A worker ignores a hangup. A termination request (kill, shutdown) asks</i>"]
     n_panupgrade_worker_now_iso["worker.now_iso"]
@@ -369,6 +371,7 @@ flowchart TD
     n_panupgrade_planner__order["planner._order<br/><i>Units in plan order: an HA pair is one unit (passive first, or active </i>"]
     n_panupgrade_planner__groups_planned["planner._groups_planned"]
     n_panupgrade_planner__asymmetry_windows["planner._asymmetry_windows<br/><i>Each place the tool will let a pair or group accept traffic that looks</i>"]
+    n_panupgrade_planner__preemption_windows["planner._preemption_windows<br/><i>Each HA pair whose members have preemption on, when disable_preemption</i>"]
     n_panupgrade_planner__cautions["planner._cautions"]
     n_panupgrade_planner__window_words["planner._window_words"]
     n_panupgrade_settings_Settings_loosening_warnings["settings.Settings.loosening_warnings<br/><i>Plain-language cautions for settings that make a run riskier. Never an</i>"]
@@ -406,15 +409,15 @@ flowchart TD
     n_panupgrade_cli__upgrade_execute --> n_panupgrade_cli__upgrade_run
     n_panupgrade_cli__upgrade_run --> n_panupgrade_executor_run
     n_panupgrade_executor_run --> n_panupgrade_executor__failed_in_journal
-    n_panupgrade_executor_run --> n_panupgrade_windows_Windows_begin
-    n_panupgrade_executor_run --> n_panupgrade_windows_Windows_end
     n_panupgrade_executor_run --> n_panupgrade_executor__run_device
     n_panupgrade_executor__run_device --> n_panupgrade_executor__run_steps
     n_panupgrade_executor__run_device --> n_panupgrade_windows_restore_lb
-    n_panupgrade_executor_run --> n_panupgrade_windows_Windows_close_all
     n_panupgrade_executor_run --> n_panupgrade_executor__standing
     n_panupgrade_executor__standing --> n_panupgrade_executor__key
     n_panupgrade_executor_run --> n_panupgrade_windows_lb_unrestored
+    n_panupgrade_executor_run -.-> n_panupgrade_executor_run_begin
+    n_panupgrade_executor_run -.-> n_panupgrade_executor_run_end
+    n_panupgrade_executor_run -.-> n_panupgrade_executor_run_close_all
     n_panupgrade_cli__upgrade_execute --> n_panupgrade_worker_acquire
     n_panupgrade_cli__upgrade_execute --> n_panupgrade_worker_install_signals
     n_panupgrade_cli__upgrade_execute --> n_panupgrade_worker_now_iso
@@ -483,6 +486,7 @@ flowchart TD
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__order
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__groups_planned
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__asymmetry_windows
+    n_panupgrade_planner_build_plan --> n_panupgrade_planner__preemption_windows
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__cautions
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__window_words
     n_panupgrade_planner_build_plan --> n_panupgrade_settings_Settings_loosening_warnings
@@ -616,6 +620,7 @@ flowchart TD
     n_panupgrade_planner__order["planner._order<br/><i>Units in plan order: an HA pair is one unit (passive first, or active </i>"]
     n_panupgrade_planner__groups_planned["planner._groups_planned"]
     n_panupgrade_planner__asymmetry_windows["planner._asymmetry_windows<br/><i>Each place the tool will let a pair or group accept traffic that looks</i>"]
+    n_panupgrade_planner__preemption_windows["planner._preemption_windows<br/><i>Each HA pair whose members have preemption on, when disable_preemption</i>"]
     n_panupgrade_planner__cautions["planner._cautions"]
     n_panupgrade_planner__window_words["planner._window_words"]
     n_panupgrade_settings_Settings_loosening_warnings["settings.Settings.loosening_warnings<br/><i>Plain-language cautions for settings that make a run riskier. Never an</i>"]
@@ -696,6 +701,7 @@ flowchart TD
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__order
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__groups_planned
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__asymmetry_windows
+    n_panupgrade_planner_build_plan --> n_panupgrade_planner__preemption_windows
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__cautions
     n_panupgrade_planner_build_plan --> n_panupgrade_planner__window_words
     n_panupgrade_planner_build_plan --> n_panupgrade_settings_Settings_loosening_warnings

@@ -91,6 +91,11 @@ class Settings:
     # the firewall), and puts both back when the pair (or group) is finished, whether it succeeded or not. Every change and every restore is journaled
     # and an unrestored firewall is reported loudly at the end. Pairs: optional (HA2 keeps ordinary sessions). Stand-alone groups: nearly mandatory.
     pair_tolerate_asymmetry: bool = False
+    # Disable preemption during the upgrade window. A pair whose members have preemption on gets the active role handed back as soon as the preferred
+    # member returns from its reboot, which can be too soon in a batch. On: each member's own `preemptive` value is recorded, set to no (a commit on the
+    # firewall) before the pair's first member is touched, and put back when the pair is finished, successful or not. Off by default until the
+    # consequences are agreed (see docs/running.md): with it off for the window the roles are not handed back until the value is restored.
+    disable_preemption: bool = False
     group_tolerate_asymmetry: bool = True
     # Stand-alone groups (firewalls upgraded together that are not HA pairs, e.g. behind a cloud load balancer): how many members of one group may be
     # rebooting / out of service at the same time. 1 = one at a time.
@@ -151,6 +156,9 @@ class Settings:
         if self.blocked_peer == "warn":
             out.append("blocked_peer=warn: a member whose HA peer is blocked by a check is planned anyway; the active member hands traffic to "
                        "that peer while it reboots.")
+        if self.disable_preemption:
+            out.append("disable_preemption=true: during an HA pair's window both members have their own `preemptive` value set to no (committed on the "
+                       "firewall) and put back afterwards; the pair does not hand the active role back by itself meanwhile.")
         if self.pair_tolerate_asymmetry:
             out.append("pair_tolerate_asymmetry=true: during an HA pair's window both members are set to accept traffic that looks asymmetric "
                        "(tcp-reject-non-syn off, asymmetric-path bypass, committed on the firewall) and put back afterwards.")

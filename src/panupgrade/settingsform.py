@@ -24,7 +24,7 @@ SAVE_ONLY, SAVE_EXIT, QUIT = 0, 1, 2
 
 SECTIONS = [
     ("HA behaviour", ["session_noise_floor"]),
-    ("  Active/Passive pairs", ["pair_session_warn_band", "pair_session_fail_band", "pair_session_wait_s", "upgrade_first", "restore_roles", "upgrade_suspended", "pair_tolerate_asymmetry", "sync_to_peer", "sync_timeout_s",
+    ("  Active/Passive pairs", ["pair_session_warn_band", "pair_session_fail_band", "pair_session_wait_s", "upgrade_first", "restore_roles", "upgrade_suspended", "pair_tolerate_asymmetry", "disable_preemption", "sync_to_peer", "sync_timeout_s",
                                "busy_wait_s", "settle_after_failover_s", "settle_after_reboot_s", "ha_config_unsynced", "plugin_mismatch", "blocked_peer", "sync_content", "content_settle_s"]),
     ("  Stand-alone groups", ["accept_standalone_outage", "group_install_tolerance", "group_tolerate_asymmetry", "lb_drain_profile", "lb_drain_probe_protocol", "lb_drain_wait_s",
                                "group_session_warn_band", "group_session_fail_band", "group_session_wait_s"]),
@@ -52,6 +52,7 @@ INFO = {
                                "(the message says which). 0.80 means the table has lost 80% or more. Must not be below pair_session_warn_band.", {}),
     "pair_session_wait_s": ("HA pairs. How long, in seconds, to wait for the member that took over to show the table, read again every poll_interval_s. "
                             "The suspended member carries no traffic meanwhile, so keep it short.", {}),
+    "disable_preemption": ("Turn preemption off during the upgrade window, for HA pairs (default off: talk it through first). With preemption on, the preferred member takes the active role back as soon as it returns from its reboot, which can be too soon in a batch (a second fail-over while its sessions and content settle). On: before the first member of a pair is touched, the tool records each member's own `preemptive` value, sets it to no (committed on the firewall, so the pair must have no other uncommitted changes), and puts it back when the pair is finished, successful or not (a value that was not set is deleted again). Every change and restore is journaled and a firewall that cannot be put back is reported loudly. Only pairs whose members have preemption on are touched. While it is off the pair does NOT return to its original roles by itself; when preemption comes back on, the preferred member takes the active role back at that moment.", {}),
     "pair_tolerate_asymmetry": ("Allow Asymmetric Return During Upgrade Window, for HA pairs. When the active member is suspended or reboots, the half-open TCP "
                                 "handshakes it held are not synchronized to its peer; the peer then sees the rest of those flows as asymmetric and drops them. "
                                 "On: before the first member of a pair is touched, the tool records each member's current values, sets `set session "

@@ -248,7 +248,9 @@ WRITE_ALLOWED = [
 # The ONLY configuration edits a write-capable connection may make: the asymmetric-path value under the firewall's own device settings,
 # set to bypass or drop or removed, and a commit. Spelled out, with the one xpath each; nothing else can be named.
 _SETTING = "/config/devices/entry[@name='localhost.localdomain']/deviceconfig/setting"
-_KNOBS = {"asymmetric-path": (_SETTING + "/tcp", ("bypass", "drop")),             # set deviceconfig setting tcp asymmetric-path
+_HA_ELECTION = "/config/devices/entry[@name='localhost.localdomain']/deviceconfig/high-availability/group/election-option"
+_KNOBS = {"preemptive": (_HA_ELECTION, ("yes", "no")),                                  # set deviceconfig high-availability group election-option preemptive (xpath UNVERIFIED live)
+          "asymmetric-path": (_SETTING + "/tcp", ("bypass", "drop")),             # set deviceconfig setting tcp asymmetric-path
           "tcp-reject-non-syn": (_SETTING + "/session", ("yes", "no"))}            # set deviceconfig setting session tcp-reject-non-syn (xpath not confirmed from vendor docs)
 
 

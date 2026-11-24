@@ -44,7 +44,7 @@ def headline(run, result):
     if result is None or result.get("stopped"):
         return "fail", "NEEDS ATTENTION" if prepared else "STOPPED"
     states = {state for state, _ in result["outcome"].values()}
-    alerts = result.get("lb_unrestored") or result.get("asymmetry_unrestored")
+    alerts = result.get("lb_unrestored") or result.get("asymmetry_unrestored") or result.get("preemption_unrestored")
     if result["failures"] or alerts:
         return "fail", "NEEDS ATTENTION" if prepared else "COMPLETED WITH PROBLEMS"
     if states - {"done"}:
@@ -87,10 +87,13 @@ def build(run, plan, hosts, events, label, journal_path, result=None):
         if result.get("asymmetry_unrestored"):
             verdict += (f" ALERT: {len(result['asymmetry_unrestored'])} firewall(s) are still set to accept asymmetric traffic (tcp-reject-non-syn / "
                         f"asymmetric-path were changed for the window and not put back): " + ", ".join(e["serial"] for e in result["asymmetry_unrestored"]) + ".")
+        if result.get("preemption_unrestored"):
+            verdict += (f" ALERT: {len(result['preemption_unrestored'])} firewall(s) still have preemption turned off (changed for the window and not put back): "
+                        + ", ".join(e["serial"] for e in result["preemption_unrestored"]) + ".")
     level, words = headline(run, result)
     return {"run": run, "heading": HEADINGS[run], "level": level, "headline": words, "target": plan.get("target") or NO_TARGET, "label": label, "plan_hash": plan["hash"][:12],
             "journal": str(journal_path), "generated": datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z"),
-            "verdict": verdict, "failed": result is None or bool(result["failures"]) or bool(result.get("asymmetry_unrestored")) or bool(result.get("lb_unrestored")),
+            "verdict": verdict, "failed": result is None or bool(result["failures"]) or bool(result.get("asymmetry_unrestored")) or bool(result.get("preemption_unrestored")) or bool(result.get("lb_unrestored")),
             "outcome": [{"host": hosts.get(s, s), "serial": s, "state": st, "detail": d} for s, (st, d) in outcome.items()],
             "all": everything, "tabs": tabs}
 

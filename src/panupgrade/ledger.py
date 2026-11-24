@@ -7,7 +7,7 @@ A run's journal knows only that run. A run that was stopped, or whose restore a 
 leave a firewall changed with nothing for the NEXT run to find: the next run would read the changed values as the firewall's own and put those
 back. The ledger is what the next run reads first. An entry is written BEFORE the change is made and removed only when the put-back is verified.
 
-Two kinds of entry per firewall: ``window`` (the TCP settings of the asymmetry window: the original values) and ``drain`` (the interface management
+Three kinds of entry per firewall: ``preempt`` (the firewall's own HA preemptive value, while the preemption window has it off), ``window`` (the TCP settings of the asymmetry window: the original values) and ``drain`` (the interface management
 profile taken out for a load balancer: what it was).
 """
 
@@ -65,6 +65,15 @@ class Ledger:
     def clear_window(self, serial):
         self._clear(serial, "window")
 
+    def preempt(self, serial):
+        return self.entries().get(serial, {}).get("preempt")
+
+    def set_preempt(self, serial, original, name, journal):
+        self._set(serial, "preempt", {"original": original, "window": name, "journal": str(journal)})
+
+    def clear_preempt(self, serial):
+        self._clear(serial, "preempt")
+
     def drain(self, serial):
         return self.entries().get(serial, {}).get("drain")
 
@@ -83,6 +92,10 @@ def describe(entries, names=None):
         who = f"{names[serial]} ({serial})" if serial in names else serial
         if "window" in kinds:
             lines.append(f"{who}: still set to accept asymmetric traffic (left by {kinds['window'].get('window', 'a window')}, {kinds['window'].get('since', '')})")
+        if "preempt" in kinds:
+            was = kinds["preempt"].get("original")
+            lines.append(f"{who}: preemption may still be turned off (its own value was {'not set' if was is None else was}; left by "
+                         f"{kinds['preempt'].get('window', 'a window')}, {kinds['preempt'].get('since', '')})")
         if "drain" in kinds:
             lines.append(f"{who}: the interface management profile {kinds['drain'].get('profile')!r} may still be drained ({kinds['drain'].get('since', '')})")
     return lines

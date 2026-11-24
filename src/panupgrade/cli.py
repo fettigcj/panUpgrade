@@ -1161,7 +1161,7 @@ def _upgrade_run(args, style, bundle, approval, journal_path, resuming):
         close_view()
         _write_run_log(args, style, "upgrade", plan, names, journal, journal_path, label, result)
     sys.stdout.write(console.render_outcomes(result, names, style))
-    return 0 if result["failures"] == 0 and not result.get("asymmetry_unrestored") and not result.get("lb_unrestored") else 1
+    return 0 if result["failures"] == 0 and not result.get("asymmetry_unrestored") and not result.get("preemption_unrestored") and not result.get("lb_unrestored") else 1
 
 
 class PrepareBundle(RunEvents):

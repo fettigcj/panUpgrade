@@ -215,7 +215,7 @@ class LiveBackend(Backend):
             raise BackendError(f"{serial}: cannot read state: {'; '.join(problems)}")
         return {"version": facts.sw_version, "ha_state": facts.ha_state, "running_jobs": facts.running_jobs,
                 "ha_config_sync": facts.ha_config_sync, "ha_session_sync": facts.ha_session_sync,
-                "session_count": facts.session_count, "content_compat": facts.ha_content_compat,
+                "session_count": facts.session_count, "content_compat": facts.ha_content_compat, "preemption": facts.preemption,
                 "ha_problem": next((p for p in problems if p.startswith("high availability")), None)}
 
     def session_count(self, serial):
@@ -464,6 +464,34 @@ class LiveBackend(Backend):
         try:
             for knob, value in (("tcp-reject-non-syn", reject_non_syn_config), ("asymmetric-path", asymmetric_path)):
                 self.write.write_config(knob, "delete" if value is None else "set", value, serial)
+        except SourceError as exc:
+            raise BackendError(str(exc)) from None
+        self._commit_edits(serial, "the commit of the TCP setting change")
+        self._send(f"<set><session><tcp-reject-non-syn>{'yes' if reject_non_syn else 'no'}</tcp-reject-non-syn></session></set>", serial)
+
+    def preemption_config(self, serial):
+        """The firewall's OWN (local) HA preemptive value: "yes" | "no" | None (not set; a Panorama template's value may then apply). Refuses to guess."""
+        try:
+            config = self.read.op_xml("<show><config><running/></config></show>", target=serial)
+        except SourceError as exc:
+            raise BackendError(f"{serial}: cannot read the HA preemption setting: {exc}") from None
+        node = config.find("result/config/devices/entry/deviceconfig/high-availability/group/election-option/preemptive")
+        value = (node.text or "").strip().lower() if node is not None else None
+        if value not in (None, "yes", "no"):
+            raise BackendError(f"{serial}: preemptive reads {value!r}, which this tool does not know how to put back; nothing was changed")
+        return value
+
+    def set_preemption(self, serial, value):
+        """Set the firewall's own preemptive value (None deletes the node), then one commit on the firewall."""
+        try:
+            self.write.write_config("preemptive", "delete" if value is None else "set", value, serial)
+        except SourceError as exc:
+            raise BackendError(str(exc)) from None
+        self._commit_edits(serial, "the commit of the HA preemption change")
+
+    def _commit_edits(self, serial, what):
+        """Commit on the firewall itself. A refusal takes the edits back (CommitRefused); otherwise wait for the commit job."""
+        try:
             reply = self.write.commit_local(serial)
         except SourceError as exc:
             raise BackendError(str(exc)) from None
@@ -479,8 +507,7 @@ class LiveBackend(Backend):
                 tidy = f"the uncommitted edits could NOT be reverted ({exc}); discard the candidate configuration by hand"
             raise CommitRefused(f"{serial}: the firewall refused the commit: {said}.{hint} Nothing was changed on it; {tidy}.")
         job = self._job_id(reply)
-        self._wait_job(serial, job, self.settings.install_timeout_s, "the commit of the TCP setting change")
-        self._send(f"<set><session><tcp-reject-non-syn>{'yes' if reject_non_syn else 'no'}</tcp-reject-non-syn></session></set>", serial)
+        self._wait_job(serial, job, self.settings.install_timeout_s, what)
 
     def lb_profile(self, serial, profile, protocols):
         """An interface management profile as the firewall has it now: {"exists": bool, "values": {protocol: "yes" | "no" | None}, "origin": "local" | "template" | None}. Reply shape verified on a lab firewall."""

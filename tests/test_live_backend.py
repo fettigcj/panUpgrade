@@ -727,3 +727,48 @@ class PluginInstall(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ThePreemptionSettingOnARealFirewall(unittest.TestCase):
+    """The reply shape of `show config running` for the HA election option is UNVERIFIED live; these pin what the code does with it."""
+    CONFIG = "<show><config><running/></config></show>"
+
+    def read(self, node):
+        body = f"<election-option>{node}</election-option>" if node is not None else ""
+        return Scripted({("xml", self.CONFIG, "S1"): [R(
+            f"<response status='success'><result><config><devices><entry><deviceconfig><high-availability><group>{body}</group></high-availability></deviceconfig></entry></devices></config></result></response>")]})
+
+    def test_it_reads_the_local_value_and_none_means_not_set(self):
+        self.assertEqual(backend(self.read("<preemptive>yes</preemptive>")).preemption_config("S1"), "yes")
+        self.assertEqual(backend(self.read("<preemptive>no</preemptive>")).preemption_config("S1"), "no")
+        self.assertIsNone(backend(self.read(None)).preemption_config("S1"))
+
+    def test_it_refuses_to_guess_a_value_it_does_not_know_how_to_put_back(self):
+        with self.assertRaises(BackendError):
+            backend(self.read("<preemptive>sometimes</preemptive>")).preemption_config("S1")
+
+    def test_setting_edits_the_one_node_and_commits_on_the_firewall(self):
+        order = []
+
+        class Write(Scripted):
+            def write_config(self, knob, action, value, target):
+                order.append(("config", knob, action, value))
+                return ok()
+
+            def commit_local(self, target):
+                order.append(("commit",))
+                return ok("<job>78</job>")
+        w = Write({("xml", "<show><jobs><id>78</id></jobs></show>", "S1"): [JOB("FIN")]})
+        backend(w, w).set_preemption("S1", "no")
+        backend(w, w).set_preemption("S1", None)
+        self.assertEqual(order, [("config", "preemptive", "set", "no"), ("commit",), ("config", "preemptive", "delete", None), ("commit",)])
+
+    def test_only_yes_no_or_delete_of_the_preemptive_node_may_be_sent(self):
+        from panupgrade_live.panorama import _config_params
+        w = WriteApi("192.0.2.1", key="not-a-key")
+        for action, value in (("set", "maybe"), ("set", None), ("delete", "no"), ("edit", "no"), ("set", "no; yes")):
+            with self.assertRaises(PermissionError, msg=(action, value)):
+                w.write_config("preemptive", action, value, "S1")
+        self.assertEqual(_config_params("preemptive", "set", "no")["element"], "<preemptive>no</preemptive>")
+        self.assertTrue(_config_params("preemptive", "set", "no")["xpath"].endswith("/high-availability/group/election-option"))
+        self.assertTrue(_config_params("preemptive", "delete", None)["xpath"].endswith("/election-option/preemptive"))

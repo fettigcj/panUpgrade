@@ -26,6 +26,7 @@ class Node:
         self.ghost = {}                    # plugins PAN-OS runs that the installed list does not show (seen on the lab's active members): family -> version
         self.content = {}
         self.compat = {}
+        self.template_preemption = False       # a Panorama template (not the local configuration) turns preemption on: deleting the local node then leaves it on
         self.preferred = state == "active"   # preemption hands the active role back to the original active
 
 
@@ -93,7 +94,7 @@ class SimBackend(Backend):
         n = self._enter(serial, "state")
         return {"version": n.version, "ha_state": n.state, "running_jobs": n.jobs,
                 "ha_config_sync": (n.config_synced if n.peer else None), "ha_session_sync": True if n.peer else None,
-                "session_count": n.sessions, "content_compat": dict(n.compat) or None}
+                "session_count": n.sessions, "content_compat": dict(n.compat) or None, "preemption": n.preemption if n.peer else None}
 
     def content_versions(self, serial):
         return dict(self._enter(serial, "content versions").content)
@@ -165,6 +166,15 @@ class SimBackend(Backend):
 
     def tcp_asymmetry(self, serial):
         return dict(self._enter(serial, "read asymmetry").asym)
+
+    def preemption_config(self, serial):
+        n = self._enter(serial, "read preemption")
+        return n.preempt_local if hasattr(n, "preempt_local") else ("yes" if n.preemption else None)
+
+    def set_preemption(self, serial, value):
+        n = self._enter(serial, "set preemption", value)
+        n.preempt_local = value
+        n.preemption = value == "yes" or (value is None and n.template_preemption)
 
     def set_tcp_asymmetry(self, serial, reject_non_syn, reject_non_syn_config, asymmetric_path):
         self._enter(serial, "set asymmetry", reject_non_syn, asymmetric_path, reject_non_syn_config).asym = {

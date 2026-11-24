@@ -23,6 +23,10 @@ from concurrent.futures import ThreadPoolExecutor
 from . import progress
 
 
+# journal steps that belong to a window (the asymmetry window, the preemption window), not to a firewall's own upgrade
+WINDOW_STEPS = ("asymmetry", "preemption")
+
+
 class BackendError(Exception):
     """A device operation failed. Always surfaced; never retried silently."""
 
@@ -74,6 +78,8 @@ class Backend:
     def set_lb_profile(self, serial, profile, changes): raise NotImplementedError   # {protocol: "yes" | "no" | None (delete the node)}; one commit on the firewall. A template-held profile gets a same-named local copy
     def remove_lb_override(self, serial, profile): raise NotImplementedError        # delete that local copy (one commit): the template's profile resumes
     def tcp_asymmetry(self, serial): raise NotImplementedError      # {"reject_non_syn": bool (in force now), "reject_non_syn_config": "yes" | "no" | None (not set), "asymmetric_path": "drop" | "bypass" | None (not set)}
+    def preemption_config(self, serial): raise NotImplementedError   # the firewall's OWN (local) HA preemptive value: "yes" | "no" | None (not set)
+    def set_preemption(self, serial, value): raise NotImplementedError   # "yes" | "no" | None (delete the node); one commit on the firewall
     def set_tcp_asymmetry(self, serial, reject_non_syn, reject_non_syn_config, asymmetric_path): raise NotImplementedError   # the two configuration values (None deletes the node), one commit on the firewall, then the in-force flag
 
 
@@ -90,17 +96,19 @@ def run(plan, approval, backend, journal, settings, stop=None, ledger=None):
     if problems:
         raise ExecutionRefused(problems)
     from .windows import Gate, Windows, lb_unrestored
+    from .preemption import Preemption
     devices = {d["serial"]: d for d in plan["devices"]}
     stop = stop or threading.Event()
     from .ledger import Ledger
     journal.ledger = ledger if ledger is not None else Ledger(Path(str(journal.path)).with_name("window-ledger.json"))     # what is changed and not yet put back
     gate = Gate(settings.group_install_tolerance)
     windows = Windows(plan, approval.serials, backend, journal, say=progress.say, settings=settings)
+    preempt = Preemption(plan, approval.serials, backend, journal, say=progress.say, settings=settings)
     lock = threading.Lock()
     state = {"failures": sum(1 for s in devices if _failed_in_journal(journal, s))}
 
     def do_unit(unit):
-        if stop.is_set() and not any(any(not e["step"].startswith("asymmetry") for e in journal.steps_of(s)) for s in unit):
+        if stop.is_set() and not any(any(not e["step"].startswith(WINDOW_STEPS) for e in journal.steps_of(s)) for s in unit):
             for serial in unit:                        # stopped before this unit began: no window is opened for it (that is minutes of commits for nothing)
                 windows.resolve(serial)
             return {serial: ("not_started", "stopped by you before it started") for serial in unit}
@@ -109,15 +117,20 @@ def run(plan, approval, backend, journal, settings, stop=None, ledger=None):
             for serial in unit:
                 windows.resolve(serial)
             return {serial: ("held", refusal) for serial in unit}
+        refusal = preempt.begin([s for s in unit if s in approval.serials])
+        if refusal:
+            windows.end([s for s in unit if s in approval.serials])
+            return {serial: ("held", refusal) for serial in unit}
         try:
             return run_unit(unit)
         finally:
+            preempt.end([s for s in unit if s in approval.serials])
             windows.end([s for s in unit if s in approval.serials])
 
     def run_unit(unit):
         blocker, local = None, {}
         for serial in unit:
-            started = any(not e["step"].startswith("asymmetry") for e in journal.steps_of(serial))
+            started = any(not e["step"].startswith(WINDOW_STEPS) for e in journal.steps_of(serial))
             with lock:
                 over = state["failures"] >= settings.max_failures
                 failures = state["failures"]
@@ -152,17 +165,19 @@ def run(plan, approval, backend, journal, settings, stop=None, ledger=None):
         for future in futures:
             future.cancel()
         pool.shutdown(wait=True)
+        preempt.close_all()
         windows.close_all()         # whatever happened, a window that was opened is closed again
         raise
     pool.shutdown()
+    preempt.close_all()
     windows.close_all()
     upgraded = [serial for serial, dev in devices.items() if dev["steps"] and _standing(dev, journal, len(dev["steps"])).startswith("already on")]
     return {"outcome": outcome, "failures": state["failures"], "stopped": state["failures"] >= settings.max_failures, "upgraded": upgraded,
-            "asymmetry_unrestored": windows.unrestored, "lb_unrestored": lb_unrestored(journal, [s for unit in units for s in unit])}
+            "asymmetry_unrestored": windows.unrestored, "preemption_unrestored": preempt.unrestored, "lb_unrestored": lb_unrestored(journal, [s for unit in units for s in unit])}
 
 
 def _failed_in_journal(journal, serial):
-    return any(e["state"] == "failed" and not e["step"].startswith("asymmetry") for e in journal.steps_of(serial))
+    return any(e["state"] == "failed" and not e["step"].startswith(WINDOW_STEPS) for e in journal.steps_of(serial))
 
 
 def _key(index, action):

@@ -229,8 +229,25 @@ def render_outcomes(result, names, style, finished="finished all their steps"):
         verdict += ". Stopped early: the failure limit was reached, so nothing further was started"
     lines += ["", style.line("stop" if result["stopped"] else ("fail" if result["failures"] else "ok"), verdict)]
     lines += unrestored_lines(result.get("asymmetry_unrestored"), names, style)
+    lines += preemption_unrestored_lines(result.get("preemption_unrestored"), names, style)
     lines += lb_unrestored_lines(result.get("lb_unrestored"), names, style)
     return "\n".join(lines) + "\n"
+
+
+def preemption_unrestored_lines(unrestored, names, style):
+    """The alert for firewalls whose own HA preemptive value was turned off for an upgrade window and could not be put back."""
+    if not unrestored:
+        return []
+    lines = ["", style.line("fail", f"ALERT: {len(unrestored)} firewall(s) still have PREEMPTION turned off. The tool set the HA preemptive value to no for the "
+                                    f"upgrade window and could not put it back. It is remembered: the next upgrade run that includes them puts it back, or run "
+                                    f"`panupgrade upgrade --recover --confirm-restore`. By hand:")]
+    for entry in unrestored:
+        was = entry["original"]
+        fix = (f"`set deviceconfig high-availability group election-option preemptive {was}`" if was
+               else "`delete deviceconfig high-availability group election-option preemptive` (it was not set)")
+        lines.append(style.line("fail", f"{names.get(entry['serial'], entry['serial'])} ({entry['serial']}), {entry['window']}: {fix}, then commit. "
+                                        f"The tool's error: {entry['error']}"))
+    return lines
 
 
 def lb_unrestored_lines(unrestored, names, style):

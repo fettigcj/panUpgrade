@@ -29,7 +29,7 @@ def _ledger(journal):
 
 
 def is_window_step(step):
-    return step.startswith("asymmetry")
+    return step.startswith(("asymmetry", "preemption"))
 
 
 class Gate:
@@ -308,6 +308,10 @@ def restore_leftovers(entries, backend, journal, settings, say=print):
                 if _ledger(journal):
                     _ledger(journal).clear_window(serial)
                 found.append((serial, "asymmetry window", ""))
+        if "preempt" in kinds:
+            from .preemption import restore_one
+            error = restore_one(serial, kinds["preempt"]["original"], backend, journal, leftover=True)
+            found.append((serial, "preemption window", error))
         if "drain" in kinds:
             error = restore_lb(serial, backend, journal, settings)
             found.append((serial, "load balancer drain", error))

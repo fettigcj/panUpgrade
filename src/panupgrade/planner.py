@@ -182,6 +182,7 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
 
     groups = _groups_planned(devices)
     windows = _asymmetry_windows(devices, order, groups, settings, selection, by_serial)
+    preempt = _preemption_windows(devices, order, settings)
     cautions = _cautions(devices, fleet)
     placed = sorted(d["hostname"] for d in devices.values() if d.get("position") == "first" and settings.upgrade_first == "active")
     if placed:
@@ -193,6 +194,12 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
             f"HA fail-overs per pair instead of one.")})
     if windows:
         cautions.append({"scope": "fleet", "code": "asymmetry_window", "text": _window_words(windows)})
+    if preempt:
+        cautions.append({"scope": "fleet", "code": "preemption_window", "text": (
+            f"Preemption is turned off during the upgrade window on these pairs: {', '.join(w['name'] for w in preempt)}. Before the first member of each is "
+            f"touched its own `preemptive` value is recorded and set to no (committed on the firewall); it is put back when the pair is finished, whether it "
+            f"succeeded or not. Meanwhile the pair does not hand the active role back by itself, and when preemption comes back on the preferred member takes "
+            f"the active role back at that moment (one more fail-over). A firewall that cannot be put back is reported at the end and needs a person.")})
     if groups and settings.lb_drain_profile:
         cautions.append({"scope": "fleet", "code": "lb_drain", "text": (
             f"Each member of these stand-alone groups ({', '.join(sorted(groups))}) is drained from its load balancer before it reboots: "
@@ -212,6 +219,7 @@ def build_plan(source, target_text, settings, selection=None, rules=None, now=No
         "devices": list(devices.values()),
         "groups": groups,                            # stand-alone group name -> the serials planned in it (each reboots at most group_install_tolerance at a time)
         "asymmetry": windows,                        # where the tool will change tcp-reject-non-syn and asymmetric-path, and put them back
+        "preemption": preempt,                       # the pairs whose preemption the tool turns off for the window, and puts back
         "order": order,                              # the units (an HA pair in series, passive first; or one standalone), in the order they are started
         "cautions": cautions,
         "advice": _advice(devices, pano_version, releases),
@@ -611,6 +619,22 @@ def _asymmetry_windows(devices, order, groups, settings, selection=None, by_seri
                 spec["unreachable"] = away
             windows.append(spec)
     return windows
+
+
+def _preemption_windows(devices, order, settings):
+    """Each HA pair whose members have preemption on, when disable_preemption is set: recorded first, put back when the whole pair is done. A pair with a
+    member that still has to reboot to activate an image is left out (it refuses commits until it has rebooted)."""
+    found = []
+    if not settings.disable_preemption:
+        return found
+    for unit in order:
+        members = [devices[s] for s in unit]
+        if len(unit) < 2 or members[0]["ha_mode"] in (None, "none") or members[0]["group"]:
+            continue
+        if not any(m.get("preemption") for m in members) or any(m.get("activate") for m in members):
+            continue
+        found.append({"name": " / ".join(m["hostname"] for m in members), "serials": list(unit)})
+    return found
 
 
 def _window_words(windows):
